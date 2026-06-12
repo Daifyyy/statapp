@@ -30,7 +30,7 @@ model MatchStatCache {
   isHome           Boolean
   isNeutral        Boolean
   competitive      Boolean
-  isPreviousSeason Boolean
+  season           Int
   goalsFor         Int?
   goalsAgainst     Int?
   corners          Float?

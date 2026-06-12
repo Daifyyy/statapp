@@ -47,7 +47,8 @@ function rowToMatchStat(r: Row): MatchStat {
     isHome: r.isHome,
     isNeutral: r.isNeutral,
     competitive: r.competitive,
-    isPreviousSeason: r.isPreviousSeason,
+    season: r.season,
+    isBaseline: false, // dopočítá se v realRepository dle baseline sezóny
     metrics,
   };
 }
@@ -72,7 +73,7 @@ function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
     isHome: ms.isHome,
     isNeutral: ms.isNeutral,
     competitive: ms.competitive,
-    isPreviousSeason: ms.isPreviousSeason,
+    season: ms.season,
     goalsFor: ms.metrics.GOALS_FOR ?? null,
     goalsAgainst: ms.metrics.GOALS_AGAINST ?? null,
     corners: ms.metrics.CORNERS ?? null,

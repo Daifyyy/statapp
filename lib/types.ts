@@ -69,7 +69,9 @@ export interface MatchStat {
   isHome: boolean;
   isNeutral: boolean; // turnaje na neutrální půdě (reprezentace)
   competitive: boolean; // false = přátelák
-  isPreviousSeason: boolean; // klubové okno SEASON
+  season: number; // ligová sezóna zápasu (rok začátku); 0 = nerelevantní (reprez.)
+  /** Patří do baseline („minulá sezóna") okna – dopočítáno při sestavení. */
+  isBaseline: boolean;
   metrics: Partial<Record<Metric, number>>; // xG může chybět
 }
 

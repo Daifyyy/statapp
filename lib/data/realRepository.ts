@@ -26,8 +26,9 @@ import {
 } from "./catalog";
 
 const LIST_TTL = 60 * 60 * 24; // 24 h pro seznamy (dokončené sezóny jsou stabilní)
-const CURRENT_CLUB_FIXTURES = 12; // pokryje LAST10 i LAST5
-const PREV_CLUB_FIXTURES = 8; // vzorek minulé sezóny pro SEASON okno
+const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
+const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
+const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
 const NATIONAL_LAST = 25;
 
 type TeamLite = Pick<Team, "id" | "name" | "logoUrl" | "country" | "entityType">;
@@ -146,7 +147,6 @@ async function buildNationalTeam(
   const finished = onlyFinished(fixtures);
 
   const leagueMatches = await assemble(teamId, "national", finished, (f) => ({
-    isPreviousSeason: false, // reprezentace používají časová okna
     competitive: !isFriendly(f.league.name),
     isNeutral: false, // neutrální půdu API spolehlivě nehlásí (aproximace)
   }));
@@ -174,22 +174,39 @@ async function buildClubTeam(
   const meta = teams.find((t) => t.id === teamId);
   if (!meta) return null;
 
-  const [current, previous] = await Promise.all([
-    listClubFixtures(teamId, leagueId, CURRENT_SEASON),
-    listClubFixtures(teamId, leagueId, PREVIOUS_SEASON),
-  ]);
-  const leagueFixtures = [
-    ...recentFinished(current, CURRENT_CLUB_FIXTURES),
-    ...recentFinished(previous, PREV_CLUB_FIXTURES),
-  ];
-  const leagueMatches = await assemble(teamId, "league", leagueFixtures, (f) => ({
-    isPreviousSeason: f.league.season === PREVIOUS_SEASON,
-    competitive: true,
-    isNeutral: false,
-  }));
+  // „Minulá sezóna" (baseline) = nejnovější DOKONČENÁ sezóna.
+  // Je-li aktuální sezóna v podstatě dohraná (mezisezóna), je baseline ona →
+  // naplní se i nováčkům a 2024 se vůbec nestahuje.
+  const currentFinished = onlyFinished(
+    await listClubFixtures(teamId, leagueId, CURRENT_SEASON)
+  );
+  const currentComplete = currentFinished.length >= SEASON_COMPLETE_MIN;
+  const baselineSeason = currentComplete ? CURRENT_SEASON : PREVIOUS_SEASON;
 
-  // Evropské poháry (UCL/UEL/UECL) – jen pro cross-league porovnání,
-  // a jen aktuální sezóna (šetří volání; pohárový vzorek je tak svěží).
+  let formPool = currentFinished;
+  let baselinePool = currentFinished;
+  if (!currentComplete) {
+    const previousFinished = onlyFinished(
+      await listClubFixtures(teamId, leagueId, PREVIOUS_SEASON)
+    );
+    formPool = [...currentFinished, ...previousFinished];
+    baselinePool = previousFinished;
+  }
+
+  // LAST10/5 = nejnovější zápasy; SEASON = reprezentativní vzorek baseline sezóny.
+  const leagueFixtures = dedupeFixtures([
+    ...byDateDescFx(formPool).slice(0, FORM_FIXTURES),
+    ...spreadSample(baselinePool, BASELINE_SAMPLE),
+  ]);
+  const leagueMatches = tagBaseline(
+    await assemble(teamId, "league", leagueFixtures, () => ({
+      competitive: true,
+      isNeutral: false,
+    })),
+    baselineSeason
+  );
+
+  // Evropské poháry (UCL/UEL/UECL) – jen pro cross-league porovnání, aktuální sezóna.
   let euroMatches: MatchStat[] | undefined;
   if (includeEuro) {
     const euroLists = await Promise.all(
@@ -197,11 +214,13 @@ async function buildClubTeam(
     );
     const euroFixtures = onlyFinished(euroLists.flat());
     euroMatches = euroFixtures.length
-      ? await assemble(teamId, "euro", euroFixtures, (f) => ({
-          isPreviousSeason: f.league.season === PREVIOUS_SEASON,
-          competitive: true,
-          isNeutral: false,
-        }))
+      ? tagBaseline(
+          await assemble(teamId, "euro", euroFixtures, () => ({
+            competitive: true,
+            isNeutral: false,
+          })),
+          baselineSeason
+        )
       : undefined;
   }
 
@@ -230,7 +249,6 @@ function listClubFixtures(
 // ---- Společná agregace přes trvalou cache ----
 
 type FixtureOpts = (f: ApiFixture) => {
-  isPreviousSeason: boolean;
   competitive: boolean;
   isNeutral: boolean;
 };
@@ -299,7 +317,8 @@ function buildMatchStat(
     isHome,
     isNeutral: opts.isNeutral,
     competitive: opts.competitive,
-    isPreviousSeason: opts.isPreviousSeason,
+    season: f.league.season,
+    isBaseline: false, // dopočítá se přes tagBaseline()
     metrics,
   };
 }
@@ -310,10 +329,35 @@ function onlyFinished(fixtures: ApiFixture[]): ApiFixture[] {
   return fixtures.filter((f) => FINISHED_STATUSES.has(f.fixture.status.short));
 }
 
-function recentFinished(fixtures: ApiFixture[], n: number): ApiFixture[] {
-  return onlyFinished(fixtures)
-    .sort((a, b) => b.fixture.date.localeCompare(a.fixture.date))
-    .slice(0, n);
+function byDateDescFx(fixtures: ApiFixture[]): ApiFixture[] {
+  return [...fixtures].sort((a, b) =>
+    b.fixture.date.localeCompare(a.fixture.date)
+  );
+}
+
+/** Rovnoměrný vzorek ~n zápasů napříč sezónou (reprezentativní průměr). */
+function spreadSample(fixtures: ApiFixture[], n: number): ApiFixture[] {
+  const asc = [...fixtures].sort((a, b) =>
+    a.fixture.date.localeCompare(b.fixture.date)
+  );
+  if (asc.length <= n) return asc;
+  const out: ApiFixture[] = [];
+  const step = asc.length / n;
+  for (let i = 0; i < n; i++) out.push(asc[Math.floor(i * step)]);
+  return out;
+}
+
+function dedupeFixtures(fixtures: ApiFixture[]): ApiFixture[] {
+  const seen = new Set<number>();
+  return fixtures.filter((f) =>
+    seen.has(f.fixture.id) ? false : (seen.add(f.fixture.id), true)
+  );
+}
+
+/** Označí zápasy nejnovější dokončené sezóny jako baseline (okno SEASON). */
+function tagBaseline(matches: MatchStat[], baselineSeason: number): MatchStat[] {
+  for (const m of matches) m.isBaseline = m.season === baselineSeason;
+  return matches;
 }
 
 function isFriendly(leagueName: string): boolean {

@@ -6,10 +6,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /**
  * Vybere zápasy spadající do daného okna z předtříděného pole (sestupně dle data).
  *
- * Kluby (počtová okna):
- *  - SEASON = všechny zápasy z minulé sezóny (isPreviousSeason)
- *  - LAST10 = posledních 10 zápasů aktuální sezóny
- *  - LAST5  = posledních 5 zápasů aktuální sezóny
+ * Kluby:
+ *  - SEASON = zápasy nejnovější DOKONČENÉ sezóny (m.isBaseline) – „minulá sezóna"
+ *  - LAST10 = posledních 10 zápasů dle data (napříč hranicí sezón)
+ *  - LAST5  = posledních 5 zápasů dle data
  * Reprezentace (časová okna, §3.4a):
  *  - BASE   = 12–24 měsíců zpět
  *  - LAST12 = posledních 12 měsíců
@@ -20,16 +20,13 @@ export function selectWindowMatches(
   window: WindowKey,
   now: Date = new Date()
 ): MatchStat[] {
-  const current = matches.filter((m) => !m.isPreviousSeason);
-  const previous = matches.filter((m) => m.isPreviousSeason);
-
   switch (window) {
     case "SEASON":
-      return previous;
+      return matches.filter((m) => m.isBaseline);
     case "LAST10":
-      return current.slice(0, 10);
+      return byDateDesc(matches).slice(0, 10);
     case "LAST5":
-      return current.slice(0, 5);
+      return byDateDesc(matches).slice(0, 5);
     case "BASE":
       return withinMonths(matches, now, 12, 24);
     case "LAST12":
@@ -37,6 +34,10 @@ export function selectWindowMatches(
     case "LAST6":
       return withinMonths(matches, now, 0, 6);
   }
+}
+
+function byDateDesc(matches: MatchStat[]): MatchStat[] {
+  return [...matches].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function withinMonths(

@@ -19,7 +19,8 @@ function clubMatch(
     isHome: true,
     isNeutral: false,
     competitive: true,
-    isPreviousSeason: false,
+    season: 2025,
+    isBaseline: false,
     metrics: { GOALS_FOR: 2 },
     ...opts,
   };
@@ -33,11 +34,11 @@ describe("selectWindowMatches", () => {
     expect(selectWindowMatches(matches, "LAST5", NOW)).toHaveLength(5);
   });
 
-  it("SEASON vezme jen zápasy minulé sezóny", () => {
+  it("SEASON vezme jen zápasy baseline (minulé) sezóny", () => {
     const matches = [
       clubMatch(1, 7),
-      clubMatch(2, 14, { isPreviousSeason: true }),
-      clubMatch(3, 21, { isPreviousSeason: true }),
+      clubMatch(2, 14, { isBaseline: true }),
+      clubMatch(3, 21, { isBaseline: true }),
     ];
     expect(selectWindowMatches(matches, "SEASON", NOW)).toHaveLength(2);
   });

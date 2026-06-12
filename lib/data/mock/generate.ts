@@ -45,7 +45,8 @@ interface MatchOpts {
   isHome: boolean;
   isNeutral?: boolean;
   competitive?: boolean;
-  isPreviousSeason?: boolean;
+  season?: number;
+  isBaseline?: boolean;
   date: Date;
   recencyFactor: number; // 1 = nejnovější, 0 = nejstarší
   includeXg?: boolean;
@@ -84,12 +85,16 @@ function buildMatch(
     isHome: opts.isHome,
     isNeutral: opts.isNeutral ?? false,
     competitive: opts.competitive ?? true,
-    isPreviousSeason: opts.isPreviousSeason ?? false,
+    season: opts.season ?? 0,
+    isBaseline: opts.isBaseline ?? false,
     metrics,
   };
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+// Mock sezóny: aktuální (forma) a minulá (baseline „minulá sezóna").
+const MOCK_CURRENT = 2025;
+const MOCK_PREVIOUS = 2024;
 
 /** Vygeneruje klubové zápasy: minulá sezóna (30) + aktuální (14), střídavě D/V. */
 export function generateClubMatches(
@@ -101,25 +106,27 @@ export function generateClubMatches(
   const matches: MatchStat[] = [];
   let fid = teamId * 1000;
 
-  // Aktuální sezóna – 14 zápasů, nejnovější mají recencyFactor ~1.
+  // Aktuální sezóna – 14 zápasů (forma: LAST10/LAST5), nejnovější recencyFactor ~1.
   for (let i = 0; i < 14; i++) {
     const date = new Date(now.getTime() - i * 7 * DAY);
     matches.push(
       buildMatch(rand, fid++, profile, {
         isHome: i % 2 === 0,
         date,
+        season: MOCK_CURRENT,
         recencyFactor: 1 - i / 14,
       })
     );
   }
-  // Minulá sezóna – 30 zápasů, recencyFactor 0 (forma se neuplatní).
+  // Minulá (baseline) sezóna – 30 zápasů, recencyFactor 0 (forma se neuplatní).
   for (let i = 0; i < 30; i++) {
     const date = new Date(now.getTime() - (120 + i * 7) * DAY);
     matches.push(
       buildMatch(rand, fid++, profile, {
         isHome: i % 2 === 0,
         date,
-        isPreviousSeason: true,
+        season: MOCK_PREVIOUS,
+        isBaseline: true,
         recencyFactor: 0,
       })
     );
