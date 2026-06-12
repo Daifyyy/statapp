@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f8fa;
+  --surface: #ffffff;
+  --foreground: #14181f;
+  --muted: #6b7280;
+  --border: #e6e8ec;
+  --home: #2563eb; /* domácí tým */
+  --away: #f97316; /* hostující tým */
+  --warning: #d97706;
+  --positive: #16a34a;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-home: var(--home);
+  --color-away: var(--away);
+  --color-warning: var(--warning);
+  --color-positive: var(--positive);
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial,
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0e13;
+    --surface: #141922;
+    --foreground: #e8eaed;
+    --muted: #9aa3b0;
+    --border: #232a35;
+    --home: #3b82f6;
+    --away: #fb923c;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Plynulé přechody hodnot a barů (§4 plánu). */
+.bar-fill {
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fade-in-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-in,
+  .bar-fill {
+    animation: none;
+    transition: none;
+  }
+}

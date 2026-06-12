@@ -1,0 +1,44 @@
+// Prisma schéma – cache vrstva nad API-Football (§1/§2 plánu).
+// Read-through cache: aplikace čte odsud; při miss/expiraci se zavolá API.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Generická TTL cache raw odpovědí list-endpointů (ligy, týmy, seznamy zápasů).
+model ApiCache {
+  key       String   @id
+  payload   Json
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+/// Per-tým per-zápas statistiky (TRVALÁ cache – historická data jsou neměnná).
+/// Přímo odpovídá doménovému typu MatchStat; metriky jako sloupce (xG bývá null).
+model MatchStatCache {
+  teamId           Int
+  fixtureId        Int
+  context          String // "league" | "euro"
+  date             DateTime
+  isHome           Boolean
+  isNeutral        Boolean
+  competitive      Boolean
+  isPreviousSeason Boolean
+  goalsFor         Int?
+  goalsAgainst     Int?
+  corners          Float?
+  fouls            Float?
+  shots            Float?
+  xg               Float?
+  cachedAt         DateTime @default(now())
+
+  @@id([teamId, fixtureId, context])
+  @@index([teamId, context])
+}
