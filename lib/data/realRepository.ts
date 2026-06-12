@@ -12,7 +12,7 @@ import {
 import {
   cachedJson,
   getCachedMatchStats,
-  saveMatchStat,
+  saveMatchStats,
   type MatchContext,
 } from "./cache";
 import {
@@ -174,8 +174,10 @@ async function buildClubTeam(
   const meta = teams.find((t) => t.id === teamId);
   if (!meta) return null;
 
-  const current = await listClubFixtures(teamId, leagueId, CURRENT_SEASON);
-  const previous = await listClubFixtures(teamId, leagueId, PREVIOUS_SEASON);
+  const [current, previous] = await Promise.all([
+    listClubFixtures(teamId, leagueId, CURRENT_SEASON),
+    listClubFixtures(teamId, leagueId, PREVIOUS_SEASON),
+  ]);
   const leagueFixtures = [
     ...recentFinished(current, CURRENT_CLUB_FIXTURES),
     ...recentFinished(previous, PREV_CLUB_FIXTURES),
@@ -250,6 +252,7 @@ async function assemble(
   }
 
   // Per-zápas statistiky stahuj s nízkou souběžností (edge burst ochrana).
+  const fetched: MatchStat[] = [];
   await mapLimit(toFetch, 3, async (f) => {
     let statsTeam: ApiFixtureStats[number] | null = null;
     try {
@@ -258,10 +261,12 @@ async function assemble(
     } catch {
       // Statistiky nemusí existovat (časté u reprezentací) – ponech jen góly.
     }
-    const ms = buildMatchStat(f, teamId, statsTeam, optsFor(f));
-    await saveMatchStat(teamId, context, ms);
-    result.push(ms);
+    fetched.push(buildMatchStat(f, teamId, statsTeam, optsFor(f)));
   });
+
+  // Jeden dávkový zápis do cache (mimo kritickou cestu stahování).
+  await saveMatchStats(teamId, context, fetched);
+  result.push(...fetched);
 
   return result.sort((a, b) => b.date.localeCompare(a.date));
 }

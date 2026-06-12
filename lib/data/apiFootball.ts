@@ -37,7 +37,7 @@ export async function apiGet<T>(
     } catch (e) {
       if (e instanceof RateLimitError && attempt < MAX_RETRIES) {
         // Krátký odstup – další pokus zpravidla trefí jiný (volný) node.
-        await sleep(400 + attempt * 500);
+        await sleep(250 + attempt * 350);
         continue;
       }
       throw e;

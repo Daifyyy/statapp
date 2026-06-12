@@ -63,13 +63,11 @@ export async function getCachedMatchStats(
   return new Map(rows.map((r) => [r.fixtureId, rowToMatchStat(r)]));
 }
 
-/** Uloží (trvale) statistiky jednoho zápasu pro tým. */
-export async function saveMatchStat(
-  teamId: number,
-  context: MatchContext,
-  ms: MatchStat
-): Promise<void> {
-  const data = {
+function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
+  return {
+    teamId,
+    fixtureId: ms.fixtureId,
+    context,
     date: new Date(ms.date),
     isHome: ms.isHome,
     isNeutral: ms.isNeutral,
@@ -82,11 +80,20 @@ export async function saveMatchStat(
     shots: ms.metrics.SHOTS ?? null,
     xg: ms.metrics.XG ?? null,
   };
-  await prisma.matchStatCache.upsert({
-    where: {
-      teamId_fixtureId_context: { teamId, fixtureId: ms.fixtureId, context },
-    },
-    create: { teamId, fixtureId: ms.fixtureId, context, ...data },
-    update: data,
+}
+
+/**
+ * Dávkové uložení statistik více zápasů jedním dotazem (mimo kritickou cestu
+ * stahování). `skipDuplicates` – historické zápasy se nemění, takže jen inserty.
+ */
+export async function saveMatchStats(
+  teamId: number,
+  context: MatchContext,
+  list: MatchStat[]
+): Promise<void> {
+  if (list.length === 0) return;
+  await prisma.matchStatCache.createMany({
+    data: list.map((ms) => toRow(teamId, context, ms)),
+    skipDuplicates: true,
   });
 }

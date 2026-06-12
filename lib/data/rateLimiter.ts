@@ -1,30 +1,52 @@
 /**
- * Globální serializátor volání API-Football.
+ * Globální limiter volání API-Football.
  *
- * Reálné omezení api-sports není jen 300/min, ale i burst/souběžnostní ochrana
- * na edge (vrací 429 bez rate-headerů, když přijde víc requestů naráz). Proto
- * pouštíme volání POSTUPNĚ (souběžnost 1) s minimálním rozestupem mezi starty.
- * Jeden request v letu = žádný burst → žádné falešné rate-limity.
+ * Kombinuje:
+ *  - SOUBĚŽNOST (semafor) – víc volání naráz → rychlejší cold-load,
+ *  - klouzavý MINUTOVÝ STROP – ochrana proti překročení 300/min (multi-user,
+ *    porovnání za sebou),
+ * Přechodné burst-odmítnutí edge (429 bez headerů) řeší krátký retry v apiGet.
  */
-const MIN_INTERVAL_MS = 300; // ~200/min, bezpečně pod limitem i burst ochranou
+const MAX_CONCURRENT = 3;
+const MAX_PER_MIN = 280;
+const WINDOW_MS = 60_000;
 
-let queue: Promise<unknown> = Promise.resolve();
-let lastStart = 0;
+let active = 0;
+const waiters: Array<() => void> = [];
+const recent: number[] = []; // časy posledních startů (klouzavé okno)
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Zařadí volání do globální fronty (poběží sekvenčně s rozestupem). */
-export function schedule<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(async () => {
-    const wait = lastStart + MIN_INTERVAL_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    lastStart = Date.now();
-    return fn();
-  });
-  // Fronta pokračuje až po dokončení (i při chybě) – drží souběžnost 1.
-  queue = run.then(
-    () => undefined,
-    () => undefined
-  );
-  return run as Promise<T>;
+async function acquire(): Promise<void> {
+  // 1) Semafor souběžnosti.
+  if (active >= MAX_CONCURRENT) {
+    await new Promise<void>((resolve) => waiters.push(resolve));
+  }
+  active++;
+
+  // 2) Klouzavý minutový strop.
+  for (;;) {
+    const now = Date.now();
+    while (recent.length && recent[0] <= now - WINDOW_MS) recent.shift();
+    if (recent.length < MAX_PER_MIN) {
+      recent.push(now);
+      return;
+    }
+    await sleep(recent[0] + WINDOW_MS - now);
+  }
+}
+
+function release(): void {
+  active--;
+  waiters.shift()?.();
+}
+
+/** Spustí volání v rámci limitů (souběžnost + minutový strop). */
+export async function schedule<T>(fn: () => Promise<T>): Promise<T> {
+  await acquire();
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
 }
