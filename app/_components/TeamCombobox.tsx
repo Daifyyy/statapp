@@ -61,7 +61,7 @@ export function TeamCombobox({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className={`flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5 text-left text-sm transition ${ringFocus}`}
+        className={`flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5 text-left text-base transition ${ringFocus}`}
       >
         <TeamLogo src={selected?.logoUrl} alt={selected?.name ?? ""} size={24} />
         <span className={`flex-1 truncate ${selected ? "" : "text-muted"}`}>
@@ -77,7 +77,7 @@ export function TeamCombobox({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Hledat…"
-            className="w-full border-b border-border bg-background px-3 py-2 text-sm outline-none"
+            className="w-full border-b border-border bg-background px-3 py-2 text-base outline-none"
           />
           <ul className="max-h-60 overflow-y-auto py-1">
             {filtered.length === 0 && (

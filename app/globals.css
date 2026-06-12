@@ -27,16 +27,16 @@
     sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0b0e13;
-    --surface: #141922;
-    --foreground: #e8eaed;
-    --muted: #9aa3b0;
-    --border: #232a35;
-    --home: #3b82f6;
-    --away: #fb923c;
-  }
+/* Tmavé téma se aplikuje třídou `.dark` na <html> (nastavuje ji theme skript /
+   ThemeToggle). „Auto" režim třídu nastaví dle systému. */
+.dark {
+  --background: #0b0e13;
+  --surface: #141922;
+  --foreground: #e8eaed;
+  --muted: #9aa3b0;
+  --border: #232a35;
+  --home: #3b82f6;
+  --away: #fb923c;
 }
 
 body {

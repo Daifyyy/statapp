@@ -14,6 +14,7 @@ import { MetricRow } from "./MetricRow";
 import { InsightChips } from "./InsightChips";
 import { TeamLogo } from "./TeamLogo";
 import { TeamCombobox } from "./TeamCombobox";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface TeamLite {
   id: number;
@@ -228,15 +229,18 @@ function Header({
         priority
         className="rounded-xl"
       />
-      <Segmented
-        options={[
-          { value: "CLUB" as EntityType, label: "Kluby" },
-          { value: "NATIONAL" as EntityType, label: "Reprezentace" },
-        ]}
-        value={mode}
-        onChange={onMode}
-        compact
-      />
+      <div className="flex items-center gap-2">
+        <Segmented
+          options={[
+            { value: "CLUB" as EntityType, label: "Kluby" },
+            { value: "NATIONAL" as EntityType, label: "Reprezentace" },
+          ]}
+          value={mode}
+          onChange={onMode}
+          compact
+        />
+        <ThemeToggle />
+      </div>
     </header>
   );
 }
@@ -363,7 +367,7 @@ function TeamSelect({
         {leagueLabel}
       </label>
       <select
-        className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-sm"
+        className="mt-1 w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-base"
         value={leagueId ?? ""}
         onChange={(e) => onLeagueChange(Number(e.target.value))}
       >
