@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { warmCatalog, warmLeague } from "@/lib/data/realRepository";
 import { isRealDataConfigured } from "@/lib/db";
 
-// Předehřátí zápasových dat jedné ligy může trvat déle. Pro Vercel Cron.
-export const maxDuration = 300;
+// Limit funkce (60 s je bezpečné i na Vercel Hobby). Katalogový warm (cron)
+// doběhne za pár sekund; těžký warm ligy běž raději lokálně / opakovaně.
+export const maxDuration = 60;
 
 /**
  * Předehřeje cache.
