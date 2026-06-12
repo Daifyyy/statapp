@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import type {
   CompareResult,
@@ -219,9 +220,14 @@ function Header({
 }) {
   return (
     <header className="flex items-center justify-between gap-3">
-      <h1 className="text-lg font-bold tracking-tight">
-        ⚽ Predictapp
-      </h1>
+      <Image
+        src="/logoapp.png"
+        alt="Predictapp"
+        width={40}
+        height={40}
+        priority
+        className="rounded-xl"
+      />
       <Segmented
         options={[
           { value: "CLUB" as EntityType, label: "Kluby" },
