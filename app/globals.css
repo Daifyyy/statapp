@@ -45,6 +45,16 @@ body {
   font-family: var(--font-sans);
 }
 
+/* iOS Safari zoomne při focusu prvku s font-size < 16px (a po blur to nevrátí).
+   Na mobilu vynutíme 16px u formulářových prvků – zabrání auto-přiblížení. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Plynulé přechody hodnot a barů (§4 plánu). */
 .bar-fill {
   transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
