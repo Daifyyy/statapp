@@ -9,6 +9,9 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "probe": "node --env-file=.env --import tsx scripts/probe.ts",
+    "discover": "node --env-file=.env --import tsx scripts/discover.ts",
+    "limits": "node --env-file=.env --import tsx scripts/limits.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -17,6 +20,9 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "esbuild": "0.25.12"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -27,6 +33,7 @@
     "eslint-config-next": "16.2.9",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5",
     "vitest": "^4.1.8"
   }

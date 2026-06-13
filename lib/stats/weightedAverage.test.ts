@@ -39,4 +39,22 @@ describe("weightedAverage", () => {
     ]);
     expect(v).toBe(5);
   });
+
+  it("re-normalizuje při dvou chybějících oknech (zbyde jediné)", () => {
+    const v = weightedAverage([
+      { weight: 0.15, value: null },
+      { weight: 0.3, value: null },
+      { weight: 0.55, value: 7 },
+    ]);
+    expect(v).toBe(7);
+  });
+
+  it("kombinace null + nulová váha → počítá jen z platného okna", () => {
+    const v = weightedAverage([
+      { weight: 0.15, value: null },
+      { weight: 0, value: 100 },
+      { weight: 0.55, value: 4 },
+    ]);
+    expect(v).toBe(4);
+  });
 });

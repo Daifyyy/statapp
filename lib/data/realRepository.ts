@@ -23,6 +23,7 @@ import {
   PREVIOUS_SEASON,
   getConfederation,
   isNationalLeague,
+  teamLogoUrl,
 } from "./catalog";
 
 const LIST_TTL = 60 * 60 * 24; // 24 h pro seznamy (dokončené sezóny jsou stabilní)
@@ -84,7 +85,7 @@ export async function getTeamsByLeague(leagueId: number): Promise<TeamLite[]> {
       LIST_TTL,
       () => fetchLeagueTeams(confed.wcQualLeagueId, confed.season)
     );
-    return teams
+    const fromQual: TeamLite[] = teams
       .filter((t) => t.team.national)
       .map((t) => ({
         id: t.team.id,
@@ -92,8 +93,20 @@ export async function getTeamsByLeague(leagueId: number): Promise<TeamLite[]> {
         logoUrl: t.team.logo,
         country: t.team.name,
         entityType: "NATIONAL" as const,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name, "cs"));
+      }));
+    // Doplň ručně vedené týmy (pořadatelé MS bez kvalifikace), ať nechybí ve výběru.
+    const extras: TeamLite[] = (confed.extraTeams ?? [])
+      .filter((e) => !fromQual.some((t) => t.id === e.id))
+      .map((e) => ({
+        id: e.id,
+        name: e.name,
+        logoUrl: teamLogoUrl(e.id),
+        country: e.name,
+        entityType: "NATIONAL" as const,
+      }));
+    return [...fromQual, ...extras].sort((a, b) =>
+      a.name.localeCompare(b.name, "cs")
+    );
   }
 
   const teams = await cachedJson(
@@ -276,8 +289,15 @@ async function assemble(
     try {
       const stats = await fetchFixtureStatistics(f.fixture.id);
       statsTeam = stats.find((s) => s.team.id === teamId) ?? null;
-    } catch {
-      // Statistiky nemusí existovat (časté u reprezentací) – ponech jen góly.
+    } catch (e) {
+      // U reprezentací statistiky běžně chybí (jen tichý log pod API_DEBUG);
+      // u klubů jde o výpadek/částečná data → vždy logni pro diagnostiku.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (context !== "national") {
+        console.error(`[stats-miss] fixture=${f.fixture.id} team=${teamId} ctx=${context}: ${msg}`);
+      } else if (process.env.API_DEBUG) {
+        console.error(`[stats-miss] fixture=${f.fixture.id} team=${teamId} ctx=national: ${msg}`);
+      }
     }
     fetched.push(buildMatchStat(f, teamId, statsTeam, optsFor(f)));
   });
@@ -305,9 +325,9 @@ function buildMatchStat(
   if (statsTeam) {
     for (const s of statsTeam.statistics) {
       const metric = STAT_TYPE_MAP[s.type];
-      if (!metric || s.value == null) continue;
-      const num = typeof s.value === "number" ? s.value : parseFloat(s.value);
-      if (!Number.isNaN(num)) metrics[metric] = num;
+      if (!metric) continue;
+      const num = parseStatValue(s.value);
+      if (num !== null) metrics[metric] = num;
     }
   }
 
@@ -324,6 +344,24 @@ function buildMatchStat(
 }
 
 // ---- Pomocné ----
+
+/**
+ * Převede hodnotu statistiky z API na číslo. API posílá čísla, ale i řetězce
+ * s jednotkou („65%" pro držení/přesnost přihrávek) nebo placeholdery
+ * („N/A", „-", „−"). Vrací null, když hodnota není smysluplné číslo.
+ */
+export function parseStatValue(value: number | string | null): number | null {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const cleaned = value
+    .replace(/%/g, "")
+    .replace(/ /g, "") // NBSP
+    .replace(",", ".")
+    .trim();
+  if (cleaned === "") return null;
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
 
 function onlyFinished(fixtures: ApiFixture[]): ApiFixture[] {
   return fixtures.filter((f) => FINISHED_STATUSES.has(f.fixture.status.short));

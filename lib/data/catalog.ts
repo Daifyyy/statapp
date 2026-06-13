@@ -50,16 +50,33 @@ export interface Confederation {
   code: string;
   wcQualLeagueId: number;
   season: number;
+  /**
+   * Týmy, které v kvalifikační soutěži nejsou, ale do konfederace patří – typicky
+   * pořadatelé MS s automatickou kvalifikací (nehrají kvalifikaci, tak je seznam
+   * týmů `wcQualLeagueId` nevrací). Doplní se do výběru ručně. (Cyklus MS 2026.)
+   */
+  extraTeams?: { id: number; name: string }[];
 }
 
 export const CONFEDERATIONS: Confederation[] = [
   { id: 9001, name: "Reprezentace – Evropa (UEFA)", code: "UEFA", wcQualLeagueId: 32, season: 2024 },
   { id: 9002, name: "Reprezentace – Jižní Amerika (CONMEBOL)", code: "CONMEBOL", wcQualLeagueId: 34, season: 2026 },
-  { id: 9003, name: "Reprezentace – Sev./Stř. Amerika (CONCACAF)", code: "CONCACAF", wcQualLeagueId: 31, season: 2026 },
+  // Pořadatelé MS 2026 (USA, Kanada, Mexiko) mají automatickou kvalifikaci → v seznamu
+  // kvalifikace CONCACAF nejsou, doplňujeme je ručně.
+  { id: 9003, name: "Reprezentace – Sev./Stř. Amerika (CONCACAF)", code: "CONCACAF", wcQualLeagueId: 31, season: 2026,
+    extraTeams: [
+      { id: 2384, name: "USA" },
+      { id: 5529, name: "Canada" },
+      { id: 16, name: "Mexico" },
+    ] },
   { id: 9004, name: "Reprezentace – Afrika (CAF)", code: "CAF", wcQualLeagueId: 29, season: 2023 },
   { id: 9005, name: "Reprezentace – Asie (AFC)", code: "AFC", wcQualLeagueId: 30, season: 2026 },
   { id: 9006, name: "Reprezentace – Oceánie (OFC)", code: "OFC", wcQualLeagueId: 33, season: 2026 },
 ];
+
+/** URL loga týmu z jeho ID (stejný tvar jako API-Football `team.logo`). */
+export const teamLogoUrl = (id: number) =>
+  `https://media.api-sports.io/football/teams/${id}.png`;
 
 export const NATIONAL_LEAGUES: League[] = CONFEDERATIONS.map((c) => ({
   id: c.id,

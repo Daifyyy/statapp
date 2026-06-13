@@ -15,11 +15,14 @@ npm test             # Vitest – unit testy výpočetního jádra
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npx prisma db push   # promítnout změnu schématu do Neonu (+ regeneruje klienta)
-node --env-file=.env scripts/probe.ts   # živá sonda API (status, tvary odpovědí)
+npm run probe        # živá sonda API (status, kvóta, tvary odpovědí); též: discover, limits
 ```
 **Pozn. (tento Windows stroj):** odchozí TLS na api-sports i `npm`/`prisma generate`
 vyžaduje `NODE_OPTIONS=--use-system-ca` (firemní/AV TLS proxy). Na Vercelu netřeba.
 Prisma `generate` občas selže na EPERM (zamčená DLL) – zabít běžící `next` server.
+Sondy (`probe`/`discover`/`limits`) běží přes `tsx` (raw `node` neumí extensionless
+importy). `esbuild` je v `package.json` připnutý na 0.25.12 (`overrides`) – stroj
+neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolchainu padá.
 
 ## Architektura
 - **Katalog** (ligy, konfederace, seznamy týmů) – dynamicky z API, **cache** (`ApiCache`).

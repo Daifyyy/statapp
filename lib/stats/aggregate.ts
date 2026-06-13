@@ -77,12 +77,15 @@ export function computeMetricValue(
   }
 
   const value = weightedAverage(windowValues);
+  // Zobrazený vzorek i práh spolehlivosti vychází ze stejné zaokrouhlené hodnoty,
+  // aby UI neukázalo „4 zápasy" bez hvězdičky u efektivního vzorku 3.8. §3.4c
+  const sampleSize = Math.round(effectiveSample);
   return {
     metric,
     venue,
     value: value === null ? null : round2(value),
-    sampleSize: Math.round(effectiveSample),
-    lowConfidence: value !== null && effectiveSample < LOW_CONFIDENCE_SAMPLE,
+    sampleSize,
+    lowConfidence: value !== null && sampleSize < LOW_CONFIDENCE_SAMPLE,
     breakdown,
   };
 }

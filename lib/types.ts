@@ -7,10 +7,23 @@ export type Venue = "HOME" | "AWAY" | "TOTAL";
 export type Metric =
   | "GOALS_FOR"
   | "GOALS_AGAINST"
-  | "CORNERS"
-  | "FOULS"
   | "XG"
-  | "SHOTS";
+  | "SHOTS"
+  | "SHOTS_ON_TARGET"
+  | "SHOTS_OFF_TARGET"
+  | "BLOCKED_SHOTS"
+  | "SHOTS_INSIDE_BOX"
+  | "SHOTS_OUTSIDE_BOX"
+  | "POSSESSION"
+  | "PASSES_TOTAL"
+  | "PASSES_ACCURATE"
+  | "PASS_ACCURACY"
+  | "CORNERS"
+  | "OFFSIDES"
+  | "FOULS"
+  | "YELLOW_CARDS"
+  | "RED_CARDS"
+  | "SAVES";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -29,28 +42,79 @@ export type DataSource =
   | "NATIONAL"
   | "NATIONAL_FB";
 
+/** Pořadí = pořadí řádků v UI (logické skupiny: góly → střely → držení/přihrávky → standardky → disciplína). */
 export const ALL_METRICS: Metric[] = [
   "GOALS_FOR",
   "GOALS_AGAINST",
-  "CORNERS",
-  "FOULS",
   "XG",
   "SHOTS",
+  "SHOTS_ON_TARGET",
+  "SHOTS_OFF_TARGET",
+  "BLOCKED_SHOTS",
+  "SHOTS_INSIDE_BOX",
+  "SHOTS_OUTSIDE_BOX",
+  "POSSESSION",
+  "PASSES_TOTAL",
+  "PASSES_ACCURATE",
+  "PASS_ACCURACY",
+  "CORNERS",
+  "OFFSIDES",
+  "FOULS",
+  "YELLOW_CARDS",
+  "RED_CARDS",
+  "SAVES",
 ];
 
-/** Reprezentace nepoužívají xG (§3.4). */
+/**
+ * Metriky, které u reprezentací typicky chybí v API (/fixtures/statistics bývá
+ * neúplné) nebo je mock neumí věrně modelovat – pro NATIONAL je vynecháme. §3.4
+ */
+const NATIONAL_EXCLUDED: Metric[] = [
+  "XG",
+  "POSSESSION",
+  "PASS_ACCURACY",
+  "PASSES_TOTAL",
+  "PASSES_ACCURATE",
+  "SAVES",
+  "BLOCKED_SHOTS",
+  "SHOTS_INSIDE_BOX",
+  "SHOTS_OUTSIDE_BOX",
+];
+
 export const METRICS_BY_ENTITY: Record<EntityType, Metric[]> = {
   CLUB: ALL_METRICS,
-  NATIONAL: ALL_METRICS.filter((m) => m !== "XG"),
+  NATIONAL: ALL_METRICS.filter((m) => !NATIONAL_EXCLUDED.includes(m)),
 };
+
+/** Metriky, u kterých je NIŽŠÍ hodnota lepší (obrácená logika zvýraznění). */
+export const LOWER_IS_BETTER: Set<Metric> = new Set<Metric>([
+  "GOALS_AGAINST",
+  "FOULS",
+  "YELLOW_CARDS",
+  "RED_CARDS",
+  "OFFSIDES",
+]);
 
 export const METRIC_LABELS: Record<Metric, string> = {
   GOALS_FOR: "Vstřelené góly",
   GOALS_AGAINST: "Obdržené góly",
-  CORNERS: "Rohy",
-  FOULS: "Fauly",
   XG: "xG",
   SHOTS: "Střely",
+  SHOTS_ON_TARGET: "Střely na branku",
+  SHOTS_OFF_TARGET: "Střely mimo",
+  BLOCKED_SHOTS: "Zblokované střely",
+  SHOTS_INSIDE_BOX: "Střely z vápna",
+  SHOTS_OUTSIDE_BOX: "Střely mimo vápno",
+  POSSESSION: "Držení míče (%)",
+  PASSES_TOTAL: "Přihrávky",
+  PASSES_ACCURATE: "Přesné přihrávky",
+  PASS_ACCURACY: "Přesnost přihrávek (%)",
+  CORNERS: "Rohy",
+  OFFSIDES: "Ofsajdy",
+  FOULS: "Fauly",
+  YELLOW_CARDS: "Žluté karty",
+  RED_CARDS: "Červené karty",
+  SAVES: "Zákroky brankáře",
 };
 
 export const WINDOW_LABELS: Record<WindowKey, string> = {

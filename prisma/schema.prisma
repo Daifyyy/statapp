@@ -37,8 +37,23 @@ model MatchStatCache {
   fouls            Float?
   shots            Float?
   xg               Float?
+  shotsOnTarget    Float?
+  shotsOffTarget   Float?
+  blockedShots     Float?
+  shotsInsideBox   Float?
+  shotsOutsideBox  Float?
+  offsides         Float?
+  possession       Float?
+  passesTotal      Float?
+  passesAccurate   Float?
+  passAccuracy     Float?
+  yellowCards      Float?
+  redCards         Float?
+  saves            Float?
+  /// Verze sady metrik; starší řádky se ignorují a dotáhnou znovu (viz cache.ts).
+  schemaVersion    Int      @default(1)
   cachedAt         DateTime @default(now())
 
   @@id([teamId, fixtureId, context])
-  @@index([teamId, context])
+  @@index([teamId, context, schemaVersion])
 }

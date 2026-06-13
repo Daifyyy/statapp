@@ -9,7 +9,7 @@ import type {
   Metric,
   Venue,
 } from "@/lib/types";
-import { METRIC_LABELS } from "@/lib/types";
+import { METRIC_LABELS, LOWER_IS_BETTER } from "@/lib/types";
 import { MetricRow } from "./MetricRow";
 import { InsightChips } from "./InsightChips";
 import { TeamLogo } from "./TeamLogo";
@@ -310,9 +310,7 @@ function ResultPanel({
               label={METRIC_LABELS[metric]}
               home={valueFor("home", metric)}
               away={valueFor("away", metric)}
-              lowerIsBetter={
-                metric === "GOALS_AGAINST" || metric === "FOULS"
-              }
+              lowerIsBetter={LOWER_IS_BETTER.has(metric)}
             />
           ))}
         </div>

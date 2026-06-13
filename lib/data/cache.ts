@@ -5,6 +5,13 @@ import type { MatchStat, Metric } from "@/lib/types";
 export type MatchContext = "league" | "euro" | "national";
 
 /**
+ * Verze sady metrik v MatchStatCache. Po přidání nových metrik bumpni → starší
+ * řádky se přestanou číst, dotáhnou se znovu z API (zadarmo) a přepíšou s plnou
+ * sadou. Bezpečné pro sdílený Neon (žádné plošné mazání). §A/4
+ */
+export const CURRENT_CACHE_VERSION = 2;
+
+/**
  * TTL cache raw odpovědí (ligy, týmy, seznamy zápasů). Read-through:
  * při miss/expiraci zavolá `fetcher`, výsledek uloží a vrátí (§1.1).
  */
@@ -41,6 +48,19 @@ function rowToMatchStat(r: Row): MatchStat {
   if (r.fouls != null) metrics.FOULS = r.fouls;
   if (r.shots != null) metrics.SHOTS = r.shots;
   if (r.xg != null) metrics.XG = r.xg;
+  if (r.shotsOnTarget != null) metrics.SHOTS_ON_TARGET = r.shotsOnTarget;
+  if (r.shotsOffTarget != null) metrics.SHOTS_OFF_TARGET = r.shotsOffTarget;
+  if (r.blockedShots != null) metrics.BLOCKED_SHOTS = r.blockedShots;
+  if (r.shotsInsideBox != null) metrics.SHOTS_INSIDE_BOX = r.shotsInsideBox;
+  if (r.shotsOutsideBox != null) metrics.SHOTS_OUTSIDE_BOX = r.shotsOutsideBox;
+  if (r.offsides != null) metrics.OFFSIDES = r.offsides;
+  if (r.possession != null) metrics.POSSESSION = r.possession;
+  if (r.passesTotal != null) metrics.PASSES_TOTAL = r.passesTotal;
+  if (r.passesAccurate != null) metrics.PASSES_ACCURATE = r.passesAccurate;
+  if (r.passAccuracy != null) metrics.PASS_ACCURACY = r.passAccuracy;
+  if (r.yellowCards != null) metrics.YELLOW_CARDS = r.yellowCards;
+  if (r.redCards != null) metrics.RED_CARDS = r.redCards;
+  if (r.saves != null) metrics.SAVES = r.saves;
   return {
     fixtureId: r.fixtureId,
     date: r.date.toISOString(),
@@ -59,7 +79,7 @@ export async function getCachedMatchStats(
   context: MatchContext
 ): Promise<Map<number, MatchStat>> {
   const rows = await prisma.matchStatCache.findMany({
-    where: { teamId, context },
+    where: { teamId, context, schemaVersion: CURRENT_CACHE_VERSION },
   });
   return new Map(rows.map((r) => [r.fixtureId, rowToMatchStat(r)]));
 }
@@ -80,12 +100,27 @@ function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
     fouls: ms.metrics.FOULS ?? null,
     shots: ms.metrics.SHOTS ?? null,
     xg: ms.metrics.XG ?? null,
+    shotsOnTarget: ms.metrics.SHOTS_ON_TARGET ?? null,
+    shotsOffTarget: ms.metrics.SHOTS_OFF_TARGET ?? null,
+    blockedShots: ms.metrics.BLOCKED_SHOTS ?? null,
+    shotsInsideBox: ms.metrics.SHOTS_INSIDE_BOX ?? null,
+    shotsOutsideBox: ms.metrics.SHOTS_OUTSIDE_BOX ?? null,
+    offsides: ms.metrics.OFFSIDES ?? null,
+    possession: ms.metrics.POSSESSION ?? null,
+    passesTotal: ms.metrics.PASSES_TOTAL ?? null,
+    passesAccurate: ms.metrics.PASSES_ACCURATE ?? null,
+    passAccuracy: ms.metrics.PASS_ACCURACY ?? null,
+    yellowCards: ms.metrics.YELLOW_CARDS ?? null,
+    redCards: ms.metrics.RED_CARDS ?? null,
+    saves: ms.metrics.SAVES ?? null,
+    schemaVersion: CURRENT_CACHE_VERSION,
   };
 }
 
 /**
- * Dávkové uložení statistik více zápasů jedním dotazem (mimo kritickou cestu
- * stahování). `skipDuplicates` – historické zápasy se nemění, takže jen inserty.
+ * Uloží statistiky více zápasů (mimo kritickou cestu stahování). Upsert (ne jen
+ * insert), aby se řádky ze starší `schemaVersion` přepsaly na aktuální sadu metrik
+ * – jinak by je `getCachedMatchStats` navždy ignoroval a tým se stahoval pořád dokola.
  */
 export async function saveMatchStats(
   teamId: number,
@@ -93,8 +128,20 @@ export async function saveMatchStats(
   list: MatchStat[]
 ): Promise<void> {
   if (list.length === 0) return;
-  await prisma.matchStatCache.createMany({
-    data: list.map((ms) => toRow(teamId, context, ms)),
-    skipDuplicates: true,
-  });
+  await Promise.all(
+    list.map((ms) => {
+      const row = toRow(teamId, context, ms);
+      return prisma.matchStatCache.upsert({
+        where: {
+          teamId_fixtureId_context: {
+            teamId,
+            fixtureId: ms.fixtureId,
+            context,
+          },
+        },
+        create: row,
+        update: row,
+      });
+    })
+  );
 }

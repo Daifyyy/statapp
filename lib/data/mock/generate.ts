@@ -1,4 +1,8 @@
 import type { MatchStat, Metric } from "@/lib/types";
+import { METRICS_BY_ENTITY } from "@/lib/types";
+
+/** Sada metrik generovaná pro reprezentace (užší – viz METRICS_BY_ENTITY). */
+const NATIONAL_METRICS = new Set<Metric>(METRICS_BY_ENTITY.NATIONAL);
 
 /** Profil síly týmu – průměrné hodnoty metrik na zápas + modifikátory. */
 export interface TeamProfile {
@@ -25,11 +29,20 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-const ATTACKING: Metric[] = ["GOALS_FOR", "CORNERS", "XG", "SHOTS"];
+/** Metriky, které má TeamProfile přímo (ostatní se z nich odvozují). */
+type BaseMetric =
+  | "GOALS_FOR"
+  | "GOALS_AGAINST"
+  | "CORNERS"
+  | "FOULS"
+  | "XG"
+  | "SHOTS";
+
+const ATTACKING: BaseMetric[] = ["GOALS_FOR", "CORNERS", "XG", "SHOTS"];
 
 function metricMean(
   profile: TeamProfile,
-  metric: Metric,
+  metric: BaseMetric,
   isHome: boolean,
   recencyFactor: number
 ): number {
@@ -49,8 +62,12 @@ interface MatchOpts {
   isBaseline?: boolean;
   date: Date;
   recencyFactor: number; // 1 = nejnovější, 0 = nejstarší
-  includeXg?: boolean;
+  /** Pokud zadáno, generují se jen tyto metriky (reprezentace mají užší sadu). */
+  allowed?: Set<Metric>;
 }
+
+const clamp = (v: number, lo: number, hi: number) =>
+  Math.min(hi, Math.max(lo, v));
 
 function buildMatch(
   rand: () => number,
@@ -59,25 +76,52 @@ function buildMatch(
   opts: MatchOpts
 ): MatchStat {
   const metrics: Partial<Record<Metric, number>> = {};
-  const allMetrics: Metric[] = [
+  const allow = (m: Metric) => !opts.allowed || opts.allowed.has(m);
+  // jitter ±(spread/2) kolem 1; default ±35 %
+  const jit = (spread = 0.7) => 1 - spread / 2 + rand() * spread;
+  const set = (m: Metric, v: number, decimals = 1) => {
+    if (!allow(m)) return;
+    const f = 10 ** decimals;
+    metrics[m] = Math.max(0, Math.round(v * f) / f);
+  };
+
+  // Základní metriky z profilu týmu.
+  const baseMetrics: BaseMetric[] = [
     "GOALS_FOR",
     "GOALS_AGAINST",
     "CORNERS",
     "FOULS",
     "SHOTS",
+    "XG",
   ];
-  if (opts.includeXg !== false) allMetrics.push("XG");
-
-  for (const metric of allMetrics) {
+  for (const metric of baseMetrics) {
+    if (!allow(metric)) continue;
     const mean = metricMean(profile, metric, opts.isHome, opts.recencyFactor);
-    // jitter ±35 % kolem průměru
-    const jitter = 0.65 + rand() * 0.7;
-    const raw = mean * jitter;
-    metrics[metric] =
-      metric === "GOALS_FOR" || metric === "GOALS_AGAINST"
-        ? Math.max(0, Math.round(raw))
-        : Math.round(raw * 10) / 10;
+    const isGoals = metric === "GOALS_FOR" || metric === "GOALS_AGAINST";
+    set(metric, mean * jit(), isGoals ? 0 : 1);
   }
+
+  // Odvozené metriky ze střel / faulů (zachovají homeBoost i formu skrz SHOTS).
+  const shots = metricMean(profile, "SHOTS", opts.isHome, opts.recencyFactor);
+  const fouls = metrics.FOULS ?? profile.FOULS;
+  set("SHOTS_ON_TARGET", shots * 0.4 * jit(0.4), 1);
+  set("SHOTS_OFF_TARGET", shots * 0.35 * jit(0.4), 1);
+  set("BLOCKED_SHOTS", shots * 0.22 * jit(0.5), 1);
+  set("SHOTS_INSIDE_BOX", shots * 0.6 * jit(0.4), 1);
+  set("SHOTS_OUTSIDE_BOX", shots * 0.4 * jit(0.4), 1);
+  set("OFFSIDES", 1.8 * jit(0.9), 0);
+  set("YELLOW_CARDS", fouls * 0.16 * jit(0.6), 0);
+  set("RED_CARDS", rand() < 0.08 ? 1 : 0, 0);
+  set("SAVES", (2.5 + profile.GOALS_AGAINST) * jit(0.5), 1);
+
+  // Držení a přesnost přihrávek (v %, clamp 0–100), přihrávky odvozené od držení.
+  const possession = clamp(50 + (shots - 13) * 1.4 + (rand() - 0.5) * 14, 32, 68);
+  const passAcc = clamp(78 + (shots - 13) * 0.7 + (rand() - 0.5) * 6, 68, 93);
+  const passesTotal = Math.round(380 * (possession / 50) * jit(0.3));
+  set("POSSESSION", possession, 1);
+  set("PASS_ACCURACY", passAcc, 1);
+  set("PASSES_TOTAL", passesTotal, 0);
+  set("PASSES_ACCURATE", (passesTotal * passAcc) / 100, 0);
 
   return {
     fixtureId,
@@ -182,7 +226,7 @@ export function generateNationalMatches(
         competitive,
         date,
         recencyFactor: 1 - i / total,
-        includeXg: false, // reprezentace bez xG
+        allowed: NATIONAL_METRICS, // reprezentace mají užší sadu metrik
       })
     );
   }

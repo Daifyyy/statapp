@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Metric } from "@/lib/types";
 import { schedule } from "./rateLimiter";
 
 /**
@@ -184,13 +185,25 @@ export function fetchFixtureStatistics(fixture: number) {
 }
 
 /** Mapuje názvy statistik API-Football na naše metriky. */
-export const STAT_TYPE_MAP: Record<string, "SHOTS" | "CORNERS" | "FOULS" | "XG"> =
-  {
-    "Total Shots": "SHOTS",
-    "Corner Kicks": "CORNERS",
-    Fouls: "FOULS",
-    expected_goals: "XG",
-  };
+export const STAT_TYPE_MAP: Record<string, Metric> = {
+  "Total Shots": "SHOTS",
+  "Shots on Goal": "SHOTS_ON_TARGET",
+  "Shots off Goal": "SHOTS_OFF_TARGET",
+  "Blocked Shots": "BLOCKED_SHOTS",
+  "Shots insidebox": "SHOTS_INSIDE_BOX",
+  "Shots outsidebox": "SHOTS_OUTSIDE_BOX",
+  "Corner Kicks": "CORNERS",
+  Offsides: "OFFSIDES",
+  "Ball Possession": "POSSESSION", // string "65%"
+  Fouls: "FOULS",
+  "Yellow Cards": "YELLOW_CARDS",
+  "Red Cards": "RED_CARDS",
+  "Goalkeeper Saves": "SAVES",
+  "Total passes": "PASSES_TOTAL",
+  "Passes accurate": "PASSES_ACCURATE",
+  "Passes %": "PASS_ACCURACY", // string "87%"
+  expected_goals: "XG",
+};
 
 /** Stav „odehráno" pro API-Football (full time / after ET / penalties). */
 export const FINISHED_STATUSES = new Set(["FT", "AET", "PEN"]);
