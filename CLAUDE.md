@@ -3,9 +3,12 @@
 # Predictapp — statistické porovnání fotbalových týmů
 
 Web (Next.js) pro porovnání klubů a reprezentací. Pro každý tým počítá **vážený
-průměr** metrik (góly vstřelené/obdržené, rohy, fauly, xG, střely) ve variantách
-**Doma / Venku / Celkově** ze tří oken (váhy 15 / 30 / 55 %) + automatické **insights**.
+průměr** metrik ve variantách **Doma / Venku / Celkově** ze tří oken
+(váhy 15 / 30 / 55 %) + automatické **insights**.
 Data: API-Football (api-sports.io) přes read-through cache do Postgresu (Neon).
+Metriky: góly vstřelené/obdržené, xG, střely (celkem / na branku / mimo / zblokované /
+z vápna / mimo vápno), držení míče, přihrávky + přesnost, rohy, ofsajdy, fauly,
+žluté/červené karty, zákroky brankáře (`ALL_METRICS` v `lib/types.ts`).
 
 ## Příkazy
 ```bash
@@ -28,6 +31,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Katalog** (ligy, konfederace, seznamy týmů) – dynamicky z API, **cache** (`ApiCache`).
   Klubové ligy a konfederace jsou kurátorovaný seznam ID v `lib/data/catalog.ts`
   (~18 lig + 6 konfederací = WC-kvalifikace; reprezentace se táhnou z nich).
+  Pořadatelé MS (autom. kvalifikace → nejsou v seznamu kvalifikace, např. USA/Kanada/
+  Mexiko pro 2026) se doplňují ručně přes `Confederation.extraTeams`.
 - **Zápasová data** (per-zápas statistiky) – stahují se **líně jen pro porovnané týmy**
   a cachují **natrvalo** (`MatchStatCache`). Žádný hromadný download.
 - **Výpočetní jádro** `lib/stats/` je čistě funkční a **na zdroji nezávislé** – mock
@@ -43,9 +48,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     Baseline se určuje dynamicky: je-li aktuální sezóna v podstatě dohraná
     (≥ `SEASON_COMPLETE_MIN`), je baseline ona (mezisezóna) → naplní se i nováčkům.
   - **LAST10 / LAST5** (30 / 55 %) = nejnovějších 10 / 5 zápasů dle data (napříč sezónami).
-- Reprezentace = časová okna BASE (12–24 m) / LAST12 / LAST6; bez xG; soutěžní zápasy
-  mají vyšší váhu než přáteláky.
+- Reprezentace = časová okna BASE (12–24 m) / LAST12 / LAST6; soutěžní zápasy
+  mají vyšší váhu než přáteláky. Mají **užší sadu metrik** (`METRICS_BY_ENTITY` –
+  bez xG, držení, přihrávek, zákroků… které u nich v API/mocku chybí).
 - Vážený průměr re-normalizuje váhy, když okno chybí (`weightedAverage.ts`).
+- Metriky z `/fixtures/statistics` mapuje `STAT_TYPE_MAP` (`apiFootball.ts`);
+  hodnoty čistí `parseStatValue` (ošetří „65 %"/null/„N/A"). `LOWER_IS_BETTER`
+  (`types.ts`) značí metriky, kde je nižší hodnota lepší (obdržené góly, karty…).
 
 ## Rate-limiting / výkon
 - api-sports limit 300/min, ale edge nás reálně stropuje ~5 úspěšných volání/s a občas
@@ -58,8 +67,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 ## DB
 Prisma 6 + Postgres (Neon). Tabulky `ApiCache` (TTL) + `MatchStatCache` (trvalá).
 **Pozor:** Neon je sdílená pro lokál i Vercel → změna schématu (`prisma db push`)
-ovlivní i produkci; nasaď nový kód hned. Při změně sémantiky cache vyprázdni
-`MatchStatCache` (deleteMany) a znovu předehřej.
+ovlivní i produkci; nasaď nový kód hned.
+**Verzování cache:** `MatchStatCache` má `schemaVersion`; po přidání metrik bumpni
+`CURRENT_CACHE_VERSION` (`cache.ts`) → staré řádky se přestanou číst a samy se
+dotáhnou znovu (zadarmo) s plnou sadou. Žádné plošné mazání. `saveMatchStats`
+proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/api/warm?league=ID`.
 
 ## Deployment
 GitHub `Daifyyy/statapp` → Vercel (auto-deploy na push do `main`). Env na Vercelu:
