@@ -26,8 +26,11 @@ export function lowConfidenceOf(
   metric: Metric,
   venue: Venue
 ): boolean {
+  const at = values.find((x) => x.metric === metric && x.venue === venue);
+  // Prázdná varianta (žádný vzorek) → rozhoduje TOTAL (reprezentace, řídké HOME/AWAY).
   const v =
-    values.find((x) => x.metric === metric && x.venue === venue) ??
-    values.find((x) => x.metric === metric && x.venue === "TOTAL");
+    at && at.sampleSize > 0
+      ? at
+      : (values.find((x) => x.metric === metric && x.venue === "TOTAL") ?? at);
   return v?.lowConfidence ?? true;
 }

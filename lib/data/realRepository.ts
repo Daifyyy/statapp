@@ -200,7 +200,9 @@ async function buildNationalTeam(
 
   const leagueMatches = await assemble(teamId, "national", finished, (f) => ({
     competitive: !isFriendly(f.league.name),
-    isNeutral: false, // neutrální půdu API spolehlivě nehlásí (aproximace)
+    // Reprezentace bereme jako venue-neutrální: hrají většinou na neutrální půdě /
+    // turnajích a API doma/venku nehlásí spolehlivě → doma/venku u nich nedělíme.
+    isNeutral: true,
   }));
 
   return {

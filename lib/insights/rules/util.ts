@@ -1,5 +1,6 @@
 import type { Metric, MetricValue } from "@/lib/types";
-import { lowConfidenceOf, valueOf } from "@/lib/stats/metricLookup";
+import { lowConfidenceOf, valueOf, valueOrTotal } from "@/lib/stats/metricLookup";
+import type { TeamContext } from "../context";
 
 /** Jedno desetinné místo (góly, střely…). */
 export function fmt(v: number): string {
@@ -34,9 +35,14 @@ export function total(values: MetricValue[], metric: Metric): number | null {
   return valueOf(values, metric, "TOTAL");
 }
 
-/** Příznak malého vzorku pro metriku (TOTAL). */
-export function lowConf(values: MetricValue[], metric: Metric): boolean {
-  return lowConfidenceOf(values, metric, "TOTAL");
+/** Hodnota metriky v perspektivní variantě týmu (HOME/AWAY/TOTAL, fallback TOTAL). */
+export function mv(ctx: TeamContext, metric: Metric): number | null {
+  return valueOrTotal(ctx.values, metric, ctx.venue);
+}
+
+/** Příznak malého vzorku pro metriku v perspektivní variantě (fallback TOTAL). */
+export function lc(ctx: TeamContext, metric: Metric): boolean {
+  return lowConfidenceOf(ctx.values, metric, ctx.venue);
 }
 
 export function clamp01(v: number): number {

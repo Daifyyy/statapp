@@ -1,6 +1,6 @@
 import type { MatchupContext, TeamContext } from "../context";
-import { totalSummary } from "../context";
-import { valueOf } from "@/lib/stats/metricLookup";
+import { perspectiveSummary } from "../context";
+import { valueOrTotal } from "@/lib/stats/metricLookup";
 
 export interface PredictionReasons {
   favorite: "home" | "away" | null;
@@ -23,34 +23,41 @@ export function predictionReasons(ctx: MatchupContext): PredictionReasons {
   const strengthLabel =
     mag > 0.3 ? "Jasný favorit" : mag > 0.12 ? "Mírný favorit" : "Lehká výhoda";
 
-  return { favorite, strengthLabel, reasons: collectReasons(fav, opp, favorite) };
+  return {
+    favorite,
+    strengthLabel,
+    reasons: collectReasons(fav, opp, favorite, ctx.entityType),
+  };
 }
 
 function collectReasons(
   fav: TeamContext,
   opp: TeamContext,
-  favorite: "home" | "away"
+  favorite: "home" | "away",
+  entityType: MatchupContext["entityType"]
 ): string[] {
   const reasons: string[] = [];
 
-  const favWins = totalSummary(fav)?.form.filter((r) => r === "W").length ?? 0;
-  const oppWins = totalSummary(opp)?.form.filter((r) => r === "W").length ?? 0;
+  const favWins = perspectiveSummary(fav)?.form.filter((r) => r === "W").length ?? 0;
+  const oppWins = perspectiveSummary(opp)?.form.filter((r) => r === "W").length ?? 0;
   if (favWins - oppWins >= 1) reasons.push("lepší forma");
 
-  const favGf = valueOf(fav.values, "GOALS_FOR", "TOTAL");
-  const oppGf = valueOf(opp.values, "GOALS_FOR", "TOTAL");
+  const favGf = valueOrTotal(fav.values, "GOALS_FOR", fav.venue);
+  const oppGf = valueOrTotal(opp.values, "GOALS_FOR", opp.venue);
   if (favGf != null && oppGf != null && favGf > oppGf * 1.15)
     reasons.push("silnější útok");
 
-  const favGa = valueOf(fav.values, "GOALS_AGAINST", "TOTAL");
-  const oppGa = valueOf(opp.values, "GOALS_AGAINST", "TOTAL");
+  const favGa = valueOrTotal(fav.values, "GOALS_AGAINST", fav.venue);
+  const oppGa = valueOrTotal(opp.values, "GOALS_AGAINST", opp.venue);
   if (favGa != null && oppGa != null && favGa < oppGa * 0.85)
     reasons.push("pevnější obrana");
 
-  if (favorite === "home") reasons.push("výhoda domácího prostředí");
+  // Domácí výhoda jen pro kluby – reprezentace hrají venue-neutrálně.
+  if (favorite === "home" && entityType !== "NATIONAL")
+    reasons.push("výhoda domácího prostředí");
 
-  const favPos = valueOf(fav.values, "POSSESSION", "TOTAL");
-  const oppPos = valueOf(opp.values, "POSSESSION", "TOTAL");
+  const favPos = valueOrTotal(fav.values, "POSSESSION", fav.venue);
+  const oppPos = valueOrTotal(opp.values, "POSSESSION", opp.venue);
   if (favPos != null && oppPos != null && favPos > oppPos + 8)
     reasons.push("víc drží míč");
 

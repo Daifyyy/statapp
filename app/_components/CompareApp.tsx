@@ -169,6 +169,8 @@ export function CompareApp({
     setHomeId(null);
     setAwayId(null);
     setResult(null);
+    // Reprezentace jsou venue-neutrální → vždy Celkově (přepínač se skryje).
+    if (next === "NATIONAL") setVenue("TOTAL");
   }
 
   function handleHomeLeague(id: number) {
@@ -251,16 +253,19 @@ export function CompareApp({
         </div>
       </section>
 
-      <div className="sticky top-0 z-10 mt-4 bg-background/80 py-2 backdrop-blur">
-        <Segmented
-          options={(["HOME", "AWAY", "TOTAL"] as Venue[]).map((v) => ({
-            value: v,
-            label: VENUE_LABELS[v],
-          }))}
-          value={venue}
-          onChange={setVenue}
-        />
-      </div>
+      {/* Reprezentace jsou venue-neutrální → přepínač Doma/Venku jen pro kluby. */}
+      {mode === "CLUB" && (
+        <div className="sticky top-0 z-10 mt-4 bg-background/80 py-2 backdrop-blur">
+          <Segmented
+            options={(["HOME", "AWAY", "TOTAL"] as Venue[]).map((v) => ({
+              value: v,
+              label: VENUE_LABELS[v],
+            }))}
+            value={venue}
+            onChange={setVenue}
+          />
+        </div>
+      )}
 
       <ResultPanel
         result={result}

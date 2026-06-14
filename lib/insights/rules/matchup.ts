@@ -1,7 +1,8 @@
+import type { Metric } from "@/lib/types";
 import type { MatchupContext, TeamContext } from "../context";
-import { totalSummary } from "../context";
+import { perspectiveSummary } from "../context";
 import type { Candidate, MatchupRule } from "../ruleTypes";
-import { valueOf } from "@/lib/stats/metricLookup";
+import { valueOrTotal } from "@/lib/stats/metricLookup";
 import { fmt, pct } from "./util";
 import { predictionReasons } from "./predictionReasons";
 
@@ -53,8 +54,8 @@ export const MATCHUP_RULES: MatchupRule[] = [
     id: "form_clash",
     category: "matchup",
     evaluate: (ctx) => {
-      const hw = totalSummary(ctx.home)?.form.filter((r) => r === "W").length ?? 0;
-      const aw = totalSummary(ctx.away)?.form.filter((r) => r === "W").length ?? 0;
+      const hw = perspectiveSummary(ctx.home)?.form.filter((r) => r === "W").length ?? 0;
+      const aw = perspectiveSummary(ctx.away)?.form.filter((r) => r === "W").length ?? 0;
       if (hw >= 4 && aw <= 1) return matchupCand("form_clash", "positive", 0.8, `Domácí ve formě (${hw}V z 5) proti tápajícímu soupeři`);
       if (aw >= 4 && hw <= 1) return matchupCand("form_clash", "positive", 0.8, `Host ve formě (${aw}V z 5) proti tápajícímu soupeři`);
       return null;
@@ -90,7 +91,7 @@ export const MATCHUP_RULES: MatchupRule[] = [
 // ---- pomocné ----
 
 interface EdgeDef {
-  metric: Parameters<typeof valueOf>[1];
+  metric: Metric;
   minRatio: number;
   lowerBetter: boolean;
   text: string; // doplní se „(x vs y)"
@@ -105,8 +106,8 @@ const EDGES: EdgeDef[] = [
 ];
 
 function edge(ctx: MatchupContext, e: EdgeDef): Candidate | null {
-  const h = valueOf(ctx.home.values, e.metric, "TOTAL");
-  const a = valueOf(ctx.away.values, e.metric, "TOTAL");
+  const h = valueOrTotal(ctx.home.values, e.metric, ctx.home.venue);
+  const a = valueOrTotal(ctx.away.values, e.metric, ctx.away.venue);
   if (h == null || a == null) return null;
   const max = Math.max(h, a);
   if (max <= 0) return null;
@@ -125,8 +126,8 @@ function mismatch(
   defender: TeamContext,
   side: "home" | "away"
 ): Candidate | null {
-  const gf = valueOf(attacker.values, "GOALS_FOR", "TOTAL");
-  const ga = valueOf(defender.values, "GOALS_AGAINST", "TOTAL");
+  const gf = valueOrTotal(attacker.values, "GOALS_FOR", attacker.venue);
+  const ga = valueOrTotal(defender.values, "GOALS_AGAINST", defender.venue);
   if (gf == null || ga == null) return null;
   if (gf < 1.6 || ga < 1.4) return null; // silný útok vs děravá obrana
   const strength = clamp01((gf - 1.6) / 1 + (ga - 1.4) / 1) / 2 + 0.4;

@@ -56,6 +56,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   confidence`), **řadí a vybere top N** klíčových signálů (`InsightReport`). Čistá funkce
   nad výstupem `compareTeams` – žádná nová data. UI: `MatchVerdict`/`KeySignals`/`InsightChips`.
   Prahy/váhy laditelné na jednom místě; nové pravidlo = jedna položka v registru + test.
+  **Perspektivní venue** (`TeamContext.venue`, `context.ts`): pravidla i predikce čtou
+  hodnoty z varianty relevantní pro zápas – **klub domácí → HOME, host → AWAY, reprezentace
+  → TOTAL** (sdílené gettery `mv`/`lc`/`perspectiveSummary`/`perspectiveMatches`).
 - **`lib/data/repository.ts`** přepíná real/mock podle env (`isRealDataConfigured`).
   Reálné: `realRepository.ts`; mock: `mock/seed.ts` + `generate.ts`.
 
@@ -70,6 +73,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - Reprezentace = časová okna BASE (12–24 m) / LAST12 / LAST6; soutěžní zápasy
   mají vyšší váhu než přáteláky. Mají **užší sadu metrik** (`METRICS_BY_ENTITY` –
   bez xG, držení, přihrávek, zákroků… které u nich v API/mocku chybí).
+  Reprezentační zápasy jsou **venue-neutrální** (`isNeutral: true` v `realRepository`
+  i mocku) → doma/venku se nedělí (hrají na neutrální půdě a API to nehlásí spolehlivě),
+  vše jde do TOTAL; UI v režimu Reprezentace přepínač Doma/Venku skrývá.
 - Vážený průměr re-normalizuje váhy, když okno chybí (`weightedAverage.ts`).
 - Metriky z `/fixtures/statistics` mapuje `STAT_TYPE_MAP` (`apiFootball.ts`);
   hodnoty čistí `parseStatValue` (ošetří „65 %"/null/„N/A"). `LOWER_IS_BETTER`

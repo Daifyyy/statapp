@@ -218,11 +218,12 @@ export function generateNationalMatches(
   for (let i = 0; i < total; i++) {
     const date = new Date(now.getTime() - i * 35 * DAY);
     const competitive = i % 3 !== 0; // ~2/3 soutěžních
-    const isNeutral = competitive && i % 5 === 0; // občas turnaj na neutrální půdě
     matches.push(
       buildMatch(rand, fid++, profile, {
-        isHome: isNeutral ? false : i % 2 === 0,
-        isNeutral,
+        // Reprezentace bereme jako venue-neutrální (turnaje, neutrální půda) →
+        // doma/venku u nich nedělíme; parita s realRepository.
+        isHome: i % 2 === 0, // ponecháno pro generování metrik, do venue nevstupuje
+        isNeutral: true,
         competitive,
         date,
         recencyFactor: 1 - i / total,
