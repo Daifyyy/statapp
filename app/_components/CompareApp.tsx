@@ -12,6 +12,9 @@ import type {
 } from "@/lib/types";
 import { METRIC_LABELS, LOWER_IS_BETTER } from "@/lib/types";
 import { MetricRow } from "./MetricRow";
+import { MatchVerdict } from "./MatchVerdict";
+import { MatchPrediction } from "./MatchPrediction";
+import { KeySignals } from "./KeySignals";
 import { FormSummary } from "./FormSummary";
 import { InsightChips } from "./InsightChips";
 import { InjuryList } from "./InjuryList";
@@ -24,6 +27,15 @@ interface TeamLite {
   name: string;
   logoUrl: string;
   country: string;
+}
+
+/** Počáteční výběr načtený z URL (server page → props). */
+export interface InitialSelection {
+  mode?: EntityType;
+  homeLeague?: number;
+  awayLeague?: number;
+  home?: number;
+  away?: number;
 }
 
 const VENUE_LABELS: Record<Venue, string> = {
@@ -110,16 +122,23 @@ async function runCompare(
   }
 }
 
-export function CompareApp({ leagues }: { leagues: League[] }) {
-  const [mode, setMode] = useState<EntityType>("CLUB");
+export function CompareApp({
+  leagues,
+  initial,
+}: {
+  leagues: League[];
+  initial?: InitialSelection;
+}) {
+  const initialMode = initial?.mode ?? "CLUB";
+  const [mode, setMode] = useState<EntityType>(initialMode);
   const [homeLeagueId, setHomeLeagueId] = useState<number | null>(
-    firstLeagueId(leagues, "CLUB")
+    initial?.homeLeague ?? firstLeagueId(leagues, initialMode)
   );
   const [awayLeagueId, setAwayLeagueId] = useState<number | null>(
-    firstLeagueId(leagues, "CLUB")
+    initial?.awayLeague ?? firstLeagueId(leagues, initialMode)
   );
-  const [homeId, setHomeId] = useState<number | null>(null);
-  const [awayId, setAwayId] = useState<number | null>(null);
+  const [homeId, setHomeId] = useState<number | null>(initial?.home ?? null);
+  const [awayId, setAwayId] = useState<number | null>(initial?.away ?? null);
   const [venue, setVenue] = useState<Venue>("TOTAL");
   const [result, setResult] = useState<CompareResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -183,6 +202,18 @@ export function CompareApp({ leagues }: { leagues: League[] }) {
       active = false;
     };
   }, [canCompare, homeId, awayId, homeLeagueId, awayLeagueId]);
+
+  // Stav výběru drž v URL (sdílení/záložky). history.replaceState nezpůsobí
+  // server re-render → žádný remount/ztráta stavu; žádný setState → lint OK.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set("mode", mode);
+    if (homeLeagueId != null) params.set("homeLeague", String(homeLeagueId));
+    if (awayLeagueId != null) params.set("awayLeague", String(awayLeagueId));
+    if (homeId != null) params.set("home", String(homeId));
+    if (awayId != null) params.set("away", String(awayId));
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }, [mode, homeLeagueId, awayLeagueId, homeId, awayId]);
 
   // Klubový režim = výběr ligy, reprezentační = výběr konfederace (obojí per tým).
   const leagueLabel = mode === "CLUB" ? "Liga" : "Konfederace";
@@ -271,9 +302,34 @@ function Header({
           onChange={onMode}
           compact
         />
+        <ShareButton />
         <ThemeToggle />
       </div>
     </header>
+  );
+}
+
+function ShareButton() {
+  const [copied, setCopied] = useState(false);
+  async function share() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // schránka může být blokovaná (nezabezpečený kontext) – tiše ignoruj
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={share}
+      title="Zkopírovat odkaz na toto porovnání"
+      aria-label="Sdílet"
+      className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
+    >
+      {copied ? "✓ Zkopírováno" : "🔗 Sdílet"}
+    </button>
   );
 }
 
@@ -324,6 +380,16 @@ function ResultPanel({
         </div>
       )}
 
+      <MatchVerdict verdict={result.insightReport.verdict} />
+
+      <MatchPrediction
+        prediction={result.prediction}
+        homeName={result.home.team.name}
+        awayName={result.away.team.name}
+      />
+
+      <KeySignals signals={result.insightReport.keySignals} />
+
       <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
 
       <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
@@ -361,12 +427,12 @@ function ResultPanel({
         <InsightChips
           title={result.home.team.name}
           accent="home"
-          insights={result.home.insights}
+          insights={result.insightReport.home}
         />
         <InsightChips
           title={result.away.team.name}
           accent="away"
-          insights={result.away.insights}
+          insights={result.insightReport.away}
         />
       </div>
 

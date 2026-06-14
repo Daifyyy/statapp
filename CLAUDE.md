@@ -46,6 +46,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   – **líně** načítaná samostatná sekce, ne ze zápasových statistik. `/injuries` přes TTL
   `ApiCache` (6 h), dedup dle hráče. Pokrytí v API je nekonzistentní → **graceful**:
   prázdný/nedostupný seznam = sekce se nevykreslí. Mimo `compareTeams` (ta zůstává čistá).
+- **Predikce** (`lib/stats/predict.ts`, `CompareResult.prediction`) – nezávislý **Poisson**
+  z očekávaných gólů (útok týmu × obrana soupeře, venue-specific, fallback TOTAL, volitelné
+  zpevnění xG). Vrací V/R/P, očekávané skóre, BTTS, Over 2.5. UI `MatchPrediction.tsx`.
+- **Insights = rule-engine** (`lib/insights/`): `engine.ts` spustí registry pravidel
+  (`rules/team.ts` per-tým napříč metrikami, `rules/form.ts` série/PPG z `lib/stats/streaks.ts`,
+  `rules/matchup.ts` syntéza obou týmů + vysvětlení predikce, `rules/verdict.ts` verdikt).
+  Každé pravidlo vrací `Candidate{strength}`; engine skóruje (`strength × váha kategorie ×
+  confidence`), **řadí a vybere top N** klíčových signálů (`InsightReport`). Čistá funkce
+  nad výstupem `compareTeams` – žádná nová data. UI: `MatchVerdict`/`KeySignals`/`InsightChips`.
+  Prahy/váhy laditelné na jednom místě; nové pravidlo = jedna položka v registru + test.
 - **`lib/data/repository.ts`** přepíná real/mock podle env (`isRealDataConfigured`).
   Reálné: `realRepository.ts`; mock: `mock/seed.ts` + `generate.ts`.
 

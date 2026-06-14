@@ -210,7 +210,52 @@ export interface TeamComparison {
   values: MetricValue[];
   /** Souhrn formy a CS/FTS pro každou variantu (HOME/AWAY/TOTAL). */
   summary: TeamSummary[];
-  insights: Insight[];
+}
+
+/** Predikce zápasu z očekávaných gólů (Poisson). Domácí = první tým. */
+export interface MatchPrediction {
+  lambdaHome: number; // očekávané góly domácích
+  lambdaAway: number; // očekávané góly hostů
+  homeWin: number; // 0–1
+  draw: number; // 0–1
+  awayWin: number; // 0–1
+  bttsYes: number; // 0–1 (oba skórují)
+  over25: number; // 0–1 (3+ gólů celkem)
+  lowConfidence: boolean; // malý vzorek pod predikcí
+}
+
+/** Kategorie signálu (pro ikonu, vyvážení top N a ladění vah). */
+export type InsightCategory =
+  | "attack"
+  | "defense"
+  | "form"
+  | "tempo"
+  | "setpiece"
+  | "discipline"
+  | "keeper"
+  | "efficiency"
+  | "matchup";
+
+export type InsightSeverity = "info" | "warning" | "positive";
+
+/** Jeden ohodnocený signál z rule-enginu (s konkrétními čísly v textu). */
+export interface ScoredInsight {
+  id: string; // id pravidla (+ scope)
+  category: InsightCategory;
+  severity: InsightSeverity;
+  score: number; // 0–1 důležitost (řazení)
+  text: string; // lokalizovaný, s čísly
+  metric?: Metric;
+  scope: "home" | "away" | "matchup";
+  lowConfidence: boolean; // malý vzorek pod signálem
+}
+
+/** Výstup insights enginu pro jedno porovnání. */
+export interface InsightReport {
+  verdict: string; // jednovětné shrnutí
+  keySignals: ScoredInsight[]; // top N napříč scope (řazené dle score)
+  home: ScoredInsight[]; // per-tým (řazené)
+  away: ScoredInsight[];
 }
 
 export interface CompareResult {
@@ -220,11 +265,8 @@ export interface CompareResult {
   metrics: Metric[];
   home: TeamComparison;
   away: TeamComparison;
-}
-
-export interface Insight {
-  type: string;
-  severity: "info" | "warning" | "positive";
-  text: string;
-  metric?: Metric;
+  /** Predikce výsledku (domácí vs host). */
+  prediction: MatchPrediction;
+  /** Insights: verdikt, klíčové signály a per-tým výroky. */
+  insightReport: InsightReport;
 }

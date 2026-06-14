@@ -1,17 +1,7 @@
-import type { Insight } from "@/lib/types";
+import type { ScoredInsight } from "@/lib/types";
+import { CATEGORY_ICON, SEVERITY_STYLE } from "./insightStyle";
 
-const SEVERITY_STYLE: Record<Insight["severity"], string> = {
-  info: "bg-home/10 text-home",
-  warning: "bg-warning/10 text-warning",
-  positive: "bg-positive/10 text-positive",
-};
-
-const SEVERITY_ICON: Record<Insight["severity"], string> = {
-  info: "ⓘ",
-  warning: "⚠",
-  positive: "▲",
-};
-
+/** Per-tým signály jako barevné štítky (řazené dle důležitosti, s čísly). */
 export function InsightChips({
   title,
   accent,
@@ -19,7 +9,7 @@ export function InsightChips({
 }: {
   title: string;
   accent: "home" | "away";
-  insights: Insight[];
+  insights: ScoredInsight[];
 }) {
   const color = accent === "home" ? "text-home" : "text-away";
   return (
@@ -31,14 +21,16 @@ export function InsightChips({
         <p className="text-xs text-muted">Žádné výrazné signály.</p>
       ) : (
         <ul className="flex flex-wrap gap-1.5">
-          {insights.map((ins, i) => (
+          {insights.map((ins) => (
             <li
-              key={i}
+              key={ins.id}
+              title={ins.lowConfidence ? "Malý vzorek – orientační" : undefined}
               className={`rounded-full px-2.5 py-1 text-xs font-medium ${
                 SEVERITY_STYLE[ins.severity]
-              }`}
+              } ${ins.lowConfidence ? "opacity-60" : ""}`}
             >
-              {SEVERITY_ICON[ins.severity]} {ins.text}
+              {CATEGORY_ICON[ins.category]} {ins.text}
+              {ins.lowConfidence ? " *" : ""}
             </li>
           ))}
         </ul>

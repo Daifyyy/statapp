@@ -2,12 +2,14 @@ import type { CompareResult, Team, TeamComparison } from "@/lib/types";
 import { METRICS_BY_ENTITY } from "@/lib/types";
 import { computeAllValues } from "./aggregate";
 import { computeAllSummaries } from "./summary";
+import { predictMatch } from "./predict";
 import { resolveSource } from "./resolveSource";
-import { runInsights } from "@/lib/insights/runInsights";
+import { buildTeamContext } from "@/lib/insights/context";
+import { runInsightEngine } from "@/lib/insights/engine";
 
 /**
  * Sestaví kompletní porovnání dvou týmů: zvolí zdroj dat, spočítá vážené
- * průměry všech metrik ve všech variantách a vygeneruje insights.
+ * průměry všech metrik ve všech variantách, predikci a insights report.
  */
 export function compareTeams(
   home: Team,
@@ -21,26 +23,35 @@ export function compareTeams(
   const build = (
     team: Team,
     matches: typeof resolved.homeMatches
-  ): TeamComparison => {
-    const values = computeAllValues(matches, metrics, entityType, now);
-    return {
-      team: {
-        id: team.id,
-        name: team.name,
-        logoUrl: team.logoUrl,
-        country: team.country,
-      },
-      values,
-      summary: computeAllSummaries(matches),
-      insights: runInsights(matches, values, entityType, now),
-    };
-  };
+  ): TeamComparison => ({
+    team: {
+      id: team.id,
+      name: team.name,
+      logoUrl: team.logoUrl,
+      country: team.country,
+    },
+    values: computeAllValues(matches, metrics, entityType, now),
+    summary: computeAllSummaries(matches),
+  });
+
+  const homeComparison = build(home, resolved.homeMatches);
+  const awayComparison = build(away, resolved.awayMatches);
+  const prediction = predictMatch(homeComparison, awayComparison);
+
+  const insightReport = runInsightEngine({
+    home: buildTeamContext("home", homeComparison, resolved.homeMatches, entityType, now),
+    away: buildTeamContext("away", awayComparison, resolved.awayMatches, entityType, now),
+    prediction,
+    entityType,
+  });
 
   return {
     source: resolved.source,
     sourceNote: resolved.sourceNote,
     metrics,
-    home: build(home, resolved.homeMatches),
-    away: build(away, resolved.awayMatches),
+    home: homeComparison,
+    away: awayComparison,
+    prediction,
+    insightReport,
   };
 }
