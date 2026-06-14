@@ -15,7 +15,7 @@ import { weightedAverage, type WindowValue } from "./weightedAverage";
 /** Pod kolik klesne efektivní vzorek, než hodnotu označíme „nízká spolehlivost". §3.4c */
 export const LOW_CONFIDENCE_SAMPLE = 4;
 
-function matchesVenue(m: MatchStat, venue: Venue): boolean {
+export function matchesVenue(m: MatchStat, venue: Venue): boolean {
   if (venue === "TOTAL") return true;
   // Neutrální (turnajové) zápasy nepatří do domácí ani venkovní varianty. §3.4
   if (m.isNeutral) return false;

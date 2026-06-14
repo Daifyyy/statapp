@@ -37,6 +37,15 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   a cachují **natrvalo** (`MatchStatCache`). Žádný hromadný download.
 - **Výpočetní jádro** `lib/stats/` je čistě funkční a **na zdroji nezávislé** – mock
   i reálná data tečou stejnou cestou (`compareTeams`).
+- **Souhrn formy** (`lib/stats/summary.ts`, `TeamComparison.summary`) stojí **mimo** vážený
+  průměr: forma = posl. 5 zápasů jako W/D/L, **čisté konto %** a **bez gólu %** = podíl
+  z posl. 10 zápasů (jeden jasný jmenovatel `sampleSize`, ne vážený mix oken). Sleduje
+  přepínač Doma/Venku/Celkově (sdílí `matchesVenue`). Vše odvozené z `GOALS_FOR/AGAINST`
+  → žádný nový fetch, žádný bump cache verze. UI: `FormSummary.tsx` nad metrikami.
+- **Zranění** (`getInjuries` v `repository.ts`, endpoint `/api/injuries`, UI `InjuryList.tsx`)
+  – **líně** načítaná samostatná sekce, ne ze zápasových statistik. `/injuries` přes TTL
+  `ApiCache` (6 h), dedup dle hráče. Pokrytí v API je nekonzistentní → **graceful**:
+  prázdný/nedostupný seznam = sekce se nevykreslí. Mimo `compareTeams` (ta zůstává čistá).
 - **`lib/data/repository.ts`** přepíná real/mock podle env (`isRealDataConfigured`).
   Reálné: `realRepository.ts`; mock: `mock/seed.ts` + `generate.ts`.
 

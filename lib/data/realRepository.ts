@@ -1,9 +1,10 @@
-import type { League, MatchStat, Metric, Team } from "@/lib/types";
+import type { Injury, League, MatchStat, Metric, Team } from "@/lib/types";
 import {
   fetchFixtureStatistics,
   fetchLastFixtures,
   fetchLeagueTeams,
   fetchTeamFixtures,
+  fetchTeamInjuries,
   FINISHED_STATUSES,
   STAT_TYPE_MAP,
   type ApiFixture,
@@ -27,6 +28,7 @@ import {
 } from "./catalog";
 
 const LIST_TTL = 60 * 60 * 24; // 24 h pro seznamy (dokončené sezóny jsou stabilní)
+const INJ_TTL = 60 * 60 * 6; // 6 h pro zranění (soupiska se mění průběžně)
 const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
 const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
@@ -139,6 +141,43 @@ export async function getCompareTeam(
     return buildNationalTeam(teamId, leagueId);
   }
   return buildClubTeam(teamId, leagueId, includeEuro);
+}
+
+/**
+ * Aktuálně zranění/absentující hráči týmu. Data v API jsou nekonzistentní
+ * (závisí na lize/plánu) → při nedostupnosti vrací prázdný seznam, ne chybu.
+ * Dedup dle hráče (nejnovější záznam), TTL cache (soupiska se mění).
+ */
+export async function getTeamInjuries(
+  teamId: number,
+  leagueId: number
+): Promise<Injury[]> {
+  const season = isNationalLeague(leagueId)
+    ? (getConfederation(leagueId)?.season ?? CURRENT_SEASON)
+    : CURRENT_SEASON;
+  try {
+    const raw = await cachedJson(`inj:${teamId}:${season}`, INJ_TTL, () =>
+      fetchTeamInjuries(teamId, season)
+    );
+    // Nejnovější první → první výskyt hráče je ten aktuální.
+    const sorted = [...raw].sort((a, b) =>
+      (b.fixture?.date ?? "").localeCompare(a.fixture?.date ?? "")
+    );
+    const seen = new Set<number>();
+    const out: Injury[] = [];
+    for (const it of sorted) {
+      if (seen.has(it.player.id)) continue;
+      seen.add(it.player.id);
+      out.push({
+        playerId: it.player.id,
+        name: it.player.name,
+        reason: it.reason || it.type || "Zranění",
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 // ---- Sestavení reprezentace ----

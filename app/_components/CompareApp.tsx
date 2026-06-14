@@ -5,13 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   CompareResult,
   EntityType,
+  Injury,
   League,
   Metric,
   Venue,
 } from "@/lib/types";
 import { METRIC_LABELS, LOWER_IS_BETTER } from "@/lib/types";
 import { MetricRow } from "./MetricRow";
+import { FormSummary } from "./FormSummary";
 import { InsightChips } from "./InsightChips";
+import { InjuryList } from "./InjuryList";
 import { TeamLogo } from "./TeamLogo";
 import { TeamCombobox } from "./TeamCombobox";
 import { ThemeToggle } from "./ThemeToggle";
@@ -59,6 +62,29 @@ function useTeams(leagueId: number | null): TeamLite[] {
   return teams;
 }
 
+/** Líně dotáhne zranění týmu (mimo kritickou cestu porovnání). */
+function useInjuries(
+  teamId: number | null,
+  leagueId: number | null,
+  enabled: boolean
+): Injury[] {
+  const [injuries, setInjuries] = useState<Injury[]>([]);
+  useEffect(() => {
+    if (!enabled || teamId == null || leagueId == null) return;
+    let active = true;
+    fetch(`/api/injuries?team=${teamId}&league=${leagueId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (active) setInjuries(d.injuries ?? []);
+      })
+      .catch(() => active && setInjuries([]));
+    return () => {
+      active = false;
+    };
+  }, [teamId, leagueId, enabled]);
+  return injuries;
+}
+
 // Mimo tělo efektu → žádné synchronní setState v efektu (React 19 pravidlo).
 async function runCompare(
   homeId: number,
@@ -101,6 +127,10 @@ export function CompareApp({ leagues }: { leagues: League[] }) {
 
   const homeTeams = useTeams(homeLeagueId);
   const awayTeams = useTeams(awayLeagueId);
+
+  // Zranění se tahají líně, až je výsledek na obrazovce (mimo kritickou cestu).
+  const homeInjuries = useInjuries(homeId, homeLeagueId, result != null);
+  const awayInjuries = useInjuries(awayId, awayLeagueId, result != null);
 
   const modeLeagues = useMemo(
     () =>
@@ -207,6 +237,8 @@ export function CompareApp({ leagues }: { leagues: League[] }) {
         loading={loading}
         error={error}
         ready={canCompare}
+        homeInjuries={homeInjuries}
+        awayInjuries={awayInjuries}
       />
     </main>
   );
@@ -251,12 +283,16 @@ function ResultPanel({
   loading,
   error,
   ready,
+  homeInjuries,
+  awayInjuries,
 }: {
   result: CompareResult | null;
   venue: Venue;
   loading: boolean;
   error: string | null;
   ready: boolean;
+  homeInjuries: Injury[];
+  awayInjuries: Injury[];
 }) {
   if (error) {
     return <Empty>{error}</Empty>;
@@ -274,6 +310,9 @@ function ResultPanel({
       (v) => v.metric === metric && v.venue === venue
     ) ?? null;
 
+  const summaryFor = (teamSide: "home" | "away") =>
+    result[teamSide].summary.find((s) => s.venue === venue) ?? null;
+
   return (
     <div
       key={`${result.home.team.id}-${result.away.team.id}`}
@@ -284,6 +323,8 @@ function ResultPanel({
           ⚠ {result.sourceNote}
         </div>
       )}
+
+      <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
 
       <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
         <div className="mb-4 flex items-center justify-between gap-2">
@@ -328,6 +369,25 @@ function ResultPanel({
           insights={result.away.insights}
         />
       </div>
+
+      {(homeInjuries.length > 0 || awayInjuries.length > 0) && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {homeInjuries.length > 0 && (
+            <InjuryList
+              title={result.home.team.name}
+              accent="home"
+              injuries={homeInjuries}
+            />
+          )}
+          {awayInjuries.length > 0 && (
+            <InjuryList
+              title={result.away.team.name}
+              accent="away"
+              injuries={awayInjuries}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

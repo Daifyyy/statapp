@@ -1,6 +1,7 @@
 import type { CompareResult, Team, TeamComparison } from "@/lib/types";
 import { METRICS_BY_ENTITY } from "@/lib/types";
 import { computeAllValues } from "./aggregate";
+import { computeAllSummaries } from "./summary";
 import { resolveSource } from "./resolveSource";
 import { runInsights } from "@/lib/insights/runInsights";
 
@@ -30,6 +31,7 @@ export function compareTeams(
         country: team.country,
       },
       values,
+      summary: computeAllSummaries(matches),
       insights: runInsights(matches, values, entityType, now),
     };
   };

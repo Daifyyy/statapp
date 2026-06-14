@@ -145,9 +145,18 @@ const fixtureStatsSchema = z.array(
   })
 );
 
+const injuryItemSchema = z.object({
+  player: z.object({ id: z.number(), name: z.string() }),
+  type: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  fixture: z.object({ date: z.string().nullable().optional() }).optional(),
+});
+const injuriesSchema = z.array(injuryItemSchema);
+
 export type ApiTeam = z.infer<typeof teamItemSchema>;
 export type ApiFixture = z.infer<typeof fixtureItemSchema>;
 export type ApiFixtureStats = z.infer<typeof fixtureStatsSchema>;
+export type ApiInjury = z.infer<typeof injuryItemSchema>;
 
 // ---- Veřejné fetchery ----
 
@@ -182,6 +191,11 @@ export function fetchLastFixtures(team: number, last: number) {
 /** Per-zápas statistiky (rohy, fauly, střely, xG). */
 export function fetchFixtureStatistics(fixture: number) {
   return apiGet("/fixtures/statistics", { fixture }, fixtureStatsSchema);
+}
+
+/** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */
+export function fetchTeamInjuries(team: number, season: number) {
+  return apiGet("/injuries", { team, season }, injuriesSchema);
 }
 
 /** Mapuje názvy statistik API-Football na naše metriky. */

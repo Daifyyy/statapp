@@ -161,6 +161,30 @@ export interface Team {
   euroMatches?: MatchStat[];
 }
 
+/** Výsledek jednoho zápasu z pohledu týmu (forma). */
+export type MatchResult = "W" | "D" | "L";
+
+/**
+ * Souhrn aktuální výkonnosti týmu pro jednu variantu (Doma/Venku/Celkově).
+ * Forma = posledních 5 zápasů; čisté konto / bez gólu = % z posledních 10.
+ * Mimo vážený průměr – procenta mají jeden jasný jmenovatel (`sampleSize`).
+ */
+export interface TeamSummary {
+  venue: Venue;
+  form: MatchResult[]; // nejnovější první, max 5
+  formSampleSize: number; // kolik zápasů reálně tvoří formu (0–5)
+  cleanSheetPct: number | null; // 0–100, null když je vzorek prázdný
+  failedToScorePct: number | null; // 0–100, null když je vzorek prázdný
+  sampleSize: number; // jmenovatel pro CS/FTS (0–10)
+}
+
+/** Zraněný hráč (samostatná, líně načítaná data – ne ze zápasových statistik). */
+export interface Injury {
+  playerId: number;
+  name: string;
+  reason: string;
+}
+
 /** Příspěvek jednoho časového okna do váženého průměru (pro tooltip). */
 export interface WindowBreakdown {
   window: WindowKey;
@@ -184,6 +208,8 @@ export interface MetricValue {
 export interface TeamComparison {
   team: Pick<Team, "id" | "name" | "logoUrl" | "country">;
   values: MetricValue[];
+  /** Souhrn formy a CS/FTS pro každou variantu (HOME/AWAY/TOTAL). */
+  summary: TeamSummary[];
   insights: Insight[];
 }
 
