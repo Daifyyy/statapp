@@ -2,7 +2,18 @@
 const BASE = "https://v3.football.api-sports.io";
 const key = process.env.API_FOOTBALL_KEY!;
 
-async function api(path: string, params: Record<string, string | number> = {}) {
+type Season = { current?: boolean; year: number };
+type LeagueRow = {
+  league: { id: number; name: string };
+  country: { name: string };
+  seasons: Season[];
+};
+type TeamRow = { team: { id: number; name: string; national: boolean } };
+
+async function api<T = unknown>(
+  path: string,
+  params: Record<string, string | number> = {}
+): Promise<T[]> {
   const url = new URL(BASE + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
   const res = await fetch(url, { headers: { "x-apisports-key": key } });
@@ -10,17 +21,17 @@ async function api(path: string, params: Record<string, string | number> = {}) {
   if (json.errors && (Array.isArray(json.errors) ? json.errors.length : Object.keys(json.errors).length)) {
     throw new Error(JSON.stringify(json.errors));
   }
-  return json.response as any[];
+  return json.response as T[];
 }
 
-function currentSeason(seasons: any[]): number | undefined {
+function currentSeason(seasons: Season[]): number | undefined {
   const cur = seasons.find((s) => s.current);
   return (cur ?? seasons[seasons.length - 1])?.year;
 }
 
 async function main() {
   console.log("=== Stahuji /leagues (jednou) ===");
-  const leagues = await api("/leagues");
+  const leagues = await api<LeagueRow>("/leagues");
   console.log("celkem lig:", leagues.length);
 
   console.log("\n=== WC kvalifikační soutěže (discovery konfederací) ===");
@@ -45,11 +56,11 @@ async function main() {
   for (const l of wc.slice(0, 6)) {
     const season = currentSeason(l.seasons)!;
     try {
-      const teams = await api("/teams", { league: l.league.id, season });
+      const teams = await api<TeamRow>("/teams", { league: l.league.id, season });
       const nat = teams.filter((t) => t.team.national);
       console.log(`${l.league.name} (id=${l.league.id}, s=${season}): teams=${teams.length}, national=${nat.length}, sample=${nat.slice(0,3).map((t)=>t.team.name).join(", ")}`);
-    } catch (e: any) {
-      console.log(`${l.league.name}: ERROR ${e.message}`);
+    } catch (e: unknown) {
+      console.log(`${l.league.name}: ERROR ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 }

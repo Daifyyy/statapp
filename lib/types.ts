@@ -265,8 +265,10 @@ export interface CompareResult {
   metrics: Metric[];
   home: TeamComparison;
   away: TeamComparison;
-  /** Predikce výsledku (domácí vs host). */
-  prediction: MatchPrediction;
-  /** Insights: verdikt, klíčové signály a per-tým výroky. */
-  insightReport: InsightReport;
+  /** Predikce výsledku (domácí vs host). PRO – ve FREE výsledku chybí (viz `locked`). */
+  prediction?: MatchPrediction;
+  /** Insights: verdikt, klíčové signály a per-tým výroky. PRO – ve FREE chybí. */
+  insightReport?: InsightReport;
+  /** true = PRO sekce (predikce/insights/zranění) jsou zamčené (FREE bez trialu). */
+  locked?: boolean;
 }

@@ -89,8 +89,41 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Předehřívání:** `GET /api/warm` (katalog, lehké, denní cron ve `vercel.json`);
   `GET /api/warm?league=ID` předehřeje zápasová data ligy (těžké, na vyžádání).
 
+## Účty / tiering / oblíbené (FREE vs PRO)
+- **Auth:** Auth.js v5 (`next-auth`) + `@auth/prisma-adapter`, session strategie **database**
+  (tabulky `User`/`Account`/`Session`/`VerificationToken` v Neonu). Konfigurace `auth.ts`
+  (root), handlery `app/api/auth/[...nextauth]/route.ts`, provider **Google**. Session se
+  čte bezpečně přes `getCurrentUser()` (`lib/authUser.ts`) – když auth není nakonfigurovaná
+  (chybí `AUTH_SECRET`) nebo selže, vrací `null` → app běží dál jako anonym (FREE).
+- **Tiering = gating na hranici route, jádro zůstává čisté.** `compareTeams` se NEMĚNÍ;
+  PRO obsah ořezává `toFreeResult` (`lib/entitlements.ts`) až v `/api/compare`. FREE =
+  metriky + souhrn formy + sdílení URL; PRO = predikce, insights, zranění, oblíbené.
+  `CompareResult.prediction`/`insightReport` jsou proto **volitelné** + flag `locked`.
+- **Trial:** přihlášený FREE uživatel může **1×** odemknout plnou PRO verzi jednoho
+  porovnání (`User.proTrialUsed`). UI volá `/api/compare?unlock=1`; server přes
+  `getEntitlement` spotřebuje trial. Zranění (`/api/injuries`) jsou **plně PRO** (mimo trial).
+- **Oblíbené (PRO):** `SavedComparison` drží IDs (re-run) **i JSON `snapshot`** celého
+  `CompareResult` (okamžité zobrazení „jak to bylo" bez fetchu) + `snapshotVersion`.
+  API `app/api/favorites` (GET/POST upsert) + `[id]` (DELETE). UI `FavoritesSection.tsx`;
+  načtení snapshotu přeskočí auto-fetch (`skipAutoRef` v `CompareApp`), „Aktualizovat" re-runne.
+- **Gating v UI:** `ProLock.tsx` (zámek + CTA dle stavu: přihlásit / trial 1× / upgrade),
+  `AccountMenu.tsx` (přihlášení Google, tier odznak, odhlášení). PRO sekce v `CompareApp`
+  se renderují jen když `!result.locked`.
+
+## PWA (instalace na iOS/Android)
+- Manifest `app/manifest.ts` (Next metadata route → `/manifest.webmanifest`), ikony
+  v `public/` (`icon-192/512`, `icon-maskable-512`, `apple-touch-icon`) generované ze
+  `logoapp.png` přes `sharp`. iOS meta (`appleWebApp`) + `themeColor` v `app/layout.tsx`.
+- Service worker `public/sw.js` (app-shell cache, **necachuje** `/api/*` ani HTML porovnání),
+  registrace `PWARegister.tsx` **jen v produkci**.
+- **Interaktivní instalační pomůcka** `InstallPrompt.tsx`: Android/Chromium nativní
+  `beforeinstallprompt`; iOS Safari vizuální návod Sdílet → Přidat na plochu (Safari nemá
+  prompt); detekce standalone (už nainstalováno → skryto), „odloženo" v `localStorage` (7 dní).
+  Ruční vyvolání z menu/patičky přes `installBus.ts` (`InstallLink.tsx`).
+
 ## DB
-Prisma 6 + Postgres (Neon). Tabulky `ApiCache` (TTL) + `MatchStatCache` (trvalá).
+Prisma 6 + Postgres (Neon). Tabulky `ApiCache` (TTL) + `MatchStatCache` (trvalá)
++ účty (`User`/`Account`/`Session`/`VerificationToken`) + `SavedComparison` (oblíbené).
 **Pozor:** Neon je sdílená pro lokál i Vercel → změna schématu (`prisma db push`)
 ovlivní i produkci; nasaď nový kód hned.
 **Verzování cache:** `MatchStatCache` má `schemaVersion`; po přidání metrik bumpni
@@ -100,8 +133,12 @@ proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/ap
 
 ## Deployment
 GitHub `Daifyyy/statapp` → Vercel (auto-deploy na push do `main`). Env na Vercelu:
-`API_FOOTBALL_KEY`, `DATABASE_URL` (Neon pooled), volitelně `CRON_SECRET`.
-`postinstall: prisma generate` zajistí klienta při buildu. Live: https://statapp-uvol.vercel.app
+`API_FOOTBALL_KEY`, `DATABASE_URL` (Neon pooled), `AUTH_SECRET`, `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, volitelně `CRON_SECRET`. Google OAuth redirect URI:
+`/api/auth/callback/google` (lokál i produkce). `postinstall: prisma generate` zajistí
+klienta při buildu. Live: https://statapp-uvol.vercel.app
+**Pozn. (lokál):** Google token exchange = odchozí TLS → `npm run dev` spouštěj s
+`NODE_OPTIONS=--use-system-ca` (jako probe/prisma). Bez auth env app běží jako anonym (FREE).
 
 ## Známé problémy / TODO
 - **iOS Safari zoom na mobilu:** po kliknutí na „Vyber tým" se stránka stále přibližuje,

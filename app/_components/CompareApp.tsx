@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CompareResult,
   EntityType,
@@ -21,6 +21,14 @@ import { InjuryList } from "./InjuryList";
 import { TeamLogo } from "./TeamLogo";
 import { TeamCombobox } from "./TeamCombobox";
 import { ThemeToggle } from "./ThemeToggle";
+import { AccountMenu } from "./AccountMenu";
+import { ProLock } from "./ProLock";
+import {
+  FavoritesSection,
+  type SavedFavorite,
+  type Selection,
+} from "./FavoritesSection";
+import type { SessionUser } from "./sessionUser";
 
 interface TeamLite {
   id: number;
@@ -98,25 +106,32 @@ function useInjuries(
 }
 
 // Mimo tělo efektu → žádné synchronní setState v efektu (React 19 pravidlo).
+// `unlock` = žádost o 1× trial PRO (server případně spotřebuje trial a vrátí plný výsledek).
 async function runCompare(
   homeId: number,
   awayId: number,
   homeLeague: number,
   awayLeague: number,
+  unlock: boolean,
   isActive: () => boolean,
   { setLoading, setError, setResult }: CompareSetters
-): Promise<void> {
+): Promise<CompareResult | null> {
   setLoading(true);
   setError(null);
   try {
     const r = await fetch(
-      `/api/compare?home=${homeId}&away=${awayId}&homeLeague=${homeLeague}&awayLeague=${awayLeague}`
+      `/api/compare?home=${homeId}&away=${awayId}&homeLeague=${homeLeague}&awayLeague=${awayLeague}${
+        unlock ? "&unlock=1" : ""
+      }`
     );
     const d = await r.json();
     if (!r.ok) throw new Error(d.error ?? "Chyba porovnání");
-    if (isActive()) setResult(d as CompareResult);
+    if (!isActive()) return null;
+    setResult(d as CompareResult);
+    return d as CompareResult;
   } catch (e) {
     if (isActive()) setError(e instanceof Error ? e.message : "Chyba porovnání");
+    return null;
   } finally {
     if (isActive()) setLoading(false);
   }
@@ -125,9 +140,11 @@ async function runCompare(
 export function CompareApp({
   leagues,
   initial,
+  user,
 }: {
   leagues: League[];
   initial?: InitialSelection;
+  user: SessionUser | null;
 }) {
   const initialMode = initial?.mode ?? "CLUB";
   const [mode, setMode] = useState<EntityType>(initialMode);
@@ -143,6 +160,14 @@ export function CompareApp({
   const [result, setResult] = useState<CompareResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lokální stav trialu (zrcadlí DB) – po využití nabízej upgrade místo trialu.
+  const [trialUsed, setTrialUsed] = useState<boolean>(user?.proTrialUsed ?? false);
+  const [unlocking, setUnlocking] = useState(false);
+  const trialAvailable = user?.tier === "FREE" && !trialUsed;
+  // Po načtení oblíbeného ukaž snapshot „jak to bylo" a přeskoč auto-fetch.
+  const skipAutoRef = useRef(false);
+  const [savedView, setSavedView] = useState<string | null>(null);
+  const isPro = user?.tier === "PRO";
 
   const homeTeams = useTeams(homeLeagueId);
   const awayTeams = useTeams(awayLeagueId);
@@ -194,16 +219,77 @@ export function CompareApp({
     awayLeagueId != null;
   useEffect(() => {
     if (!canCompare) return;
+    // Načtení oblíbeného nastaví ID i snapshot → tento jeden auto-fetch přeskoč.
+    if (skipAutoRef.current) {
+      skipAutoRef.current = false;
+      return;
+    }
+    setSavedView(null);
     let active = true;
-    void runCompare(homeId, awayId, homeLeagueId, awayLeagueId, () => active, {
-      setLoading,
-      setError,
-      setResult,
-    });
+    void runCompare(
+      homeId,
+      awayId,
+      homeLeagueId,
+      awayLeagueId,
+      false,
+      () => active,
+      { setLoading, setError, setResult }
+    );
     return () => {
       active = false;
     };
   }, [canCompare, homeId, awayId, homeLeagueId, awayLeagueId]);
+
+  // Načti uložené porovnání: ukaž snapshot okamžitě, bez nového fetchu.
+  function applyFavorite(fav: SavedFavorite) {
+    skipAutoRef.current = true;
+    setMode(fav.mode);
+    setHomeLeagueId(fav.homeLeagueId);
+    setAwayLeagueId(fav.awayLeagueId);
+    setHomeId(fav.homeTeamId);
+    setAwayId(fav.awayTeamId);
+    setError(null);
+    setResult(fav.snapshot);
+    setSavedView(new Date(fav.savedAt).toLocaleDateString("cs-CZ"));
+  }
+
+  // Aktualizuj zobrazené (uložené) porovnání čerstvými daty.
+  function refreshCurrent() {
+    if (!canCompare) return;
+    setSavedView(null);
+    void runCompare(
+      homeId,
+      awayId,
+      homeLeagueId,
+      awayLeagueId,
+      false,
+      () => true,
+      { setLoading, setError, setResult }
+    );
+  }
+
+  // Trial: odemkni plnou PRO verzi tohoto jednoho porovnání (server spotřebuje trial).
+  async function handleUnlockTrial() {
+    if (
+      homeId == null ||
+      awayId == null ||
+      homeLeagueId == null ||
+      awayLeagueId == null
+    )
+      return;
+    setUnlocking(true);
+    const res = await runCompare(
+      homeId,
+      awayId,
+      homeLeagueId,
+      awayLeagueId,
+      true,
+      () => true,
+      { setLoading, setError, setResult }
+    );
+    setUnlocking(false);
+    if (res && res.locked === false) setTrialUsed(true);
+  }
 
   // Stav výběru drž v URL (sdílení/záložky). history.replaceState nezpůsobí
   // server re-render → žádný remount/ztráta stavu; žádný setState → lint OK.
@@ -220,9 +306,24 @@ export function CompareApp({
   // Klubový režim = výběr ligy, reprezentační = výběr konfederace (obojí per tým).
   const leagueLabel = mode === "CLUB" ? "Liga" : "Konfederace";
 
+  // Typovaný výběr pro uložení do oblíbených (null, dokud nejsou oba týmy).
+  const selection: Selection | null =
+    homeId != null &&
+    awayId != null &&
+    homeLeagueId != null &&
+    awayLeagueId != null
+      ? {
+          mode,
+          homeTeamId: homeId,
+          homeLeagueId,
+          awayTeamId: awayId,
+          awayLeagueId,
+        }
+      : null;
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <Header mode={mode} onMode={handleMode} />
+      <Header mode={mode} onMode={handleMode} user={user} />
 
       <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <div className="grid grid-cols-2 gap-3">
@@ -267,6 +368,27 @@ export function CompareApp({
         </div>
       )}
 
+      {isPro && (
+        <FavoritesSection
+          selection={selection}
+          result={result}
+          onApply={applyFavorite}
+        />
+      )}
+
+      {savedView && result && (
+        <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-muted">
+          <span>📌 Zobrazeno z uložené verze ({savedView}).</span>
+          <button
+            type="button"
+            onClick={refreshCurrent}
+            className="rounded-full border border-border px-2.5 py-1 font-medium text-foreground transition hover:bg-background"
+          >
+            ↻ Aktualizovat
+          </button>
+        </div>
+      )}
+
       <ResultPanel
         result={result}
         venue={venue}
@@ -275,6 +397,10 @@ export function CompareApp({
         ready={canCompare}
         homeInjuries={homeInjuries}
         awayInjuries={awayInjuries}
+        user={user}
+        trialAvailable={trialAvailable}
+        unlocking={unlocking}
+        onUnlockTrial={handleUnlockTrial}
       />
     </main>
   );
@@ -283,9 +409,11 @@ export function CompareApp({
 function Header({
   mode,
   onMode,
+  user,
 }: {
   mode: EntityType;
   onMode: (m: EntityType) => void;
+  user: SessionUser | null;
 }) {
   return (
     <header className="flex items-center justify-between gap-3">
@@ -309,6 +437,7 @@ function Header({
         />
         <ShareButton />
         <ThemeToggle />
+        <AccountMenu user={user} />
       </div>
     </header>
   );
@@ -346,6 +475,10 @@ function ResultPanel({
   ready,
   homeInjuries,
   awayInjuries,
+  user,
+  trialAvailable,
+  unlocking,
+  onUnlockTrial,
 }: {
   result: CompareResult | null;
   venue: Venue;
@@ -354,6 +487,10 @@ function ResultPanel({
   ready: boolean;
   homeInjuries: Injury[];
   awayInjuries: Injury[];
+  user: SessionUser | null;
+  trialAvailable: boolean;
+  unlocking: boolean;
+  onUnlockTrial: () => void;
 }) {
   if (error) {
     return <Empty>{error}</Empty>;
@@ -385,15 +522,30 @@ function ResultPanel({
         </div>
       )}
 
-      <MatchVerdict verdict={result.insightReport.verdict} />
-
-      <MatchPrediction
-        prediction={result.prediction}
-        homeName={result.home.team.name}
-        awayName={result.away.team.name}
-      />
-
-      <KeySignals signals={result.insightReport.keySignals} />
+      {result.locked ? (
+        <ProLock
+          user={user}
+          trialAvailable={trialAvailable}
+          onUnlockTrial={onUnlockTrial}
+          unlocking={unlocking}
+        />
+      ) : (
+        <>
+          {result.insightReport && (
+            <MatchVerdict verdict={result.insightReport.verdict} />
+          )}
+          {result.prediction && (
+            <MatchPrediction
+              prediction={result.prediction}
+              homeName={result.home.team.name}
+              awayName={result.away.team.name}
+            />
+          )}
+          {result.insightReport && (
+            <KeySignals signals={result.insightReport.keySignals} />
+          )}
+        </>
+      )}
 
       <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
 
@@ -428,18 +580,20 @@ function ResultPanel({
         </div>
       </section>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <InsightChips
-          title={result.home.team.name}
-          accent="home"
-          insights={result.insightReport.home}
-        />
-        <InsightChips
-          title={result.away.team.name}
-          accent="away"
-          insights={result.insightReport.away}
-        />
-      </div>
+      {!result.locked && result.insightReport && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <InsightChips
+            title={result.home.team.name}
+            accent="home"
+            insights={result.insightReport.home}
+          />
+          <InsightChips
+            title={result.away.team.name}
+            accent="away"
+            insights={result.insightReport.away}
+          />
+        </div>
+      )}
 
       {(homeInjuries.length > 0 || awayInjuries.length > 0) && (
         <div className="grid gap-3 sm:grid-cols-2">

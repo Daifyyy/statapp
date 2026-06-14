@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCompareTeam } from "@/lib/data/repository";
 import { compareTeams } from "@/lib/stats/compare";
+import { getCurrentUser } from "@/lib/authUser";
+import { prisma } from "@/lib/db";
+import { getEntitlement, toFreeResult } from "@/lib/entitlements";
 
 export async function GET(req: Request) {
   const sp = new URL(req.url).searchParams;
@@ -8,6 +11,7 @@ export async function GET(req: Request) {
   const awayId = Number(sp.get("away"));
   const homeLeague = Number(sp.get("homeLeague"));
   const awayLeague = Number(sp.get("awayLeague"));
+  const unlockTrial = sp.get("unlock") === "1";
 
   if (
     !Number.isFinite(homeId) ||
@@ -38,7 +42,25 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
-    return NextResponse.json(compareTeams(home, away));
+
+    // Jádro je vždy stejné; PRO obsah ořežeme až tady (gating na hranici route).
+    const full = compareTeams(home, away);
+
+    const u = await getCurrentUser();
+    const ent = getEntitlement(
+      u ? { tier: u.tier, proTrialUsed: u.proTrialUsed } : null,
+      { unlockTrial }
+    );
+    if (!ent.pro) {
+      return NextResponse.json(toFreeResult(full));
+    }
+    if (ent.consumeTrial && u) {
+      // Spotřebuj 1× trial (best-effort; selhání nezablokuje zobrazení).
+      await prisma.user
+        .update({ where: { id: u.id }, data: { proTrialUsed: true } })
+        .catch(() => {});
+    }
+    return NextResponse.json(full);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Chyba porovnání" },
