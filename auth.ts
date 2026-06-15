@@ -8,7 +8,7 @@ import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import Google from "next-auth/providers/google";
 import { prisma } from "@/lib/db";
-import type { Tier } from "@/lib/entitlements";
+import { isProEmail, type Tier } from "@/lib/entitlements";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -25,7 +25,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     session({ session, user }) {
       const u = user as typeof user & { tier?: Tier; proTrialUsed?: boolean };
       session.user.id = u.id;
-      session.user.tier = u.tier ?? "FREE";
+      // Always-PRO allowlist (PRO_EMAILS) přepíše DB tier → přežije reset DB / nové přihlášení.
+      session.user.tier = u.tier === "PRO" || isProEmail(u.email) ? "PRO" : "FREE";
       session.user.proTrialUsed = u.proTrialUsed ?? false;
       return session;
     },

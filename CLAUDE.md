@@ -111,6 +111,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Trial:** přihlášený FREE uživatel může **1×** odemknout plnou PRO verzi jednoho
   porovnání (`User.proTrialUsed`). UI volá `/api/compare?unlock=1`; server přes
   `getEntitlement` spotřebuje trial. Zranění (`/api/injuries`) jsou **plně PRO** (mimo trial).
+- **Always-PRO allowlist:** env `PRO_EMAILS` (čárkami oddělené e-maily) → `isProEmail`
+  (`lib/entitlements.ts`) v session callbacku `auth.ts` přepíše tier na PRO bez ohledu na DB
+  (přežije reset DB i nové přihlášení). Vlastníkův účet patří sem, ne do ručního DB updatu.
 - **Oblíbené (PRO):** `SavedComparison` drží IDs (re-run) **i JSON `snapshot`** celého
   `CompareResult` (okamžité zobrazení „jak to bylo" bez fetchu) + `snapshotVersion`.
   API `app/api/favorites` (GET/POST upsert) + `[id]` (DELETE). UI `FavoritesSection.tsx`;
@@ -163,7 +166,8 @@ proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/ap
 ## Deployment
 GitHub `Daifyyy/statapp` → Vercel (auto-deploy na push do `main`). Env na Vercelu:
 `API_FOOTBALL_KEY`, `DATABASE_URL` (Neon pooled), `AUTH_SECRET`, `AUTH_URL`,
-`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, volitelně `CRON_SECRET`. `postinstall:
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, volitelně `CRON_SECRET` a `PRO_EMAILS`
+(always-PRO allowlist; změna env vyžaduje redeploy). `postinstall:
 prisma generate` zajistí klienta při buildu. Live: https://statapp-uvol.vercel.app
 **Auth host (DŮLEŽITÉ):** `trustHost: true` → bez `AUTH_URL` bere Auth.js host z requestu,
 což je u Vercelu **deployment-specific URL** (`…-<hash>-…vercel.app`, mění se každým buildem)

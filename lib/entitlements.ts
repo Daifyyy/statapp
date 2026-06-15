@@ -21,6 +21,20 @@ export interface Entitlement {
 }
 
 /**
+ * Always-PRO allowlist přes env `PRO_EMAILS` (čárkami oddělené e-maily).
+ * Použito v session callbacku (`auth.ts`) – účet z allowlistu je PRO bez ohledu
+ * na DB tier (přežije reset DB i nové přihlášení). Server-side (čte process.env).
+ */
+export function isProEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const list = (process.env.PRO_EMAILS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.includes(email.toLowerCase());
+}
+
+/**
  * Rozhodne o přístupu k PRO obsahu.
  * - PRO tier → vždy plný přístup.
  * - FREE + žádost o trial (`unlockTrial`) + dosud nevyužitý trial → plný přístup, spotřebuj trial.

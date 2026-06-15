@@ -1,6 +1,31 @@
-import { describe, it, expect } from "vitest";
-import { getEntitlement, toFreeResult } from "./entitlements";
+import { afterEach, describe, it, expect } from "vitest";
+import { getEntitlement, isProEmail, toFreeResult } from "./entitlements";
 import type { CompareResult } from "./types";
+
+describe("isProEmail", () => {
+  afterEach(() => {
+    delete process.env.PRO_EMAILS;
+  });
+
+  it("prázdný/nenastavený allowlist → false", () => {
+    expect(isProEmail("a@b.cz")).toBe(false);
+    process.env.PRO_EMAILS = "";
+    expect(isProEmail("a@b.cz")).toBe(false);
+  });
+
+  it("e-mail v seznamu (case-insensitive, s mezerami) → true", () => {
+    process.env.PRO_EMAILS = " First@Example.com , owner@x.cz ";
+    expect(isProEmail("first@example.com")).toBe(true);
+    expect(isProEmail("OWNER@X.CZ")).toBe(true);
+  });
+
+  it("e-mail mimo seznam nebo null → false", () => {
+    process.env.PRO_EMAILS = "owner@x.cz";
+    expect(isProEmail("someone@else.com")).toBe(false);
+    expect(isProEmail(null)).toBe(false);
+    expect(isProEmail(undefined)).toBe(false);
+  });
+});
 
 describe("getEntitlement", () => {
   it("PRO tier má vždy plný přístup, bez spotřeby trialu", () => {
