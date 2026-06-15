@@ -74,17 +74,11 @@ export function ProLock({
           </>
         ) : (
           <>
-            <button
-              type="button"
-              onClick={() =>
-                alert("Placená PRO verze bude brzy. Díky za zájem!")
-              }
-              className="rounded-full bg-foreground px-4 py-2 text-sm font-semibold text-background transition hover:opacity-90"
-            >
-              Upgradovat na PRO
-            </button>
+            <span className="inline-flex cursor-default items-center gap-1.5 rounded-full bg-background px-4 py-2 text-sm font-semibold text-muted">
+              ⏳ Plná PRO verze připravujeme
+            </span>
             <p className="mt-2 text-xs text-muted">
-              Trial jsi už využil. Plná PRO verze dorazí brzy.
+              Trial jsi už využil. Placená PRO verze dorazí brzy.
             </p>
           </>
         )}

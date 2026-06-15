@@ -17,6 +17,20 @@ export function MatchPrediction({
     prediction;
   const pct = (x: number) => Math.round(x * 100);
 
+  if (!prediction.available) {
+    return (
+      <section className="rounded-2xl border border-border bg-surface p-4 text-center shadow-sm sm:p-6">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Predikce
+        </p>
+        <p className="mt-2 text-sm text-muted">
+          Nedostatek dat pro predikci – některý z týmů má příliš málo
+          odehraných zápasů.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
       <div className="mb-3 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { TeamLogo } from "./TeamLogo";
 
 interface TeamLite {
@@ -25,7 +25,11 @@ export function TeamCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const listId = useId();
 
   const selected = teams.find((t) => t.id === value) ?? null;
   const ringFocus =
@@ -50,24 +54,68 @@ export function TeamCombobox({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  // Udrž zvýrazněnou položku ve viditelné části seznamu.
+  useEffect(() => {
+    if (!open) return;
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-idx="${activeIndex}"]`
+    );
+    el?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
+
   function select(id: number) {
     onChange(id);
     setOpen(false);
     setQuery("");
+    triggerRef.current?.focus();
   }
+
+  function close() {
+    setOpen(false);
+    setQuery("");
+    triggerRef.current?.focus();
+  }
+
+  function onInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const t = filtered[activeIndex];
+      if (t) select(t.id);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  }
+
+  const activeId =
+    open && filtered[activeIndex] ? `${listId}-opt-${activeIndex}` : undefined;
 
   return (
     <div ref={rootRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpen((o) => !o);
+          setActiveIndex(0);
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         className={`flex w-full items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5 text-left text-base transition ${ringFocus}`}
       >
         <TeamLogo src={selected?.logoUrl} alt={selected?.name ?? ""} size={24} />
         <span className={`flex-1 truncate ${selected ? "" : "text-muted"}`}>
           {selected?.name ?? "Vyber tým…"}
         </span>
-        <span className="text-muted">▾</span>
+        <span className="text-muted" aria-hidden>
+          ▾
+        </span>
       </button>
 
       {open && (
@@ -75,28 +123,53 @@ export function TeamCombobox({
           <input
             autoFocus
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActiveIndex(0);
+            }}
+            onKeyDown={onInputKeyDown}
             placeholder="Hledat…"
+            role="combobox"
+            aria-expanded
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
             className="w-full border-b border-border bg-background px-3 py-2 text-base outline-none"
           />
-          <ul className="max-h-60 overflow-y-auto py-1">
+          <ul
+            ref={listRef}
+            id={listId}
+            role="listbox"
+            className="max-h-60 overflow-y-auto py-1"
+          >
             {filtered.length === 0 && (
               <li className="px-3 py-2 text-sm text-muted">Nic nenalezeno</li>
             )}
-            {filtered.map((t) => (
-              <li key={t.id}>
-                <button
-                  type="button"
-                  onClick={() => select(t.id)}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-background ${
-                    t.id === value ? "font-semibold" : ""
-                  }`}
+            {filtered.map((t, idx) => {
+              const active = idx === activeIndex;
+              return (
+                <li
+                  key={t.id}
+                  id={`${listId}-opt-${idx}`}
+                  data-idx={idx}
+                  role="option"
+                  aria-selected={t.id === value}
                 >
-                  <TeamLogo src={t.logoUrl} alt={t.name} size={20} />
-                  <span className="truncate">{t.name}</span>
-                </button>
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => select(t.id)}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                      active ? "bg-background" : "hover:bg-background"
+                    } ${t.id === value ? "font-semibold" : ""}`}
+                  >
+                    <TeamLogo src={t.logoUrl} alt={t.name} size={20} />
+                    <span className="truncate">{t.name}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

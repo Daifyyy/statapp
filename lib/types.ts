@@ -117,6 +117,22 @@ export const METRIC_LABELS: Record<Metric, string> = {
   SAVES: "Zákroky brankáře",
 };
 
+/**
+ * Krátká vysvětlení méně samozřejmých metrik (tooltip „ⓘ" u řádku v UI).
+ * Jen tam, kde laik nemusí výraz znát; samozřejmé metriky (góly, rohy…) vynechány.
+ */
+export const METRIC_HINTS: Partial<Record<Metric, string>> = {
+  XG: "Očekávané góly (expected goals): kolik gólů by tým měl vstřelit podle kvality svých šancí.",
+  SHOTS_ON_TARGET: "Střely směřující do branky (gólman musel zasáhnout nebo skončily gólem).",
+  BLOCKED_SHOTS: "Střely zablokované bránícím hráčem ještě před brankářem.",
+  SHOTS_INSIDE_BOX: "Střely z pokutového území (z vápna).",
+  SHOTS_OUTSIDE_BOX: "Střely mimo pokutové území.",
+  POSSESSION: "Průměrný podíl času s míčem na noze (% z hrací doby).",
+  PASS_ACCURACY: "Podíl úspěšných (přesných) přihrávek ze všech.",
+  OFFSIDES: "Počet odpískaných ofsajdů týmu.",
+  SAVES: "Počet zákroků (chytů) brankáře za zápas.",
+};
+
 export const WINDOW_LABELS: Record<WindowKey, string> = {
   SEASON: "Minulá sezóna",
   LAST10: "Posl. 10 zápasů",
@@ -214,6 +230,8 @@ export interface TeamComparison {
 
 /** Predikce zápasu z očekávaných gólů (Poisson). Domácí = první tým. */
 export interface MatchPrediction {
+  /** false = chybí gólová i xG data → predikci nelze vydat (UI zobrazí hlášku). */
+  available: boolean;
   lambdaHome: number; // očekávané góly domácích
   lambdaAway: number; // očekávané góly hostů
   homeWin: number; // 0–1
@@ -256,6 +274,66 @@ export interface InsightReport {
   keySignals: ScoredInsight[]; // top N napříč scope (řazené dle score)
   home: ScoredInsight[]; // per-tým (řazené)
   away: ScoredInsight[];
+}
+
+/**
+ * Uložená predikce nadcházejícího zápasu (+ výsledek po odehrání). Zdrojově
+ * nezávislý tvar (real = DB `FixturePrediction`, mock = generátor) – čte ho
+ * predikční záložka, track-record i kalibrace. `kickoff` je ISO 8601.
+ */
+export interface PredictionRow {
+  fixtureId: number;
+  leagueId: number;
+  season: number;
+  kickoff: string;
+  homeTeamId: number;
+  awayTeamId: number;
+  homeName: string;
+  awayName: string;
+  homeLogo: string;
+  awayLogo: string;
+  available: boolean;
+  lambdaHome: number;
+  lambdaAway: number;
+  homeWin: number;
+  draw: number;
+  awayWin: number;
+  bttsYes: number;
+  over25: number;
+  lowConfidence: boolean;
+  modelVersion: number;
+  status: string; // "NS" | "FT" | "AET" | "PEN" | …
+  homeGoals: number | null;
+  awayGoals: number | null;
+}
+
+/** Trh, na který pravidlo cílí. */
+export type PickMarket = "win" | "over25" | "btts";
+
+/** Pravidlo výběru zápasů do predikční záložky. */
+export interface PickRule {
+  market: PickMarket;
+  /** Jen pro market "win": strana favorita. */
+  venue: "home" | "away" | "any";
+  /** Minimální pravděpodobnost (0–1). */
+  minProb: number;
+}
+
+/** Jeden vybraný tip = nadcházející zápas, který splnil pravidlo. */
+export interface MatchPick {
+  fixtureId: number;
+  kickoff: string;
+  leagueId: number;
+  home: { id: number; name: string; logoUrl: string };
+  away: { id: number; name: string; logoUrl: string };
+  prediction: MatchPrediction;
+  market: PickMarket;
+  /** Pro "win" strana favorita, jinak null. */
+  side: "home" | "away" | null;
+  /** Pravděpodobnost relevantní pro pravidlo (0–1). */
+  prob: number;
+  /** Krátké vysvětlení (z uložených hodnot). */
+  explanation: string;
 }
 
 export interface CompareResult {

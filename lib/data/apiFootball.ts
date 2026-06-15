@@ -188,6 +188,16 @@ export function fetchLastFixtures(team: number, last: number) {
   return apiGet("/fixtures", { team, last }, z.array(fixtureItemSchema));
 }
 
+/** Nejbližších N nadcházejících zápasů ligy (status NS/TBD; goals jsou null). */
+export function fetchLeagueUpcomingFixtures(league: number, next: number) {
+  return apiGet("/fixtures", { league, next }, z.array(fixtureItemSchema));
+}
+
+/** Zápasy dle ID (batch, max ~20 ID) – pro dotažení výsledků odehraných predikcí. */
+export function fetchFixturesByIds(ids: number[]) {
+  return apiGet("/fixtures", { ids: ids.join("-") }, z.array(fixtureItemSchema));
+}
+
 /** Per-zápas statistiky (rohy, fauly, střely, xG). */
 export function fetchFixtureStatistics(fixture: number) {
   return apiGet("/fixtures/statistics", { fixture }, fixtureStatsSchema);

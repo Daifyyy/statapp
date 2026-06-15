@@ -4,8 +4,13 @@ import { compareTeams } from "@/lib/stats/compare";
 import { getCurrentUser } from "@/lib/authUser";
 import { prisma } from "@/lib/db";
 import { getEntitlement, toFreeResult } from "@/lib/entitlements";
+import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
+import { logError } from "@/lib/logError";
 
 export async function GET(req: Request) {
+  // Anti-spam: velkorysý strop na klienta (porovnání je drahé, stahuje data).
+  if (!allowRequest(`compare:${clientKey(req)}`, 30, 60_000)) return tooMany();
+
   const sp = new URL(req.url).searchParams;
   const homeId = Number(sp.get("home"));
   const awayId = Number(sp.get("away"));
@@ -62,9 +67,8 @@ export async function GET(req: Request) {
     }
     return NextResponse.json(full);
   } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Chyba porovnání" },
-      { status: 502 }
-    );
+    // Detail jen do logu; klientovi generická hláška (žádný leak interních dat).
+    logError("api/compare", e, { homeId, awayId, homeLeague, awayLeague });
+    return NextResponse.json({ error: "Chyba porovnání" }, { status: 502 });
   }
 }

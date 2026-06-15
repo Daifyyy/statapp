@@ -48,6 +48,7 @@ describe("toFreeResult", () => {
     home: { team: { id: 1, name: "A", logoUrl: "", country: "" }, values: [], summary: [] },
     away: { team: { id: 2, name: "B", logoUrl: "", country: "" }, values: [], summary: [] },
     prediction: {
+      available: true,
       lambdaHome: 1.5,
       lambdaAway: 1.1,
       homeWin: 0.4,

@@ -3,6 +3,14 @@
     {
       "path": "/api/warm",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/predict-upcoming",
+      "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/settle-results",
+      "schedule": "0 6 * * *"
     }
   ]
 }

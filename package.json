@@ -12,6 +12,7 @@
     "probe": "node --env-file=.env --import tsx scripts/probe.ts",
     "discover": "node --env-file=.env --import tsx scripts/discover.ts",
     "limits": "node --env-file=.env --import tsx scripts/limits.ts",
+    "calibrate": "node --env-file=.env --import tsx scripts/calibrate.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

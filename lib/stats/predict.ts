@@ -6,9 +6,17 @@ const MIN_LAMBDA = 0.2;
 const MAX_LAMBDA = 5;
 
 /**
- * Predikce zápasu z očekávaných gólů obou týmů (nezávislý Poisson model).
- * Domácí útok × hostující obrana (a naopak), venue-specific s fallbackem na TOTAL.
- * Vše z výstupu `compareTeams` – žádná nová data, čistá funkce.
+ * Dixon–Coles parametr závislosti ρ. Nezávislý Poisson podhodnocuje nízkoskórové
+ * remízy (0:0, 1:1), protože ignoruje korelaci gólů obou týmů. ρ < 0 ji opravuje
+ * (víc remíz 0:0/1:1, míň těsných výher 1:0/0:1); ρ = 0 = čistý Poisson.
+ * −0.13 je publikovaný odhad pro fotbal (Dixon & Coles 1997) – dolaď backtestem.
+ */
+const DC_RHO = -0.13;
+
+/**
+ * Predikce zápasu z očekávaných gólů obou týmů (Poisson s Dixon–Coles korekcí
+ * nízkých skóre). Domácí útok × hostující obrana (a naopak), venue-specific
+ * s fallbackem na TOTAL. Vše z výstupu `compareTeams` – žádná nová data, čistá funkce.
  */
 export function predictMatch(
   home: TeamComparison,
@@ -17,35 +25,59 @@ export function predictMatch(
   const lambdaHome = expectedGoals(home, away, true);
   const lambdaAway = expectedGoals(away, home, false);
 
+  // Bez gólových i xG dat na některé straně nelze predikovat – nevydávej
+  // falešnou 50/50, ale označ predikci jako nedostupnou (UI ji nahradí hláškou).
+  if (lambdaHome == null || lambdaAway == null) {
+    return {
+      available: false,
+      lambdaHome: lambdaHome ?? 0,
+      lambdaAway: lambdaAway ?? 0,
+      homeWin: 0,
+      draw: 0,
+      awayWin: 0,
+      bttsYes: 0,
+      over25: 0,
+      lowConfidence: true,
+    };
+  }
+
   const ph = poissonVector(lambdaHome);
   const pa = poissonVector(lambdaAway);
 
+  // Jediná smyčka přes mřížku skóre: na nízká skóre se aplikuje Dixon–Coles
+  // korekce a všechny agregáty (V/R/P, Over 2.5, BTTS) se počítají z téže
+  // opravené mřížky → vzájemně konzistentní.
   let homeWin = 0;
   let draw = 0;
   let awayWin = 0;
   let over25 = 0;
+  let bttsYes = 0;
+  let total = 0;
   for (let i = 0; i <= MAX_GOALS; i++) {
     for (let j = 0; j <= MAX_GOALS; j++) {
-      const p = ph[i] * pa[j];
+      const p = ph[i] * pa[j] * drawTau(i, j, lambdaHome, lambdaAway);
+      total += p;
       if (i > j) homeWin += p;
       else if (i === j) draw += p;
       else awayWin += p;
       if (i + j >= 3) over25 += p;
+      if (i >= 1 && j >= 1) bttsYes += p;
     }
   }
-  // Re-normalizace (uťatá mřížka ztratí nepatrný zbytek pravděpodobnosti).
-  const total = homeWin + draw + awayWin || 1;
-  homeWin /= total;
-  draw /= total;
-  awayWin /= total;
-
-  const bttsYes = (1 - ph[0]) * (1 - pa[0]);
+  // Re-normalizace (uťatá mřížka + korekce nezachová přesně 1).
+  const norm = total || 1;
+  homeWin /= norm;
+  draw /= norm;
+  awayWin /= norm;
+  over25 /= norm;
+  bttsYes /= norm;
 
   const lowConfidence =
     lowConfidenceOf(home.values, "GOALS_FOR", "HOME") ||
     lowConfidenceOf(away.values, "GOALS_FOR", "AWAY");
 
   return {
+    available: true,
     lambdaHome,
     lambdaAway,
     homeWin,
@@ -65,7 +97,7 @@ function expectedGoals(
   team: TeamComparison,
   opponent: TeamComparison,
   isHome: boolean
-): number {
+): number | null {
   const attackVenue = isHome ? "HOME" : "AWAY";
   const defenseVenue = isHome ? "AWAY" : "HOME";
 
@@ -77,16 +109,39 @@ function expectedGoals(
   const xgEstimate =
     xgAttack != null ? mean([xgAttack, defense]) : null;
 
+  // Žádný gólový ani xG podklad → nelze odhadnout (vrať null).
+  if (goalsEstimate == null && xgEstimate == null) return null;
+
   const lambda =
     xgEstimate != null && goalsEstimate != null
       ? (goalsEstimate + xgEstimate) / 2
-      : (goalsEstimate ?? xgEstimate ?? 1);
+      : (goalsEstimate ?? xgEstimate)!;
 
   return clamp(lambda, MIN_LAMBDA, MAX_LAMBDA);
 }
 
-/** Vektor Poissonových pravděpodobností p(k) pro k = 0..MAX_GOALS. */
-function poissonVector(lambda: number): number[] {
+/**
+ * Dixon–Coles korekční faktor τ pro čtyři nejnižší skóre (jinde vrací 1).
+ * ρ < 0 zvýší 0:0 a 1:1 a o totéž sníží 1:0 a 0:1. Výsledek je clampnutý na ≥ 0
+ * jako pojistka proti záporné pravděpodobnosti při extrémních λ. Exportováno pro testy.
+ */
+export function drawTau(
+  i: number,
+  j: number,
+  lambdaHome: number,
+  lambdaAway: number,
+  rho: number = DC_RHO
+): number {
+  let t = 1;
+  if (i === 0 && j === 0) t = 1 - lambdaHome * lambdaAway * rho;
+  else if (i === 0 && j === 1) t = 1 + lambdaHome * rho;
+  else if (i === 1 && j === 0) t = 1 + lambdaAway * rho;
+  else if (i === 1 && j === 1) t = 1 - rho;
+  return t < 0 ? 0 : t;
+}
+
+/** Vektor Poissonových pravděpodobností p(k) pro k = 0..MAX_GOALS. Exportováno pro testy. */
+export function poissonVector(lambda: number): number[] {
   const out = new Array<number>(MAX_GOALS + 1);
   let p = Math.exp(-lambda); // p(0)
   out[0] = p;

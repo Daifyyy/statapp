@@ -118,6 +118,43 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+/// Predikce nadcházejícího zápasu + (po odehrání) skutečný výsledek.
+/// Plní cron na pozadí (predict-upcoming / settle-results); záložka i track-record
+/// jen ČTOU – nikdy se nepočítá živě per request. fixtureId = přirozený klíč.
+model FixturePrediction {
+  fixtureId     Int       @id
+  leagueId      Int
+  season        Int
+  kickoff       DateTime
+  homeTeamId    Int
+  awayTeamId    Int
+  homeName      String
+  awayName      String
+  homeLogo      String
+  awayLogo      String
+  // Predikce (snapshot modelu v čase výpočtu)
+  available     Boolean
+  lambdaHome    Float
+  lambdaAway    Float
+  homeWin       Float
+  draw          Float
+  awayWin       Float
+  bttsYes       Float
+  over25        Float
+  lowConfidence Boolean
+  /// Verze modelu (bump při změně DC_RHO apod.) – kalibrace/track-record per verzi.
+  modelVersion  Int       @default(1)
+  predictedAt   DateTime  @default(now())
+  // Výsledek (doplní settle cron po odehrání)
+  status        String    @default("NS")
+  homeGoals     Int?
+  awayGoals     Int?
+  settledAt     DateTime?
+
+  @@index([leagueId, kickoff])
+  @@index([status, kickoff])
+}
+
 /// Oblíbené porovnání (PRO). Drží IDs pro re-run i JSON snapshot pro okamžité zobrazení.
 model SavedComparison {
   id              String   @id @default(cuid())

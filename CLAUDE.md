@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 @AGENTS.md
 
 # Predictapp — statistické porovnání fotbalových týmů
@@ -14,7 +18,10 @@ z vápna / mimo vápno), držení míče, přihrávky + přesnost, rohy, ofsajdy
 ```bash
 npm run dev          # vývoj (http://localhost:3000)
 npm run build        # produkční build
-npm test             # Vitest – unit testy výpočetního jádra
+npm test             # Vitest – unit testy výpočetního jádra (jen lib/**/*.test.ts)
+npx vitest run lib/stats/predict.test.ts   # jeden soubor
+npx vitest run -t "název testu"            # jeden test dle názvu (substring)
+npx vitest                                 # watch režim
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npx prisma db push   # promítnout změnu schématu do Neonu (+ regeneruje klienta)
@@ -46,9 +53,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   – **líně** načítaná samostatná sekce, ne ze zápasových statistik. `/injuries` přes TTL
   `ApiCache` (6 h), dedup dle hráče. Pokrytí v API je nekonzistentní → **graceful**:
   prázdný/nedostupný seznam = sekce se nevykreslí. Mimo `compareTeams` (ta zůstává čistá).
-- **Predikce** (`lib/stats/predict.ts`, `CompareResult.prediction`) – nezávislý **Poisson**
-  z očekávaných gólů (útok týmu × obrana soupeře, venue-specific, fallback TOTAL, volitelné
-  zpevnění xG). Vrací V/R/P, očekávané skóre, BTTS, Over 2.5. UI `MatchPrediction.tsx`.
+- **Predikce** (`lib/stats/predict.ts`, `CompareResult.prediction`) – **Poisson** z očekávaných
+  gólů (útok týmu × obrana soupeře, venue-specific, fallback TOTAL, volitelné zpevnění xG)
+  s **Dixon–Coles korekcí** nízkých skóre (`DC_RHO`, `drawTau`; ρ<0 zvyšuje remízy 0:0/1:1).
+  V/R/P, BTTS i Over 2.5 se počítají z téže opravené mřížky. Chybí-li gólová i xG data,
+  vrací `available:false` (UI zobrazí „nedostatek dat", ne falešnou 50/50). UI `MatchPrediction.tsx`.
 - **Insights = rule-engine** (`lib/insights/`): `engine.ts` spustí registry pravidel
   (`rules/team.ts` per-tým napříč metrikami, `rules/form.ts` série/PPG z `lib/stats/streaks.ts`,
   `rules/matchup.ts` syntéza obou týmů + vysvětlení predikce, `rules/verdict.ts` verdikt).
@@ -110,6 +119,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `AccountMenu.tsx` (přihlášení Google, tier odznak, odhlášení). PRO sekce v `CompareApp`
   se renderují jen když `!result.locked`.
 
+## Predikční záložka (PRO) + dataset predikce-vs-skutečnost
+- **Princip:** predikce nadcházejících zápasů se počítají **jen na pozadí (cron), dávkově**
+  a ukládají do tabulky `FixturePrediction` (predikce + po odehrání výsledek). Záložka
+  `/predikce` i track-record **jen ČTOU z DB** – nikdy se nepočítá živě per request
+  (1 zápas ≈ 26–35 API volání → drahé). Studené naplnění dělej lokálně / `?league=ID`.
+- **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming` (Top-5 lig
+  `PREDICTION_LEAGUES`) → `fetchLeagueUpcomingFixtures` + `getCompareTeam`×2 + `compareTeams`
+  → `upsertPrediction` (`predictionStore.ts`). `runSettleResults` dotáhne skóre
+  (`fetchFixturesByIds`). Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve
+  `vercel.json`, `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá).
+- **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
+  `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}`, presety
+  `PICK_PRESETS`. API `app/api/picks` (PRO přes `getEntitlement`, FREE→`{locked}`),
+  `app/api/picks/stats` (track-record `lib/picks/trackRecord.ts`). UI `PicksApp.tsx`.
+- **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
+  predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
+  úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`).
+- **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
+- Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
+
 ## PWA (instalace na iOS/Android)
 - Manifest `app/manifest.ts` (Next metadata route → `/manifest.webmanifest`), ikony
   v `public/` (`icon-192/512`, `icon-maskable-512`, `apple-touch-icon`) generované ze
@@ -133,10 +162,18 @@ proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/ap
 
 ## Deployment
 GitHub `Daifyyy/statapp` → Vercel (auto-deploy na push do `main`). Env na Vercelu:
-`API_FOOTBALL_KEY`, `DATABASE_URL` (Neon pooled), `AUTH_SECRET`, `GOOGLE_CLIENT_ID`,
-`GOOGLE_CLIENT_SECRET`, volitelně `CRON_SECRET`. Google OAuth redirect URI:
-`/api/auth/callback/google` (lokál i produkce). `postinstall: prisma generate` zajistí
-klienta při buildu. Live: https://statapp-uvol.vercel.app
+`API_FOOTBALL_KEY`, `DATABASE_URL` (Neon pooled), `AUTH_SECRET`, `AUTH_URL`,
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, volitelně `CRON_SECRET`. `postinstall:
+prisma generate` zajistí klienta při buildu. Live: https://statapp-uvol.vercel.app
+**Auth host (DŮLEŽITÉ):** `trustHost: true` → bez `AUTH_URL` bere Auth.js host z requestu,
+což je u Vercelu **deployment-specific URL** (`…-<hash>-…vercel.app`, mění se každým buildem)
+→ `redirect_uri` neodpovídá whitelistu a Google vrací `Error 400: redirect_uri_mismatch`.
+Proto **`AUTH_URL=https://statapp-uvol.vercel.app`** (stabilní doména) → redirect je vždy
+konzistentní. Přihlašovat se přes produkční doménu, ne přes deployment URL.
+**Google OAuth (Cloud Console → Credentials):** Authorized redirect URI
+`https://statapp-uvol.vercel.app/api/auth/callback/google` + `http://localhost:3000/api/auth/callback/google`
+(lokál); Authorized JavaScript origin `https://statapp-uvol.vercel.app`. Musí sedět znak po
+znaku (https, bez koncového `/`).
 **Pozn. (lokál):** Google token exchange = odchozí TLS → `npm run dev` spouštěj s
 `NODE_OPTIONS=--use-system-ca` (jako probe/prisma). Bez auth env app běží jako anonym (FREE).
 

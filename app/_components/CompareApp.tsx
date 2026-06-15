@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CompareResult,
@@ -10,7 +11,7 @@ import type {
   Metric,
   Venue,
 } from "@/lib/types";
-import { METRIC_LABELS, LOWER_IS_BETTER } from "@/lib/types";
+import { METRIC_LABELS, METRIC_HINTS, LOWER_IS_BETTER } from "@/lib/types";
 import { MetricRow } from "./MetricRow";
 import { MatchVerdict } from "./MatchVerdict";
 import { MatchPrediction } from "./MatchPrediction";
@@ -64,22 +65,34 @@ interface CompareSetters {
 }
 
 /** Načte týmy zvolené ligy (prefetch hned po výběru ligy). */
-function useTeams(leagueId: number | null): TeamLite[] {
+function useTeams(leagueId: number | null): { teams: TeamLite[]; error: boolean } {
   const [teams, setTeams] = useState<TeamLite[]>([]);
+  const [error, setError] = useState(false);
   useEffect(() => {
     if (leagueId == null) return;
     let active = true;
     fetch(`/api/teams?league=${leagueId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (active) setTeams(d.teams ?? []);
+      .then((r) => {
+        if (!r.ok) throw new Error("teams");
+        return r.json();
       })
-      .catch(() => active && setTeams([]));
+      .then((d) => {
+        if (active) {
+          setTeams(d.teams ?? []);
+          setError(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setTeams([]);
+          setError(true);
+        }
+      });
     return () => {
       active = false;
     };
   }, [leagueId]);
-  return teams;
+  return { teams, error };
 }
 
 /** Líně dotáhne zranění týmu (mimo kritickou cestu porovnání). */
@@ -169,8 +182,8 @@ export function CompareApp({
   const [savedView, setSavedView] = useState<string | null>(null);
   const isPro = user?.tier === "PRO";
 
-  const homeTeams = useTeams(homeLeagueId);
-  const awayTeams = useTeams(awayLeagueId);
+  const { teams: homeTeams, error: homeTeamsError } = useTeams(homeLeagueId);
+  const { teams: awayTeams, error: awayTeamsError } = useTeams(awayLeagueId);
 
   // Zranění se tahají líně, až je výsledek na obrazovce (mimo kritickou cestu).
   const homeInjuries = useInjuries(homeId, homeLeagueId, result != null);
@@ -208,6 +221,24 @@ export function CompareApp({
     setAwayLeagueId(id);
     setAwayId(null);
     setResult(null);
+  }
+
+  // Prohození domácí ⇄ host (liga i tým). Auto-fetch efekt přepočítá výsledek.
+  function handleSwap() {
+    setHomeLeagueId(awayLeagueId);
+    setAwayLeagueId(homeLeagueId);
+    setHomeId(awayId);
+    setAwayId(homeId);
+    setSavedView(null);
+  }
+
+  // Vyčisti výběr týmů a výsledek (ligy/konfederace nechej navolené).
+  function handleReset() {
+    setHomeId(null);
+    setAwayId(null);
+    setResult(null);
+    setSavedView(null);
+    setError(null);
   }
 
   // Porovnej, jakmile jsou vybrané oba (různé) týmy.
@@ -331,6 +362,7 @@ export function CompareApp({
             accent="home"
             heading="Domácí"
             teams={homeTeams}
+            teamsError={homeTeamsError}
             value={homeId}
             exclude={awayId}
             onChange={setHomeId}
@@ -343,6 +375,7 @@ export function CompareApp({
             accent="away"
             heading="Host"
             teams={awayTeams}
+            teamsError={awayTeamsError}
             value={awayId}
             exclude={homeId}
             onChange={setAwayId}
@@ -354,6 +387,27 @@ export function CompareApp({
         </div>
       </section>
 
+      {(homeId != null || awayId != null) && (
+        <div className="mt-2 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={handleSwap}
+            title="Prohodit domácí a hostující tým"
+            className="rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-muted transition hover:text-foreground"
+          >
+            ⇄ Prohodit
+          </button>
+          <button
+            type="button"
+            onClick={handleReset}
+            title="Vymazat výběr a začít nové porovnání"
+            className="rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-muted transition hover:text-foreground"
+          >
+            ✕ Nové porovnání
+          </button>
+        </div>
+      )}
+
       {/* Reprezentace jsou venue-neutrální → přepínač Doma/Venku jen pro kluby. */}
       {mode === "CLUB" && (
         <div className="sticky top-0 z-10 mt-4 bg-background/80 py-2 backdrop-blur">
@@ -364,6 +418,7 @@ export function CompareApp({
             }))}
             value={venue}
             onChange={setVenue}
+            ariaLabel="Doma / Venku / Celkově"
           />
         </div>
       )}
@@ -395,6 +450,7 @@ export function CompareApp({
         loading={loading}
         error={error}
         ready={canCompare}
+        onRetry={refreshCurrent}
         homeInjuries={homeInjuries}
         awayInjuries={awayInjuries}
         user={user}
@@ -434,7 +490,14 @@ function Header({
           value={mode}
           onChange={onMode}
           compact
+          ariaLabel="Typ porovnání"
         />
+        <Link
+          href="/predikce"
+          className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
+        >
+          📈 Tipy
+        </Link>
         <ShareButton />
         <ThemeToggle />
         <AccountMenu user={user} />
@@ -444,25 +507,41 @@ function Header({
 }
 
 function ShareButton() {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
   async function share() {
+    const url = window.location.href;
+    // Mobil: nativní share sheet (jen v secure kontextu). Zrušení uživatelem
+    // (AbortError) bereme jako tichý konec; jinou chybu řeší fallback na schránku.
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title: "Predictapp — porovnání týmů", url });
+        return;
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+      }
+    }
     try {
-      await navigator.clipboard.writeText(window.location.href);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(url);
+      setState("copied");
+      setTimeout(() => setState("idle"), 1500);
     } catch {
-      // schránka může být blokovaná (nezabezpečený kontext) – tiše ignoruj
+      setState("error");
+      setTimeout(() => setState("idle"), 2500);
     }
   }
   return (
     <button
       type="button"
       onClick={share}
-      title="Zkopírovat odkaz na toto porovnání"
+      title="Sdílet odkaz na toto porovnání"
       aria-label="Sdílet"
       className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
     >
-      {copied ? "✓ Zkopírováno" : "🔗 Sdílet"}
+      {state === "copied"
+        ? "✓ Zkopírováno"
+        : state === "error"
+          ? "⚠ Nešlo zkopírovat"
+          : "🔗 Sdílet"}
     </button>
   );
 }
@@ -473,6 +552,7 @@ function ResultPanel({
   loading,
   error,
   ready,
+  onRetry,
   homeInjuries,
   awayInjuries,
   user,
@@ -485,6 +565,7 @@ function ResultPanel({
   loading: boolean;
   error: string | null;
   ready: boolean;
+  onRetry: () => void;
   homeInjuries: Injury[];
   awayInjuries: Injury[];
   user: SessionUser | null;
@@ -493,7 +574,20 @@ function ResultPanel({
   onUnlockTrial: () => void;
 }) {
   if (error) {
-    return <Empty>{error}</Empty>;
+    return (
+      <Empty>
+        <p>{error}</p>
+        {ready && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
+          >
+            ↻ Zkusit znovu
+          </button>
+        )}
+      </Empty>
+    );
   }
   if (!ready) {
     return <Empty>Vyber domácí a hostující tým pro porovnání.</Empty>;
@@ -544,6 +638,14 @@ function ResultPanel({
           {result.insightReport && (
             <KeySignals signals={result.insightReport.keySignals} />
           )}
+          {(homeInjuries.length > 0 || awayInjuries.length > 0) && (
+            <InjurySummary
+              homeName={result.home.team.name}
+              awayName={result.away.team.name}
+              homeCount={homeInjuries.length}
+              awayCount={awayInjuries.length}
+            />
+          )}
         </>
       )}
 
@@ -572,6 +674,7 @@ function ResultPanel({
             <MetricRow
               key={metric}
               label={METRIC_LABELS[metric]}
+              hint={METRIC_HINTS[metric]}
               home={valueFor("home", metric)}
               away={valueFor("away", metric)}
               lowerIsBetter={LOWER_IS_BETTER.has(metric)}
@@ -621,6 +724,7 @@ function TeamSelect({
   accent,
   heading,
   teams,
+  teamsError,
   value,
   exclude,
   onChange,
@@ -632,6 +736,7 @@ function TeamSelect({
   accent: "home" | "away";
   heading: string;
   teams: TeamLite[];
+  teamsError?: boolean;
   value: number | null;
   exclude: number | null;
   onChange: (id: number) => void;
@@ -668,6 +773,11 @@ function TeamSelect({
           onChange={onChange}
           accent={accent}
         />
+        {teamsError && (
+          <p className="mt-1 text-[11px] text-warning">
+            Týmy se nepodařilo načíst. Zkus přepnout ligu/konfederaci znovu.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -711,14 +821,30 @@ function Segmented<T extends string>({
   value,
   onChange,
   compact,
+  ariaLabel,
 }: {
   options: { value: T; label: string }[];
   value: T;
   onChange: (v: T) => void;
   compact?: boolean;
+  ariaLabel?: string;
 }) {
+  // Šipkami posouvej výběr (vzor radiogroup s roving tabindexem).
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const i = options.findIndex((o) => o.value === value);
+    const next =
+      e.key === "ArrowRight"
+        ? (i + 1) % options.length
+        : (i - 1 + options.length) % options.length;
+    onChange(options[next].value);
+  }
   return (
     <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
       className={`inline-flex w-full rounded-full border border-border bg-surface p-0.5 ${
         compact ? "w-auto" : ""
       }`}
@@ -729,6 +855,9 @@ function Segmented<T extends string>({
           <button
             key={o.value}
             type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
             onClick={() => onChange(o.value)}
             className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
               active
@@ -742,6 +871,41 @@ function Segmented<T extends string>({
       })}
     </div>
   );
+}
+
+/** Stručné shrnutí počtu hráčů mimo hru (odvozené z už načtených zranění). */
+function InjurySummary({
+  homeName,
+  awayName,
+  homeCount,
+  awayCount,
+}: {
+  homeName: string;
+  awayName: string;
+  homeCount: number;
+  awayCount: number;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-muted">
+      <span className="font-semibold uppercase tracking-wide">🏥 Mimo hru</span>
+      <span>
+        <span className="font-semibold text-home">{homeName}</span>{" "}
+        {homeCount} {plural(homeCount)}
+      </span>
+      <span aria-hidden>·</span>
+      <span>
+        <span className="font-semibold text-away">{awayName}</span>{" "}
+        {awayCount} {plural(awayCount)}
+      </span>
+    </div>
+  );
+}
+
+/** Česká pluralizace „hráč / hráči / hráčů". */
+function plural(n: number): string {
+  if (n === 1) return "hráč";
+  if (n >= 2 && n <= 4) return "hráči";
+  return "hráčů";
 }
 
 function Empty({ children }: { children: React.ReactNode }) {

@@ -7,6 +7,9 @@ import { predictionReasons } from "./predictionReasons";
  */
 export function buildVerdict(ctx: MatchupContext): string {
   const { prediction } = ctx;
+  if (!prediction.available) {
+    return "Pro predikci je málo dat – některý tým má příliš málo zápasů.";
+  }
   const { lambdaHome, lambdaAway } = prediction;
   const score = `${lambdaHome.toFixed(1)}–${lambdaAway.toFixed(1)}`;
   const total = lambdaHome + lambdaAway;

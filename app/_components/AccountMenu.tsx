@@ -79,10 +79,34 @@ export function AccountMenu({ user }: { user: SessionUser | null }) {
           >
             Odhlásit
           </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setOpen(false);
+              void deleteAccount();
+            }}
+          >
+            <span className="text-warning">Smazat účet</span>
+          </MenuItem>
         </div>
       )}
     </div>
   );
+}
+
+/** GDPR: po potvrzení smaže účet a odhlásí. */
+async function deleteAccount() {
+  if (
+    !window.confirm(
+      "Opravdu smazat účet? Smažou se i tvoje oblíbená porovnání. Tuto akci nelze vrátit."
+    )
+  )
+    return;
+  const res = await fetch("/api/account", { method: "DELETE" });
+  if (res.ok) {
+    await signOut();
+  } else {
+    window.alert("Smazání se nezdařilo. Zkus to prosím později.");
+  }
 }
 
 function MenuItem({

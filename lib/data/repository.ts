@@ -1,6 +1,11 @@
-import type { Injury, League, Team } from "@/lib/types";
+import type { Injury, League, PredictionRow, Team } from "@/lib/types";
 import { isRealDataConfigured } from "@/lib/db";
 import { LEAGUES, buildTeams } from "./mock/seed";
+import { mockUpcomingPredictions, mockSettledPredictions } from "./mock/predictions";
+import {
+  getUpcomingPredictionRows,
+  getSettledPredictions,
+} from "./predictionStore";
 import * as real from "./realRepository";
 
 /**
@@ -48,6 +53,18 @@ export async function getCompareTeam(
 ): Promise<Team | null> {
   if (useReal) return real.getCompareTeam(teamId, leagueId, includeEuro);
   return allMockTeams().find((t) => t.id === teamId) ?? null;
+}
+
+/** Nadcházející predikce pro záložku (real = DB store, mock = generátor). */
+export async function getUpcomingPredictions(): Promise<PredictionRow[]> {
+  if (useReal) return getUpcomingPredictionRows();
+  return mockUpcomingPredictions();
+}
+
+/** Odehrané predikce s výsledkem pro track-record (real = DB, mock = generátor). */
+export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
+  if (useReal) return getSettledPredictions();
+  return mockSettledPredictions();
 }
 
 const MOCK_INJURY_REASONS = [

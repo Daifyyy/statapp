@@ -5,6 +5,8 @@ import {
   fetchLeagueTeams,
   fetchTeamFixtures,
   fetchFixtureStatistics,
+  fetchLeagueUpcomingFixtures,
+  fetchFixturesByIds,
   FINISHED_STATUSES,
 } from "../lib/data/apiFootball.ts";
 
@@ -43,6 +45,42 @@ async function main() {
       console.log(`tým ${teamStats.team.id}:`, types.join(", "));
     }
   }
+  console.log("\n=== /fixtures?next= (nadcházející, Premier League) ===");
+  const upcoming = await fetchLeagueUpcomingFixtures(PREMIER_LEAGUE, 5);
+  console.log("nadcházejících:", upcoming.length);
+  const u0 = upcoming[0];
+  console.log("ukázka:", {
+    id: u0?.fixture.id,
+    date: u0?.fixture.date,
+    status: u0?.fixture.status.short,
+    season: u0?.league.season,
+    homeId: u0?.teams.home.id,
+    awayId: u0?.teams.away.id,
+    goals: u0?.goals, // očekáváme {home:null, away:null}
+  });
+
+  // V létě jsou top ligy mimo sezónu → ověř i ligu, která v červnu hraje (Norsko 103).
+  console.log("\n=== /fixtures?next= (Eliteserien 103, letní sezóna) ===");
+  const upNor = await fetchLeagueUpcomingFixtures(103, 5);
+  console.log("nadcházejících:", upNor.length);
+  const n0 = upNor[0];
+  console.log("ukázka:", {
+    id: n0?.fixture.id,
+    date: n0?.fixture.date,
+    status: n0?.fixture.status.short,
+    season: n0?.league.season,
+    homeId: n0?.teams.home.id,
+    awayId: n0?.teams.away.id,
+    goals: n0?.goals,
+  });
+
+  const probeFixtureId = u0?.fixture.id ?? n0?.fixture.id;
+  if (probeFixtureId) {
+    console.log("\n=== /fixtures?ids= (batch dle ID) ===");
+    const byId = await fetchFixturesByIds([probeFixtureId]);
+    console.log("vráceno:", byId.length, "| status:", byId[0]?.fixture.status.short);
+  }
+
   console.log("\n✅ Sonda OK");
 }
 

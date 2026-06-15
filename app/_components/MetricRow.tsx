@@ -9,11 +9,13 @@ import type { MetricValue } from "@/lib/types";
  */
 export function MetricRow({
   label,
+  hint,
   home,
   away,
   lowerIsBetter,
 }: {
   label: string;
+  hint?: string;
   home: MetricValue | null;
   away: MetricValue | null;
   lowerIsBetter: boolean;
@@ -54,6 +56,16 @@ export function MetricRow({
           <Value value={h} low={home?.lowConfidence} highlight={better === "home"} accent="home" />
           <span className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted">
             {label}
+            {hint && (
+              <span
+                role="img"
+                aria-label={hint}
+                title={hint}
+                className="cursor-help text-muted/70"
+              >
+                ⓘ
+              </span>
+            )}
             <span className={`transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
           </span>
           <Value value={a} low={away?.lowConfidence} highlight={better === "away"} accent="away" alignRight />

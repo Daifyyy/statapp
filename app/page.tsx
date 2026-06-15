@@ -44,8 +44,9 @@ export default async function Home({
       <CompareApp leagues={leagues} initial={initial} user={user} />
       <footer className="mx-auto max-w-3xl px-4 py-8 text-center text-xs text-muted">
         <p>
-          Vážený průměr: minulá sezóna 15 % · posl. 10 zápasů 30 % · posl. 5
-          zápasů 55 %. Data: API-Football.
+          Hodnoty jsou vážený průměr tří oken — novější zápasy mají větší váhu:
+          minulá sezóna 15 % · posl. 10 zápasů 30 % · posl. 5 zápasů 55 %.
+          Klikni na metriku pro rozpad po oknech. Data: API-Football.
         </p>
         <p className="mt-2">
           <InstallLink />

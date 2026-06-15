@@ -2,8 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/authUser";
+import { allowRequest, tooMany } from "@/lib/rateLimit";
 
 // Oblíbená porovnání – PRO funkce. Drží IDs (re-run) i JSON snapshot (okamžité zobrazení).
+
+/** Max. počet oblíbených na uživatele (brání nafouknutí DB). */
+const MAX_FAVORITES = 50;
 
 const saveSchema = z.object({
   mode: z.enum(["CLUB", "NATIONAL"]),
@@ -37,6 +41,8 @@ export async function POST(req: Request) {
   if (user.tier !== "PRO")
     return NextResponse.json({ error: "Jen pro PRO" }, { status: 403 });
 
+  if (!allowRequest(`fav:${user.id}`, 30, 60_000)) return tooMany();
+
   const parsed = saveSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
     return NextResponse.json({ error: "Neplatná data" }, { status: 400 });
@@ -49,6 +55,21 @@ export async function POST(req: Request) {
     homeLeagueId: d.homeLeagueId,
     awayLeagueId: d.awayLeagueId,
   };
+
+  // Limit počtu: nové uložení zamítni nad strop (úprava existujícího projde).
+  const existing = await prisma.savedComparison.findUnique({
+    where: { userId_homeTeamId_awayTeamId_homeLeagueId_awayLeagueId: key },
+    select: { id: true },
+  });
+  if (!existing) {
+    const count = await prisma.savedComparison.count({ where: { userId: user.id } });
+    if (count >= MAX_FAVORITES) {
+      return NextResponse.json(
+        { error: `Dosažen limit ${MAX_FAVORITES} oblíbených. Nějaké smaž a zkus znovu.` },
+        { status: 409 }
+      );
+    }
+  }
   const data = {
     ...key,
     mode: d.mode,
