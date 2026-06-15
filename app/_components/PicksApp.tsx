@@ -1,14 +1,12 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
 import type { TrackRecord } from "@/lib/picks/trackRecord";
 import { TeamLogo } from "./TeamLogo";
-import { ThemeToggle } from "./ThemeToggle";
-import { AccountMenu } from "./AccountMenu";
+import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
 import type { SessionUser } from "./sessionUser";
 
@@ -112,19 +110,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <header className="flex items-center justify-between gap-3">
-        <Image src="/logoapp.png" alt="Predictapp" width={40} height={40} priority className="rounded-xl" />
-        <div className="flex items-center gap-2">
-          <Link
-            href="/"
-            className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
-          >
-            ⇄ Porovnání
-          </Link>
-          <ThemeToggle />
-          <AccountMenu user={user} />
-        </div>
-      </header>
+      <AppHeader user={user} nav={{ href: "/", label: "Porovnání", emoji: "⇄" }} />
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Predikční tipy</h1>
       <p className="mt-1 text-sm text-muted">
@@ -326,25 +312,25 @@ function PickRow({ pick }: { pick: MatchPick }) {
     <li>
       <Link
         href={href}
-        className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm transition hover:border-foreground/30"
+        className="block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm transition hover:border-foreground/30"
       >
-        <div className="w-14 shrink-0 text-[11px] text-muted">
-          {date}
-          <br />
-          {time}
-        </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
-          <TeamLogo src={pick.home.logoUrl} alt={pick.home.name} size={20} />
-          <span className="truncate font-medium text-home">{pick.home.name}</span>
-          <span className="text-muted">–</span>
-          <TeamLogo src={pick.away.logoUrl} alt={pick.away.name} size={20} />
-          <span className="truncate font-medium text-away">{pick.away.name}</span>
-        </div>
-        <div className="shrink-0 text-right">
-          <div className="text-sm font-bold tabular-nums text-foreground">
-            {Math.round(pick.prob * 100)} %
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-[11px] leading-tight text-muted">
+            {date} {time}
+          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+            <TeamLogo src={pick.home.logoUrl} alt={pick.home.name} size={20} />
+            <span className="min-w-0 truncate font-medium text-home">{pick.home.name}</span>
+            <span className="shrink-0 text-muted">–</span>
+            <TeamLogo src={pick.away.logoUrl} alt={pick.away.name} size={20} />
+            <span className="min-w-0 truncate font-medium text-away">{pick.away.name}</span>
           </div>
-          <div className="text-[10px] uppercase tracking-wide text-muted">{pick.explanation}</div>
+          <span className="shrink-0 text-sm font-bold tabular-nums text-foreground">
+            {Math.round(pick.prob * 100)} %
+          </span>
+        </div>
+        <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">
+          {pick.explanation}
         </div>
       </Link>
     </li>

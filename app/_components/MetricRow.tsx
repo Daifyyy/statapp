@@ -54,19 +54,19 @@ export function MetricRow({
       >
         <div className="flex items-center justify-between text-sm tabular-nums">
           <Value value={h} low={home?.lowConfidence} highlight={better === "home"} accent="home" />
-          <span className="flex items-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-            {label}
+          <span className="flex min-w-0 flex-1 items-center justify-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+            <span className="truncate">{label}</span>
             {hint && (
               <span
                 role="img"
                 aria-label={hint}
                 title={hint}
-                className="cursor-help text-muted/70"
+                className="shrink-0 cursor-help text-muted/70"
               >
                 ⓘ
               </span>
             )}
-            <span className={`transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
+            <span className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
           </span>
           <Value value={a} low={away?.lowConfidence} highlight={better === "away"} accent="away" alignRight />
         </div>

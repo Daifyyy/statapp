@@ -1,7 +1,5 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CompareResult,
@@ -21,8 +19,7 @@ import { InsightChips } from "./InsightChips";
 import { InjuryList } from "./InjuryList";
 import { TeamLogo } from "./TeamLogo";
 import { TeamCombobox } from "./TeamCombobox";
-import { ThemeToggle } from "./ThemeToggle";
-import { AccountMenu } from "./AccountMenu";
+import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
 import {
   FavoritesSection,
@@ -354,7 +351,23 @@ export function CompareApp({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <Header mode={mode} onMode={handleMode} user={user} />
+      <AppHeader
+        user={user}
+        nav={{ href: "/predikce", label: "Tipy", emoji: "📈" }}
+        share
+      />
+
+      <div className="mt-4">
+        <Segmented
+          options={[
+            { value: "CLUB" as EntityType, label: "Kluby" },
+            { value: "NATIONAL" as EntityType, label: "Reprezentace" },
+          ]}
+          value={mode}
+          onChange={handleMode}
+          ariaLabel="Typ porovnání"
+        />
+      </div>
 
       <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
         <div className="grid grid-cols-2 gap-3">
@@ -462,89 +475,6 @@ export function CompareApp({
   );
 }
 
-function Header({
-  mode,
-  onMode,
-  user,
-}: {
-  mode: EntityType;
-  onMode: (m: EntityType) => void;
-  user: SessionUser | null;
-}) {
-  return (
-    <header className="flex items-center justify-between gap-3">
-      <Image
-        src="/logoapp.png"
-        alt="Predictapp"
-        width={40}
-        height={40}
-        priority
-        className="rounded-xl"
-      />
-      <div className="flex items-center gap-2">
-        <Segmented
-          options={[
-            { value: "CLUB" as EntityType, label: "Kluby" },
-            { value: "NATIONAL" as EntityType, label: "Reprezentace" },
-          ]}
-          value={mode}
-          onChange={onMode}
-          compact
-          ariaLabel="Typ porovnání"
-        />
-        <Link
-          href="/predikce"
-          className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
-        >
-          📈 Tipy
-        </Link>
-        <ShareButton />
-        <ThemeToggle />
-        <AccountMenu user={user} />
-      </div>
-    </header>
-  );
-}
-
-function ShareButton() {
-  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
-  async function share() {
-    const url = window.location.href;
-    // Mobil: nativní share sheet (jen v secure kontextu). Zrušení uživatelem
-    // (AbortError) bereme jako tichý konec; jinou chybu řeší fallback na schránku.
-    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      try {
-        await navigator.share({ title: "Predictapp — porovnání týmů", url });
-        return;
-      } catch (e) {
-        if (e instanceof Error && e.name === "AbortError") return;
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      setState("copied");
-      setTimeout(() => setState("idle"), 1500);
-    } catch {
-      setState("error");
-      setTimeout(() => setState("idle"), 2500);
-    }
-  }
-  return (
-    <button
-      type="button"
-      onClick={share}
-      title="Sdílet odkaz na toto porovnání"
-      aria-label="Sdílet"
-      className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
-    >
-      {state === "copied"
-        ? "✓ Zkopírováno"
-        : state === "error"
-          ? "⚠ Nešlo zkopírovat"
-          : "🔗 Sdílet"}
-    </button>
-  );
-}
 
 function ResultPanel({
   result,
@@ -747,7 +677,7 @@ function TeamSelect({
 }) {
   const ring = accent === "home" ? "text-home" : "text-away";
   return (
-    <div className="rounded-xl border border-border bg-background p-3">
+    <div className="min-w-0 rounded-xl border border-border bg-background p-3">
       <p className={`text-[11px] font-semibold uppercase tracking-wide ${ring}`}>
         {heading}
       </p>
