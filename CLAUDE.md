@@ -133,9 +133,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`fetchFixturesByIds`). Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve
   `vercel.json`, `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá).
 - **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
-  `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}`, presety
-  `PICK_PRESETS`. API `app/api/picks` (PRO přes `getEntitlement`, FREE→`{locked}`),
-  `app/api/picks/stats` (track-record `lib/picks/trackRecord.ts`). UI `PicksApp.tsx`.
+  `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
+  `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (nadcházející tipy; PRO přes
+  `getEntitlement`, FREE→`{locked}`), `app/api/picks/stats` (`lib/picks/trackRecord.ts`:
+  `computeTrackRecord` = globální track-record + `backtestRule` = backtest navoleného
+  pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`.
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
   úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`).

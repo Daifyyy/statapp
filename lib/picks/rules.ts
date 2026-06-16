@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   MatchPick,
   MatchPrediction,
@@ -10,6 +11,13 @@ import type {
  * Pravidla výběru zápasů do predikční záložky. Čisté funkce nad uloženými
  * predikcemi (`PredictionRow`) – žádná data ani síť. Sdílí je API i testy.
  */
+
+/** Zod schéma pravidla (sdílí endpointy /api/picks i /api/picks/stats). */
+export const ruleSchema = z.object({
+  market: z.enum(["win", "over25", "btts"]).default("win"),
+  venue: z.enum(["home", "away", "any"]).default("home"),
+  minProb: z.coerce.number().min(0).max(1).default(0.65),
+});
 
 /** Přednastavená pravidla (rychlá volba v UI). */
 export const PICK_PRESETS: { id: string; label: string; rule: PickRule }[] = [

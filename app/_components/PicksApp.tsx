@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
-import type { TrackRecord } from "@/lib/picks/trackRecord";
+import type { BacktestResult, TrackRecord } from "@/lib/picks/trackRecord";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -65,6 +65,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [track, setTrack] = useState<TrackRecord | null>(null);
+  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
 
   const retry = useCallback(() => {
     void loadPicks(market, venue, minProb, () => true, {
@@ -88,19 +89,22 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
     };
   }, [market, venue, minProb]);
 
-  // Track-record načti jednou.
+  // Track-record (globální) + backtest strategie dle navolených parametrů.
   useEffect(() => {
     let active = true;
-    fetch("/api/picks/stats")
+    const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
+    fetch(`/api/picks/stats?${q.toString()}`)
       .then((r) => r.json())
       .then((d) => {
-        if (active && d.trackRecord) setTrack(d.trackRecord);
+        if (!active) return;
+        if (d.trackRecord) setTrack(d.trackRecord);
+        setBacktest(d.backtest ?? null);
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, []);
+  }, [market, venue, minProb]);
 
   function applyPreset(rule: { market: PickMarket; venue: Venue; minProb: number }) {
     setMarket(rule.market);
@@ -123,6 +127,9 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         </div>
       ) : (
         <>
+          {backtest && (
+            <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
+          )}
           {track && <TrackRecordPanel track={track} />}
 
           <RuleControls
@@ -163,6 +170,66 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         </>
       )}
     </main>
+  );
+}
+
+const VENUE_LABELS: Record<Venue, string> = {
+  home: "doma",
+  away: "venku",
+  any: "doma i venku",
+};
+
+function strategyLabel(market: PickMarket, venue: Venue, minProb: number): string {
+  const pct = Math.round(minProb * 100);
+  if (market === "over25") return `Přes 2.5 gólu ≥ ${pct} %`;
+  if (market === "btts") return `Oba skórují ≥ ${pct} %`;
+  return `Favorit ${VENUE_LABELS[venue]} ≥ ${pct} %`;
+}
+
+function StrategyPanel({
+  backtest,
+  market,
+  venue,
+  minProb,
+}: {
+  backtest: BacktestResult;
+  market: PickMarket;
+  venue: Venue;
+  minProb: number;
+}) {
+  const small = backtest.n > 0 && backtest.n < 30;
+  return (
+    <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Tvoje strategie v historii
+        </p>
+        <span className="text-[11px] text-muted">{backtest.n} vsazených tipů</span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted">{strategyLabel(market, venue, minProb)}</p>
+      {backtest.n === 0 ? (
+        <p className="mt-2 text-sm text-muted">
+          Žádné odehrané zápasy v historii neodpovídají tomuto pravidlu. Zkus nižší práh
+          nebo jiný trh.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-3xl font-bold tabular-nums text-foreground">
+              {Math.round((backtest.hitRate ?? 0) * 100)} %
+            </span>
+            <span className="text-sm text-muted">
+              úspěšnost ({backtest.hits} / {backtest.n})
+            </span>
+          </div>
+          {small && (
+            <p className="mt-2 text-[11px] text-warning">
+              Malý vzorek – čísla jsou zatím orientační.
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
