@@ -139,8 +139,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   tým může být z libovolné konfederace; forma z `fetchLastFixtures`, venue-neutrální).
   `runSettleResults` dotáhne skóre dle `fixtureId` (`fetchFixturesByIds`) bez ohledu na ligu.
   Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
-  `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). MS řádky
-  v `PicksApp` nemají proklik na plné porovnání (cross-konfederační deep-link by nesedl).
+  `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). Reprezentační
+  řádky v `PicksApp` nemají proklik na plné porovnání (cross-konfederační deep-link by nesedl;
+  detekce přes `isNationalTournamentLeague`).
 - **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
   `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
   `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (nadcházející tipy; PRO přes
@@ -149,7 +150,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`.
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
-  úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`).
+  úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`). Počítá **jen
+  z `modelVersion=MODEL_VERSION`** (kalibrace je per verzi modelu) a chce **≥30 odehraných**
+  predikcí, jinak je výsledek orientační. `DC_RHO` je zatím publikovaný default −0.13
+  (Dixon–Coles 1997), nekalibrovaný na vlastních datech – čeká na dost settlnutých predikcí
+  (první dataset se sbírá z MS 2026; settle dělá cron `settle-results`).
 - **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
