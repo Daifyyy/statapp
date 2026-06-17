@@ -78,9 +78,13 @@ export const CONFEDERATIONS: Confederation[] = [
  * Reprezentační turnaje (finálové), které sleduje predikční pipeline. Na rozdíl od
  * konfederací (kvalifikace, synthetic id 9001+) jde o reálná league id turnaje, ze
  * kterých se tahají fixtures; meta týmů se bere přímo z fixture (tým z libovolné
- * konfederace). Klient-safe (jen data) → sdílí ho pipeline i UI. WC finále = id 1.
+ * konfederace). Klient-safe (jen data) → sdílí ho pipeline i UI. Mimo turnaj vrací
+ * API prázdno (záložka to zvládá). Ligové formáty (Nations League) sem nepatří –
+ * predikce je staví jako venue-neutrální, což sedí jen na finálové turnaje.
+ *   1 = World Cup, 4 = Euro Championship, 9 = Copa América,
+ *   6 = Africa Cup of Nations, 7 = Asian Cup, 22 = CONCACAF Gold Cup.
  */
-export const NATIONAL_TOURNAMENT_LEAGUE_IDS = [1];
+export const NATIONAL_TOURNAMENT_LEAGUE_IDS = [1, 4, 9, 6, 7, 22];
 
 export function isNationalTournamentLeague(leagueId: number): boolean {
   return NATIONAL_TOURNAMENT_LEAGUE_IDS.includes(leagueId);
