@@ -125,8 +125,10 @@ const fixtureItemSchema = z.object({
   }),
   league: z.object({ id: z.number(), season: z.number(), name: z.string() }),
   teams: z.object({
-    home: z.object({ id: z.number() }),
-    away: z.object({ id: z.number() }),
+    // name/logo vrací /fixtures u obou týmů – potřebné pro meta reprezentací
+    // v predikci turnaje (tým z libovolné konfederace, mimo konfederační seznam).
+    home: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
+    away: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
   }),
   goals: z.object({
     home: z.number().nullable(),

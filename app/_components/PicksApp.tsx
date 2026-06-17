@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
+import { isNationalTournamentLeague } from "@/lib/data/catalog";
 import type { BacktestResult, TrackRecord } from "@/lib/picks/trackRecord";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
@@ -374,14 +375,15 @@ function PickRow({ pick }: { pick: MatchPick }) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  // Reprezentační turnaje (MS) se v plném porovnání neotevírají – týmy jsou
+  // cross-konfederační a deep-link (mode=CLUB) by nesedl → vykreslíme neklikací kartu.
+  const national = isNationalTournamentLeague(pick.leagueId);
   const href = `/?mode=CLUB&homeLeague=${pick.leagueId}&awayLeague=${pick.leagueId}&home=${pick.home.id}&away=${pick.away.id}`;
-  return (
-    <li>
-      <Link
-        href={href}
-        className="block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm transition hover:border-foreground/30"
-      >
-        <div className="flex items-center gap-2">
+  const cardClass =
+    "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
+  const inner = (
+    <>
+      <div className="flex items-center gap-2">
           <span className="shrink-0 text-[11px] leading-tight text-muted">
             {date} {time}
           </span>
@@ -396,10 +398,23 @@ function PickRow({ pick }: { pick: MatchPick }) {
             {Math.round(pick.prob * 100)} %
           </span>
         </div>
-        <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">
-          {pick.explanation}
-        </div>
-      </Link>
+      <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">
+        {pick.explanation}
+      </div>
+    </>
+  );
+  return (
+    <li>
+      {national ? (
+        <div className={cardClass}>{inner}</div>
+      ) : (
+        <Link
+          href={href}
+          className={`${cardClass} transition hover:border-foreground/30`}
+        >
+          {inner}
+        </Link>
+      )}
     </li>
   );
 }

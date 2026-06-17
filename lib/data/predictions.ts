@@ -1,4 +1,6 @@
 import { getCompareTeam } from "./repository";
+import { getCompareNationalTeamFromFixture } from "./realRepository";
+import { NATIONAL_TOURNAMENT_LEAGUE_IDS, isNationalTournamentLeague } from "./catalog";
 import { compareTeams } from "@/lib/stats/compare";
 import {
   fetchLeagueUpcomingFixtures,
@@ -20,18 +22,30 @@ import {
 /** Verze modelu – bump při změně DC_RHO/logiky (kvůli kalibraci per verzi). */
 export const MODEL_VERSION = 1;
 
-/** Sledované soutěže (uživatelská volba: Top 5 lig). */
+/** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
 export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];
+
+/**
+ * Všechny sledované soutěže pro predikci: klubové ligy + reprezentační turnaje
+ * (`NATIONAL_TOURNAMENT_LEAGUE_IDS` z catalogu – meta týmů z fixture). Mimo turnaj
+ * vrací API prázdno.
+ */
+export const ALL_PREDICTION_LEAGUES = [
+  ...PREDICTION_LEAGUES,
+  ...NATIONAL_TOURNAMENT_LEAGUE_IDS,
+];
 
 /** Kolik nejbližších zápasů ligy predikovat (pokryje kolo + rezervu). */
 const UPCOMING_PER_LEAGUE = 15;
 
 /**
  * Spočítá a uloží predikce nadcházejících zápasů. `leagueIds` umožní ruční/dávkový
- * běh jedné ligy (mimo sezónu Top 5 vrací prázdno). Idempotentní (upsert).
+ * běh jedné soutěže (mimo sezónu vrací prázdno). Idempotentní (upsert). Klubové ligy
+ * staví týmy přes konfederačně-nezávislý `getCompareTeam`; reprezentační turnaje
+ * (MS) staví týmy s meta z fixture (tým z libovolné konfederace).
  */
 export async function runPredictUpcoming(
-  leagueIds: number[] = PREDICTION_LEAGUES
+  leagueIds: number[] = ALL_PREDICTION_LEAGUES
 ): Promise<{ leagues: number; fixtures: number; predicted: number }> {
   let fixtures = 0;
   let predicted = 0;
@@ -42,12 +56,25 @@ export async function runPredictUpcoming(
     } catch {
       continue; // výpadek jedné ligy nezastaví ostatní
     }
+    const national = isNationalTournamentLeague(leagueId);
     for (const f of upcoming) {
       fixtures++;
       try {
         const [home, away] = await Promise.all([
-          getCompareTeam(f.teams.home.id, leagueId, false),
-          getCompareTeam(f.teams.away.id, leagueId, false),
+          national
+            ? getCompareNationalTeamFromFixture(f.teams.home.id, leagueId, {
+                name: f.teams.home.name,
+                logoUrl: f.teams.home.logo,
+                country: f.teams.home.name,
+              })
+            : getCompareTeam(f.teams.home.id, leagueId, false),
+          national
+            ? getCompareNationalTeamFromFixture(f.teams.away.id, leagueId, {
+                name: f.teams.away.name,
+                logoUrl: f.teams.away.logo,
+                country: f.teams.away.name,
+              })
+            : getCompareTeam(f.teams.away.id, leagueId, false),
         ]);
         if (!home || !away) continue;
         const result = compareTeams(home, away);

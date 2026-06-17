@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runPredictUpcoming, PREDICTION_LEAGUES } from "@/lib/data/predictions";
+import { runPredictUpcoming, ALL_PREDICTION_LEAGUES } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 
@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   }
 
   const leagueParam = new URL(req.url).searchParams.get("league");
-  const leagueIds = leagueParam ? [Number(leagueParam)] : PREDICTION_LEAGUES;
+  const leagueIds = leagueParam ? [Number(leagueParam)] : ALL_PREDICTION_LEAGUES;
 
   try {
     const stats = await runPredictUpcoming(leagueIds);

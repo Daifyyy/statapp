@@ -127,11 +127,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   a ukládají do tabulky `FixturePrediction` (predikce + po odehrání výsledek). Záložka
   `/predikce` i track-record **jen ČTOU z DB** – nikdy se nepočítá živě per request
   (1 zápas ≈ 26–35 API volání → drahé). Studené naplnění dělej lokálně / `?league=ID`.
-- **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming` (Top-5 lig
-  `PREDICTION_LEAGUES`) → `fetchLeagueUpcomingFixtures` + `getCompareTeam`×2 + `compareTeams`
-  → `upsertPrediction` (`predictionStore.ts`). `runSettleResults` dotáhne skóre
-  (`fetchFixturesByIds`). Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve
-  `vercel.json`, `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá).
+- **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming`
+  (`ALL_PREDICTION_LEAGUES` = Top-5 klubových lig `PREDICTION_LEAGUES` +
+  reprezentační turnaje `NATIONAL_TOURNAMENT_LEAGUE_IDS` z `catalog.ts`, MS finále = id 1)
+  → `fetchLeagueUpcomingFixtures` + ×2 build týmů + `compareTeams` → `upsertPrediction`
+  (`predictionStore.ts`). Build se větví: klub → `getCompareTeam`; reprezentační turnaj →
+  `getCompareNationalTeamFromFixture` (meta název/logo **z fixture**, ne z konfederace –
+  tým může být z libovolné konfederace; forma z `fetchLastFixtures`, venue-neutrální).
+  `runSettleResults` dotáhne skóre dle `fixtureId` (`fetchFixturesByIds`) bez ohledu na ligu.
+  Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
+  `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). MS řádky
+  v `PicksApp` nemají proklik na plné porovnání (cross-konfederační deep-link by nesedl).
 - **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
   `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
   `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (nadcházející tipy; PRO přes

@@ -182,13 +182,34 @@ export async function getTeamInjuries(
 
 // ---- Sestavení reprezentace ----
 
+type NationalMeta = { name: string; logoUrl: string; country: string };
+
+/**
+ * Sestaví reprezentaci pro predikční pipeline turnaje (MS), kde meta (název/logo)
+ * nese sama fixture – tým může pocházet z libovolné konfederace, takže konfederační
+ * lookup (`getTeamsByLeague`) by ho nenašel. Forma se táhne z `fetchLastFixtures`
+ * (nezávislé na konfederaci). `leagueId` = id turnaje (jen pro `Team.leagueId`).
+ */
+export function getCompareNationalTeamFromFixture(
+  teamId: number,
+  leagueId: number,
+  meta: NationalMeta
+): Promise<Team | null> {
+  return buildNationalTeam(teamId, leagueId, meta);
+}
+
 async function buildNationalTeam(
   teamId: number,
-  leagueId: number
+  leagueId: number,
+  metaOverride?: NationalMeta
 ): Promise<Team | null> {
-  // Název + logo z (cachovaného) seznamu reprezentací dané konfederace.
-  const teams = await getTeamsByLeague(leagueId);
-  const meta = teams.find((t) => t.id === teamId);
+  // Název + logo: buď z (cachovaného) konfederačního seznamu (běžný režim), nebo
+  // přímo z fixture (predikce turnaje – tým může být z libovolné konfederace).
+  let meta: NationalMeta | undefined = metaOverride;
+  if (!meta) {
+    const teams = await getTeamsByLeague(leagueId);
+    meta = teams.find((t) => t.id === teamId);
+  }
   if (!meta) return null;
 
   const fixtures = await cachedJson(

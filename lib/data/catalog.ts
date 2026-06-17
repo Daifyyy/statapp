@@ -74,6 +74,18 @@ export const CONFEDERATIONS: Confederation[] = [
   { id: 9006, name: "Reprezentace – Oceánie (OFC)", code: "OFC", wcQualLeagueId: 33, season: 2026 },
 ];
 
+/**
+ * Reprezentační turnaje (finálové), které sleduje predikční pipeline. Na rozdíl od
+ * konfederací (kvalifikace, synthetic id 9001+) jde o reálná league id turnaje, ze
+ * kterých se tahají fixtures; meta týmů se bere přímo z fixture (tým z libovolné
+ * konfederace). Klient-safe (jen data) → sdílí ho pipeline i UI. WC finále = id 1.
+ */
+export const NATIONAL_TOURNAMENT_LEAGUE_IDS = [1];
+
+export function isNationalTournamentLeague(leagueId: number): boolean {
+  return NATIONAL_TOURNAMENT_LEAGUE_IDS.includes(leagueId);
+}
+
 /** URL loga týmu z jeho ID (stejný tvar jako API-Football `team.logo`). */
 export const teamLogoUrl = (id: number) =>
   `https://media.api-sports.io/football/teams/${id}.png`;

@@ -1,6 +1,10 @@
 import type { PredictionRow, Team } from "@/lib/types";
 import { compareTeams } from "@/lib/stats/compare";
+import { NATIONAL_TOURNAMENT_LEAGUE_IDS } from "../catalog";
 import { buildTeams } from "./seed";
+
+/** Mock id reprezentačního turnaje (MS) – sjednoceno s catalogem kvůli UI. */
+const TOURNAMENT_LEAGUE_ID = NATIONAL_TOURNAMENT_LEAGUE_IDS[0];
 
 /**
  * Deterministické mock predikce, aby predikční záložka i track-record fungovaly
@@ -15,13 +19,14 @@ function rowFrom(
   kickoff: string,
   status: string,
   homeGoals: number | null,
-  awayGoals: number | null
+  awayGoals: number | null,
+  leagueId: number = home.leagueId
 ): PredictionRow {
   const r = compareTeams(home, away);
   const p = r.prediction!;
   return {
     fixtureId,
-    leagueId: home.leagueId,
+    leagueId,
     season: 2025,
     kickoff,
     homeTeamId: home.id,
@@ -58,22 +63,47 @@ function clubPairs(): [Team, Team][] {
   return pairs;
 }
 
+/** Dvojice reprezentací (po sobě jdoucí) – pro mock predikce turnaje (MS). */
+function nationalPairs(): [Team, Team][] {
+  const nats = buildTeams().filter((t) => t.entityType === "NATIONAL");
+  const pairs: [Team, Team][] = [];
+  for (let i = 0; i + 1 < nats.length; i += 2) pairs.push([nats[i], nats[i + 1]]);
+  return pairs;
+}
+
 const DAY = 24 * 60 * 60 * 1000;
 
-/** Nadcházející mock predikce (status NS, výkop v budoucnu). */
+/** Nadcházející mock predikce (status NS, výkop v budoucnu) – kluby + pár zápasů MS. */
 export function mockUpcomingPredictions(): PredictionRow[] {
-  const pairs = clubPairs().slice(0, 8);
-  return pairs.map(([h, a], i) =>
-    rowFrom(
-      h,
-      a,
-      900000 + i,
-      new Date(Date.now() + (i + 1) * DAY).toISOString(),
-      "NS",
-      null,
-      null
-    )
-  );
+  const club = clubPairs()
+    .slice(0, 8)
+    .map(([h, a], i) =>
+      rowFrom(
+        h,
+        a,
+        900000 + i,
+        new Date(Date.now() + (i + 1) * DAY).toISOString(),
+        "NS",
+        null,
+        null
+      )
+    );
+  // Reprezentační turnaj (MS): leagueId = id turnaje (UI pak skryje proklik).
+  const national = nationalPairs()
+    .slice(0, 3)
+    .map(([h, a], i) =>
+      rowFrom(
+        h,
+        a,
+        905000 + i,
+        new Date(Date.now() + (i + 1) * DAY).toISOString(),
+        "NS",
+        null,
+        null,
+        TOURNAMENT_LEAGUE_ID
+      )
+    );
+  return [...club, ...national];
 }
 
 /** Odehrané mock predikce s výsledkem (pro track-record). Každý 3. = překvapení. */
