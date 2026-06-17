@@ -185,23 +185,39 @@ export async function getTeamInjuries(
 type NationalMeta = { name: string; logoUrl: string; country: string };
 
 /**
- * Sestaví reprezentaci pro predikční pipeline turnaje (MS), kde meta (název/logo)
- * nese sama fixture – tým může pocházet z libovolné konfederace, takže konfederační
- * lookup (`getTeamsByLeague`) by ho nenašel. Forma se táhne z `fetchLastFixtures`
- * (nezávislé na konfederaci). `leagueId` = id turnaje (jen pro `Team.leagueId`).
+ * Sestaví reprezentaci pro predikci **finálového turnaje** (MS/EURO/…), kde meta
+ * (název/logo) nese sama fixture – tým může pocházet z libovolné konfederace, takže
+ * konfederační lookup (`getTeamsByLeague`) by ho nenašel. Forma z `fetchLastFixtures`
+ * (nezávislé na konfederaci). **Venue-neutrální** (turnaje na neutrální půdě → vše
+ * do TOTAL, bez domácí výhody). `leagueId` = id soutěže (jen pro `Team.leagueId`).
  */
 export function getCompareNationalTeamFromFixture(
   teamId: number,
   leagueId: number,
   meta: NationalMeta
 ): Promise<Team | null> {
-  return buildNationalTeam(teamId, leagueId, meta);
+  return buildNationalTeam(teamId, leagueId, meta, true);
+}
+
+/**
+ * Jako výše, ale pro soutěže s **reálným domácí/venku** (Liga národů) → build s venue
+ * splitem (HOME/AWAY z fixtures), aby predikce zachytila domácí výhodu přes běžnou
+ * venue-specific mašinerii. (Pár turnajových zápasů v poolu na neutrální půdě dostane
+ * nominální home/away – přijatelný šum proti reálné home-away historii týmu.)
+ */
+export function getCompareNationalHomeAwayTeamFromFixture(
+  teamId: number,
+  leagueId: number,
+  meta: NationalMeta
+): Promise<Team | null> {
+  return buildNationalTeam(teamId, leagueId, meta, false);
 }
 
 async function buildNationalTeam(
   teamId: number,
   leagueId: number,
-  metaOverride?: NationalMeta
+  metaOverride?: NationalMeta,
+  neutral = true
 ): Promise<Team | null> {
   // Název + logo: buď z (cachovaného) konfederačního seznamu (běžný režim), nebo
   // přímo z fixture (predikce turnaje – tým může být z libovolné konfederace).
@@ -219,12 +235,15 @@ async function buildNationalTeam(
   );
   const finished = onlyFinished(fixtures);
 
-  const leagueMatches = await assemble(teamId, "national", finished, (f) => ({
+  const assembled = await assemble(teamId, "national", finished, (f) => ({
     competitive: !isFriendly(f.league.name),
-    // Reprezentace bereme jako venue-neutrální: hrají většinou na neutrální půdě /
-    // turnajích a API doma/venku nehlásí spolehlivě → doma/venku u nich nedělíme.
-    isNeutral: true,
+    isNeutral: neutral,
   }));
+  // `isNeutral` přepíšeme po načtení: kontext "national" v MatchStatCache je sdílený
+  // mezi venue-neutrálním (turnaj) i home/away (Liga národů) buildem téhož týmu, takže
+  // build nesmí záviset na tom, kterým režimem se cache zrovna naplnila. Venue-neutrální
+  // → vše do TOTAL; home/away → HOME/AWAY z `isHome` (dopočteno v buildMatchStat).
+  const leagueMatches = assembled.map((m) => ({ ...m, isNeutral: neutral }));
 
   return {
     id: teamId,

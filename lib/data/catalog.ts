@@ -75,19 +75,34 @@ export const CONFEDERATIONS: Confederation[] = [
 ];
 
 /**
- * Reprezentační turnaje (finálové), které sleduje predikční pipeline. Na rozdíl od
- * konfederací (kvalifikace, synthetic id 9001+) jde o reálná league id turnaje, ze
- * kterých se tahají fixtures; meta týmů se bere přímo z fixture (tým z libovolné
- * konfederace). Klient-safe (jen data) → sdílí ho pipeline i UI. Mimo turnaj vrací
- * API prázdno (záložka to zvládá). Ligové formáty (Nations League) sem nepatří –
- * predikce je staví jako venue-neutrální, což sedí jen na finálové turnaje.
- *   1 = World Cup, 4 = Euro Championship, 9 = Copa América,
- *   6 = Africa Cup of Nations, 7 = Asian Cup, 22 = CONCACAF Gold Cup.
+ * Reprezentační soutěže sledované predikční pipeline. Na rozdíl od konfederací
+ * (kvalifikace, synthetic id 9001+) jde o reálná league id soutěže, ze kterých se
+ * tahají fixtures; meta týmů se bere přímo z fixture (tým z libovolné konfederace).
+ * Klient-safe (jen data) → sdílí ho pipeline i UI. Mimo sezónu vrací API prázdno.
+ *
+ * Dvě kategorie podle toho, jak se staví tým pro predikci:
+ *  - **Finálové turnaje** (neutrální půda) → venue-neutrální build (vše do TOTAL,
+ *    bez domácí výhody): MS=1, EURO=4, Copa América=9, AFCON=6, Asian Cup=7, Gold Cup=22.
+ *  - **Soutěže s reálným domácí/venku** (Liga národů) → build s venue splitem
+ *    (HOME/AWAY z fixtures → predikce zachytí domácí výhodu): UEFA NL=5, CONCACAF NL=536.
  */
 export const NATIONAL_TOURNAMENT_LEAGUE_IDS = [1, 4, 9, 6, 7, 22];
+export const NATIONAL_HOME_AWAY_LEAGUE_IDS = [5, 536];
 
+/** Všechna reprezentační league id sledovaná predikcí (turnaje + home/away soutěže). */
+export const ALL_NATIONAL_PREDICTION_LEAGUE_IDS = [
+  ...NATIONAL_TOURNAMENT_LEAGUE_IDS,
+  ...NATIONAL_HOME_AWAY_LEAGUE_IDS,
+];
+
+/** Je to reprezentační soutěž (jakákoli) – pipeline routing + UI (skrytí prokliku). */
 export function isNationalTournamentLeague(leagueId: number): boolean {
-  return NATIONAL_TOURNAMENT_LEAGUE_IDS.includes(leagueId);
+  return ALL_NATIONAL_PREDICTION_LEAGUE_IDS.includes(leagueId);
+}
+
+/** Má soutěž reálné domácí/venku (Liga národů) → build s venue splitem (ne neutrální)? */
+export function isNationalHomeAwayLeague(leagueId: number): boolean {
+  return NATIONAL_HOME_AWAY_LEAGUE_IDS.includes(leagueId);
 }
 
 /** URL loga týmu z jeho ID (stejný tvar jako API-Football `team.logo`). */

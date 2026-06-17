@@ -129,8 +129,10 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (1 zápas ≈ 26–35 API volání → drahé). Studené naplnění dělej lokálně / `?league=ID`.
 - **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming`
   (`ALL_PREDICTION_LEAGUES` = Top-5 klubových lig `PREDICTION_LEAGUES` + reprezentační
-  finálové turnaje `NATIONAL_TOURNAMENT_LEAGUE_IDS` z `catalog.ts`: MS=1, EURO=4, Copa
-  América=9, AFCON=6, Asian Cup=7, Gold Cup=22; ligové formáty jako Nations League ne)
+  soutěže z `catalog.ts`: finálové turnaje `NATIONAL_TOURNAMENT_LEAGUE_IDS` (MS=1, EURO=4,
+  Copa América=9, AFCON=6, Asian Cup=7, Gold Cup=22) stavěné **venue-neutrálně**, a soutěže
+  s reálným domácí/venku `NATIONAL_HOME_AWAY_LEAGUE_IDS` (UEFA NL=5, CONCACAF NL=536)
+  stavěné s **HOME/AWAY splitem** → predikce u nich zachytí domácí výhodu)
   → `fetchLeagueUpcomingFixtures` + ×2 build týmů + `compareTeams` → `upsertPrediction`
   (`predictionStore.ts`). Build se větví: klub → `getCompareTeam`; reprezentační turnaj →
   `getCompareNationalTeamFromFixture` (meta název/logo **z fixture**, ne z konfederace –
