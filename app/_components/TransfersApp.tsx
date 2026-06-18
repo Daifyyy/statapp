@@ -12,49 +12,34 @@ interface LeagueLite {
   name: string;
 }
 
-type Tab = "transfers" | "balance";
-
 interface TransfersResponse {
-  transfers?: Transfer[];
   balances?: ClubTransferBalance[];
-  balancesLocked?: boolean;
+  transfers?: Transfer[];
+  detailLocked?: boolean;
   error?: string;
 }
 
-/** Kompaktní částka v EUR po česku: „20 mil. €", „500 tis. €". */
-function fmtEur(n: number): string {
-  const a = Math.abs(n);
-  if (a >= 1e6) return `${+(a / 1e6).toFixed(a >= 1e7 ? 0 : 1)} mil. €`;
-  if (a >= 1e3) return `${Math.round(a / 1e3)} tis. €`;
-  return `${a} €`;
-}
-
 const CATEGORY_LABELS: Record<TransferCategory, string> = {
-  permanent: "Trvalé",
+  permanent: "Trvalý přestup",
   loan: "Hostování",
-  loanReturn: "Návraty",
-  free: "Zdarma",
+  loanReturn: "Návrat z hostování",
+  free: "Volný hráč",
   other: "Ostatní",
 };
-// Pořadí zobrazení kategorií.
-const CATEGORY_ORDER: TransferCategory[] = [
-  "permanent",
-  "loan",
-  "loanReturn",
-  "free",
-  "other",
-];
 
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" });
+/** Počty pro aktuální filtr: jen trvalé vs. všechny typy. */
+function scopeCounts(b: ClubTransferBalance, showAll: boolean) {
+  return showAll
+    ? { inN: b.inCount, outN: b.outCount }
+    : { inN: b.inByCategory.permanent, outN: b.outByCategory.permanent };
 }
 
 interface TransfersSetters {
   setLoading: (v: boolean) => void;
   setError: (v: string | null) => void;
-  setTransfers: (v: Transfer[] | null) => void;
   setBalances: (v: ClubTransferBalance[] | null) => void;
-  setBalancesLocked: (v: boolean) => void;
+  setTransfers: (v: Transfer[] | null) => void;
+  setLocked: (v: boolean) => void;
 }
 
 // Mimo komponentu (vzor PicksApp): žádné synchronní setState přímo v těle efektu.
@@ -71,9 +56,9 @@ async function loadTransfers(
     const d = (await r.json()) as TransfersResponse;
     if (!r.ok || d.error) throw new Error(d.error ?? "Chyba přestupů");
     if (!isActive()) return;
-    s.setTransfers(d.transfers ?? []);
-    s.setBalances(d.balances ?? null);
-    s.setBalancesLocked(Boolean(d.balancesLocked));
+    s.setBalances(d.balances ?? []);
+    s.setTransfers(d.transfers ?? null);
+    s.setLocked(Boolean(d.detailLocked));
   } catch (e) {
     if (isActive()) s.setError(e instanceof Error ? e.message : "Chyba přestupů");
   } finally {
@@ -90,11 +75,11 @@ export function TransfersApp({
 }) {
   const allIds = useMemo(() => leagues.map((l) => l.id), [leagues]);
   const [selected, setSelected] = useState<number[]>(allIds);
-  const [tab, setTab] = useState<Tab>("transfers");
+  const [showAll, setShowAll] = useState(false); // default: jen trvalé přestupy
 
-  const [transfers, setTransfers] = useState<Transfer[] | null>(null);
   const [balances, setBalances] = useState<ClubTransferBalance[] | null>(null);
-  const [balancesLocked, setBalancesLocked] = useState(false);
+  const [transfers, setTransfers] = useState<Transfer[] | null>(null);
+  const [locked, setLocked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,9 +88,9 @@ export function TransfersApp({
     void loadTransfers(selected, () => active, {
       setLoading,
       setError,
-      setTransfers,
       setBalances,
-      setBalancesLocked,
+      setTransfers,
+      setLocked,
     });
     return () => {
       active = false;
@@ -119,6 +104,14 @@ export function TransfersApp({
     });
   }
 
+  // Kluby s aktivitou v aktuálním filtru, řazené dle počtu přestupů.
+  const clubs = useMemo(() => {
+    return (balances ?? [])
+      .map((b) => ({ b, ...scopeCounts(b, showAll) }))
+      .filter((x) => x.inN + x.outN > 0)
+      .sort((a, b) => b.inN + b.outN - (a.inN + a.outN));
+  }, [balances, showAll]);
+
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
       <AppHeader
@@ -131,7 +124,7 @@ export function TransfersApp({
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>
       <p className="mt-1 text-sm text-muted">
-        Aktuální přestupy top-5 evropských lig a bilance nákupů a prodejů klubů.
+        Přehled podle klubů top-5 lig za aktuální přestupové období. Klikni na klub pro detail.
       </p>
 
       {/* Filtr lig – chips (mobile-first, žádný nativní multiselect → bez zoomu/shiftu) */}
@@ -156,34 +149,55 @@ export function TransfersApp({
         })}
       </div>
 
-      {/* Přepínač sekcí */}
-      <div className="mt-4 inline-flex rounded-full border border-border bg-surface p-0.5 text-sm">
-        <TabButton active={tab === "transfers"} onClick={() => setTab("transfers")}>
-          Přestupy
-        </TabButton>
-        <TabButton active={tab === "balance"} onClick={() => setTab("balance")}>
-          Bilance klubů
-        </TabButton>
+      {/* Přepínač rozsahu: jen trvalé vs. vše */}
+      <div className="mt-3 inline-flex rounded-full border border-border bg-surface p-0.5 text-sm">
+        <Pill active={!showAll} onClick={() => setShowAll(false)}>
+          Jen trvalé
+        </Pill>
+        <Pill active={showAll} onClick={() => setShowAll(true)}>
+          Vše (i hostování)
+        </Pill>
       </div>
 
-      {loading && !transfers ? (
+      {locked && (
+        <div className="mt-4">
+          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+          <p className="mt-2 text-center text-[11px] text-muted">
+            Přehled počtů je zdarma; detail (kteří hráči) je součástí PRO.
+          </p>
+        </div>
+      )}
+
+      {loading && !balances ? (
         <Skeleton />
       ) : error ? (
         <Empty>{error}</Empty>
-      ) : tab === "transfers" ? (
-        <TransferList transfers={transfers ?? []} />
-      ) : balancesLocked ? (
-        <div className="mt-4">
-          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
-        </div>
+      ) : clubs.length === 0 ? (
+        <Empty>
+          {showAll
+            ? "Za aktuální přestupové období nemáme pro vybrané ligy žádné přestupy. Mimo přestupní okno (typicky mimo leden a léto) bývá prázdno."
+            : "Žádné trvalé přestupy v aktuálním období. Zkus přepnout na „Vše“ (hostování) nebo jinou ligu."}
+        </Empty>
       ) : (
-        <BalanceTable balances={balances ?? []} transfers={transfers ?? []} />
+        <ul className="mt-4 space-y-2">
+          {clubs.map(({ b, inN, outN }) => (
+            <ClubRow
+              key={b.teamId}
+              balance={b}
+              inN={inN}
+              outN={outN}
+              showAll={showAll}
+              transfers={transfers}
+              expandable={!locked}
+            />
+          ))}
+        </ul>
       )}
     </main>
   );
 }
 
-function TabButton({
+function Pill({
   active,
   onClick,
   children,
@@ -205,158 +219,105 @@ function TabButton({
   );
 }
 
-function TransferList({ transfers }: { transfers: Transfer[] }) {
-  if (transfers.length === 0) {
-    return (
-      <Empty>
-        Žádné aktuální přestupy. Mimo přestupní okno (typicky mimo leden a léto) bývá
-        seznam prázdný – zkus jinou ligu nebo se vrať během okna.
-      </Empty>
-    );
-  }
-  return (
-    <ul className="mt-4 space-y-2">
-      {transfers.map((t) => (
-        <li
-          key={`${t.playerId}:${t.date}:${t.inTeamId}:${t.outTeamId}`}
-          className="rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-sm font-medium text-foreground">
-              {t.playerName}
-            </span>
-            <span className="shrink-0 text-[11px] text-muted">{fmtDate(t.date)}</span>
-          </div>
-          <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
-            <TeamLogo src={t.outTeamLogo ?? undefined} alt={t.outTeamName ?? "?"} size={16} />
-            <span className="min-w-0 truncate">{t.outTeamName ?? "—"}</span>
-            <span aria-hidden className="shrink-0">→</span>
-            <TeamLogo src={t.inTeamLogo ?? undefined} alt={t.inTeamName ?? "?"} size={16} />
-            <span className="min-w-0 truncate">{t.inTeamName ?? "—"}</span>
-            <span className="ml-auto shrink-0 font-semibold text-foreground">
-              {t.feeEur != null ? fmtEur(t.feeEur) : (t.type ?? "—")}
-            </span>
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function BalanceTable({
-  balances,
+function ClubRow({
+  balance: b,
+  inN,
+  outN,
+  showAll,
   transfers,
+  expandable,
 }: {
-  balances: ClubTransferBalance[];
-  transfers: Transfer[];
+  balance: ClubTransferBalance;
+  inN: number;
+  outN: number;
+  showAll: boolean;
+  transfers: Transfer[] | null;
+  expandable: boolean;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(null);
-  if (balances.length === 0) {
-    return <Empty>Pro vybrané ligy zatím nemáme data o přestupech.</Empty>;
-  }
-  return (
+  const [open, setOpen] = useState(false);
+
+  const clubTransfers = useMemo(() => {
+    if (!transfers) return [];
+    return transfers.filter(
+      (t) =>
+        (t.inTeamId === b.teamId || t.outTeamId === b.teamId) &&
+        (showAll || t.category === "permanent")
+    );
+  }, [transfers, b.teamId, showAll]);
+
+  const header = (
     <>
-      <p className="mt-4 text-[11px] text-muted">
-        Bilance podle počtu a typu přestupů (API neuvádí ceny). ↓ příchody, ↑ odchody;
-        v řádku trvalé a hostování. Klikni na klub pro detail.
-      </p>
-      <div className="mt-2 space-y-2">
-        {balances.map((b) => {
-          const open = expanded === b.teamId;
-          const clubTransfers = transfers.filter(
-            (t) => t.inTeamId === b.teamId || t.outTeamId === b.teamId
-          );
-          return (
-            <div key={b.teamId} className="rounded-xl border border-border bg-surface shadow-sm">
-              <button
-                type="button"
-                onClick={() => setExpanded(open ? null : b.teamId)}
-                aria-expanded={open}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
-              >
-                <TeamLogo src={b.teamLogo ?? undefined} alt={b.teamName} size={22} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-foreground">{b.teamName}</div>
-                  <div className="text-[11px] text-muted">
-                    trvalé ↓{b.inByCategory.permanent} ↑{b.outByCategory.permanent} · hostování ↓
-                    {b.inByCategory.loan} ↑{b.outByCategory.loan}
-                  </div>
-                </div>
-                <span className="shrink-0 text-sm font-bold tabular-nums text-foreground">
-                  ↓{b.inCount} <span className="text-muted">/</span> ↑{b.outCount}
-                </span>
-                <span aria-hidden className="shrink-0 text-muted">
-                  {open ? "▾" : "▸"}
-                </span>
-              </button>
-              {open && (
-                <div className="border-t border-border px-3 py-2">
-                  <div className="mb-3 grid grid-cols-2 gap-3">
-                    <CategoryBlock title="Příchody" total={b.inCount} counts={b.inByCategory} />
-                    <CategoryBlock title="Odchody" total={b.outCount} counts={b.outByCategory} />
-                  </div>
-                  <ul className="space-y-1 text-xs">
-                    {clubTransfers.map((t) => {
-                      const incoming = t.inTeamId === b.teamId;
-                      return (
-                        <li
-                          key={`${t.playerId}:${t.date}:${t.inTeamId}:${t.outTeamId}`}
-                          className="flex items-center gap-1.5"
-                        >
-                          <span
-                            className={`shrink-0 font-bold ${
-                              incoming ? "text-positive" : "text-negative"
-                            }`}
-                          >
-                            {incoming ? "IN" : "OUT"}
-                          </span>
-                          <span className="min-w-0 truncate text-foreground">{t.playerName}</span>
-                          <span className="min-w-0 truncate text-muted">
-                            {incoming ? `← ${t.outTeamName ?? "—"}` : `→ ${t.inTeamName ?? "—"}`}
-                          </span>
-                          <span className="ml-auto shrink-0 text-muted">
-                            {t.feeEur != null ? fmtEur(t.feeEur) : (t.type ?? "—")}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <TeamLogo src={b.teamLogo ?? undefined} alt={b.teamName} size={22} />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+        {b.teamName}
+      </span>
+      <span className="shrink-0 text-sm tabular-nums">
+        <span className="font-bold text-positive">↓{inN}</span>{" "}
+        <span className="text-muted">/</span>{" "}
+        <span className="font-bold text-negative">↑{outN}</span>
+      </span>
+      {expandable && (
+        <span aria-hidden className="shrink-0 text-muted">
+          {open ? "▾" : "▸"}
+        </span>
+      )}
     </>
   );
-}
 
-function CategoryBlock({
-  title,
-  total,
-  counts,
-}: {
-  title: string;
-  total: number;
-  counts: Record<TransferCategory, number>;
-}) {
   return (
-    <div className="rounded-lg bg-background p-2">
-      <div className="flex items-baseline justify-between">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
-          {title}
-        </span>
-        <span className="text-sm font-bold tabular-nums text-foreground">{total}</span>
-      </div>
-      <ul className="mt-1 space-y-0.5">
-        {CATEGORY_ORDER.filter((c) => counts[c] > 0).map((c) => (
-          <li key={c} className="flex justify-between text-[11px] text-muted">
-            <span>{CATEGORY_LABELS[c]}</span>
-            <span className="tabular-nums text-foreground">{counts[c]}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <li className="rounded-xl border border-border bg-surface shadow-sm">
+      {expandable ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+        >
+          {header}
+        </button>
+      ) : (
+        <div className="flex w-full items-center gap-2 px-3 py-2.5">{header}</div>
+      )}
+
+      {expandable && open && (
+        <div className="border-t border-border px-3 py-2">
+          {clubTransfers.length === 0 ? (
+            <p className="py-1 text-center text-xs text-muted">Žádné přestupy v tomto rozsahu.</p>
+          ) : (
+            <ul className="space-y-1 text-xs">
+              {clubTransfers.map((t) => {
+                const incoming = t.inTeamId === b.teamId;
+                const counterpart = incoming ? t.outTeamName : t.inTeamName;
+                return (
+                  <li
+                    key={`${t.playerId}:${t.date}:${t.inTeamId}:${t.outTeamId}`}
+                    className="flex items-center gap-1.5"
+                  >
+                    <span
+                      className={`w-7 shrink-0 text-center font-bold ${
+                        incoming ? "text-positive" : "text-negative"
+                      }`}
+                    >
+                      {incoming ? "IN" : "OUT"}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-foreground">
+                      {t.playerName}
+                    </span>
+                    <span className="min-w-0 max-w-[40%] shrink-0 truncate text-right text-muted">
+                      {incoming ? "← " : "→ "}
+                      {counterpart ?? "—"}
+                    </span>
+                    <span className="hidden shrink-0 text-[10px] text-muted sm:inline">
+                      {CATEGORY_LABELS[t.category]}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -374,7 +335,7 @@ function Skeleton() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
-          className="h-14 animate-pulse rounded-xl bg-border/60"
+          className="h-12 animate-pulse rounded-xl bg-border/60"
           style={{ animationDelay: `${i * 60}ms` }}
         />
       ))}

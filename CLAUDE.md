@@ -181,10 +181,14 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   cenu – `type` nese jen kategorie typu „Loan"/„Transfer"/„Free agent"/„Back from Loan"), proto
   bilance stojí na **typu pohybu, ne na penězích**. `parseTransferFee`/`feeEur` zůstávají jen
   pro řádek v seznamu (zobrazí cenu tam, kde výjimečně je).
-- **Gating:** seznam přestupů je **FREE**; interaktivní tabulka bilance + detail klubu je **PRO**
-  (`/api/transfers` vrací `transfers` vždy, `balances` jen pro PRO, jinak `balancesLocked`).
-- **Mock režim:** `lib/data/mock/transfers.ts` (generátor nad mock kluby) → záložka funguje
-  bez DB/API. UI `TransfersApp.tsx` (filtr lig chips, přepínač Přestupy/Bilance, `ProLock`).
+- **Gating:** přehled klubů (počty) je **FREE**; **detail** klubu (kteří hráči) je **PRO**
+  (`/api/transfers` vrací `balances` vždy, `transfers` jen pro PRO, jinak `detailLocked`).
+- **UI `TransfersApp.tsx` (klubocentrické, mobile-first):** žádný plochý seznam přes celou ligu
+  (firehose). Hlavní pohled = **tabulka klubů** řazená dle aktivity; přepínač rozsahu
+  **Jen trvalé** (default – odšumí návraty z hostování/N/A) vs **Vše** (i hostování); klik na klub
+  rozbalí detail jeho přestupů (PRO). `Transfer.category` (z `classifyTransfer`) nese kategorii,
+  ať klient filtruje bez serverového kódu. Filtr lig = chips.
+- **Mock režim:** `lib/data/mock/transfers.ts` (generátor nad mock kluby) → záložka funguje bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce.
 
 ## PWA (instalace na iOS/Android)

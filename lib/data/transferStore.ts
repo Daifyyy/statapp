@@ -53,6 +53,7 @@ function toTransfer(p: DbTransfer): Transfer {
     playerName: p.playerName,
     date: p.date.toISOString(),
     type: p.type,
+    category: classifyTransfer(p.type),
     feeEur: p.feeEur,
     inTeamId: p.inTeamId,
     inTeamName: p.inTeamName,

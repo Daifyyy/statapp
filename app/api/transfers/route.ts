@@ -6,8 +6,8 @@ import { getEntitlement } from "@/lib/entitlements";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
 
-// Záložka Přestupy. Čte PŘEDPOČÍTANÁ data z DB (cron je plní) → levné a rychlé.
-// Seznam přestupů je FREE; interaktivní bilance klubů je PRO (FREE → balancesLocked).
+// Záložka Přestupy (klubocentrická). Čte PŘEDPOČÍTANÁ data z DB (cron je plní).
+// Přehled klubů (počty) je FREE; detail přestupů klubu (konkrétní hráči) je PRO.
 
 function parseLeagues(raw: string | null): number[] {
   if (!raw) return TRANSFER_LEAGUES;
@@ -28,12 +28,13 @@ export async function GET(req: Request) {
   );
 
   try {
-    const transfers = await getTransfers(leagueIds);
+    const balances = await getTransferBalances(leagueIds); // přehled klubů = FREE
     if (!ent.pro) {
-      return NextResponse.json({ transfers, balancesLocked: true });
+      return NextResponse.json({ balances, detailLocked: true });
     }
-    const balances = await getTransferBalances(leagueIds);
-    return NextResponse.json({ transfers, balances });
+    // PRO: i detail přestupů (konkrétní hráči pro proklik klubu); vyšší limit = úplný detail.
+    const transfers = await getTransfers(leagueIds, 3000);
+    return NextResponse.json({ balances, transfers });
   } catch (e) {
     logError("api/transfers", e, { leagueIds });
     return NextResponse.json({ error: "Chyba přestupů" }, { status: 502 });

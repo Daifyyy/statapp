@@ -1,5 +1,5 @@
 import type { ClubTransferBalance, Transfer } from "@/lib/types";
-import { computeBalances, type BalanceInput } from "../transferStore";
+import { computeBalances, classifyTransfer, type BalanceInput } from "../transferStore";
 import { buildTeams } from "./seed";
 
 /**
@@ -72,6 +72,7 @@ export function mockLeagueTransfers(leagueIds: number[]): Transfer[] {
       playerName: r.playerName,
       date: r.date,
       type: r.type,
+      category: classifyTransfer(r.type),
       feeEur: r.feeEur,
       inTeamId: r.inTeamId,
       inTeamName: r.inTeamName,

@@ -211,6 +211,7 @@ export interface Transfer {
   playerName: string;
   date: string; // ISO
   type: string | null; // surový text z API ("Loan" | "Free" | "€ 20M" | "N/A" …)
+  category: TransferCategory; // odvozená kategorie (klient filtruje bez serverového kódu)
   feeEur: number | null; // parsovaná částka v EUR, null = neznámá
   inTeamId: number | null;
   inTeamName: string | null;

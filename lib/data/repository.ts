@@ -77,8 +77,11 @@ export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
 }
 
 /** Aktuální přestupy vybraných lig (real = DB store, mock = generátor). */
-export async function getTransfers(leagueIds: number[]): Promise<Transfer[]> {
-  if (useReal) return getLeagueTransfers(leagueIds);
+export async function getTransfers(
+  leagueIds: number[],
+  limit = 200
+): Promise<Transfer[]> {
+  if (useReal) return getLeagueTransfers(leagueIds, limit);
   return mockLeagueTransfers(leagueIds);
 }
 
