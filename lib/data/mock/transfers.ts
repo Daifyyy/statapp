@@ -12,7 +12,7 @@ type MockRow = BalanceInput & {
   playerId: number;
   playerName: string;
   date: string;
-  type: string | null;
+  feeEur: number | null;
   season: number;
 };
 
@@ -24,7 +24,7 @@ function seeded(n: number): number {
   return x - Math.floor(x);
 }
 
-const FEE_TYPES = ["€ 25M", "€ 12M", "€ 8M", "€ 500K", "Free", "Loan", "N/A"];
+const FEE_TYPES = ["€ 25M", "Transfer", "Loan", "Back from Loan", "Free", "N/A"];
 
 function mockRows(leagueIds: number[]): MockRow[] {
   const clubs = buildTeams().filter(

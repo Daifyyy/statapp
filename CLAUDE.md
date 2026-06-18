@@ -171,9 +171,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (uloží se z obou perspektiv, list se dedupuje při čtení). Cron
   `app/api/cron/refresh-transfers` (denně ve `vercel.json`, `CRON_SECRET`, `?league=ID`).
 - **Bilance** (`lib/data/transferStore.ts`): `computeBalances` (čistá fce + test) = počty
-  IN/OUT + součet `feeEur` (in=výdaj, out=příjem, net) per klub. `feeEur` je **best-effort
-  parse** z volného textu `type` (`parseTransferFee`: „€ 20M"→20M, „Free"→0, „Loan"/„N/A"→null) –
-  API spolehlivé částky nedává → **počty úplné, částky orientační** (UI to píše).
+  IN/OUT per klub + rozpad po **kategoriích** (`classifyTransfer`: permanent / loan / loanReturn
+  / free / other). API peněžní částky **prakticky nedává** (ověřeno: 2 z 6326 přestupů mají
+  cenu – `type` nese jen kategorie typu „Loan"/„Transfer"/„Free agent"/„Back from Loan"), proto
+  bilance stojí na **typu pohybu, ne na penězích**. `parseTransferFee`/`feeEur` zůstávají jen
+  pro řádek v seznamu (zobrazí cenu tam, kde výjimečně je).
 - **Gating:** seznam přestupů je **FREE**; interaktivní tabulka bilance + detail klubu je **PRO**
   (`/api/transfers` vrací `transfers` vždy, `balances` jen pro PRO, jinak `balancesLocked`).
 - **Mock režim:** `lib/data/mock/transfers.ts` (generátor nad mock kluby) → záložka funguje

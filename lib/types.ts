@@ -222,7 +222,16 @@ export interface Transfer {
   season: number;
 }
 
-/** Bilance přestupů jednoho klubu (počty + best-effort částky). */
+/**
+ * Kategorie přestupu odvozená z volného textu `type` z API. Peněžní částky API
+ * prakticky nedává (2 z tisíců), zato `type` nese typ pohybu → bilanci stavíme na něm.
+ */
+export type TransferCategory = "permanent" | "loan" | "loanReturn" | "free" | "other";
+
+/** Počty přestupů po kategoriích (pro jednu stranu – příchody nebo odchody). */
+export type TransferCategoryCounts = Record<TransferCategory, number>;
+
+/** Bilance přestupů jednoho klubu: počty IN/OUT celkem i po kategoriích. */
 export interface ClubTransferBalance {
   teamId: number;
   teamName: string;
@@ -230,13 +239,8 @@ export interface ClubTransferBalance {
   leagueId: number;
   inCount: number;
   outCount: number;
-  /** Součet známých částek za příchozí / odchozí hráče (jen kde fee parsovatelná). */
-  spendEur: number;
-  earnEur: number;
-  /** earnEur − spendEur (záporné = čistá investice). */
-  netEur: number;
-  /** Kolik přestupů mělo parsovatelnou částku (kvůli „neúplná data" poznámce). */
-  knownFeeCount: number;
+  inByCategory: TransferCategoryCounts;
+  outByCategory: TransferCategoryCounts;
 }
 
 /** Příspěvek jednoho časového okna do váženého průměru (pro tooltip). */

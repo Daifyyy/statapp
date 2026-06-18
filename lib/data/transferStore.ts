@@ -1,5 +1,10 @@
 import type { Transfer as DbTransfer } from "@prisma/client";
-import type { ClubTransferBalance, Transfer } from "@/lib/types";
+import type {
+  ClubTransferBalance,
+  Transfer,
+  TransferCategory,
+  TransferCategoryCounts,
+} from "@/lib/types";
 import { prisma } from "@/lib/db";
 
 /**
@@ -86,12 +91,32 @@ export async function getLeagueTransfers(
   return out;
 }
 
+/**
+ * Zařadí přestup do kategorie z volného textu `type` (API peněžní částky prakticky nedává).
+ * Pořadí kontrol je důležité: návrat z hostování dřív než hostování; „free" dřív než
+ * „transfer" (kvůli „Free Transfer"). Čistá funkce – testovaná.
+ */
+export function classifyTransfer(type: string | null | undefined): TransferCategory {
+  if (!type) return "other";
+  const s = type.toLowerCase();
+  if (s.includes("back from loan") || s.includes("return") || s.includes("end of loan"))
+    return "loanReturn";
+  if (s.includes("loan")) return "loan";
+  if (s.includes("free")) return "free";
+  if (s.includes("transfer") || /[€$£]|\d/.test(s)) return "permanent";
+  return "other";
+}
+
+function emptyCounts(): TransferCategoryCounts {
+  return { permanent: 0, loan: 0, loanReturn: 0, free: 0, other: 0 };
+}
+
 /** Minimální tvar řádku pro agregaci bilance (kvůli čisté funkci / testu). */
 export type BalanceInput = Pick<
   DbTransfer,
   | "clubId"
   | "clubLeagueId"
-  | "feeEur"
+  | "type"
   | "inTeamId"
   | "inTeamName"
   | "inTeamLogo"
@@ -102,8 +127,8 @@ export type BalanceInput = Pick<
 
 /**
  * Agregace bilance per klub z řádků (perspektiva klubu: každý řádek patří `clubId`).
- * in-strana = příchod (výdaj), out-strana = odchod (příjem). Čistá funkce.
- * Řadí dle čisté investice (netEur vzestupně = nejvíc investující klub první).
+ * in-strana = příchod, out-strana = odchod; navíc rozpad po kategoriích (`classifyTransfer`).
+ * Čistá funkce. Řadí dle celkové aktivity (nejvíc přestupů první).
  */
 export function computeBalances(rows: BalanceInput[]): ClubTransferBalance[] {
   const byClub = new Map<number, ClubTransferBalance>();
@@ -120,29 +145,23 @@ export function computeBalances(rows: BalanceInput[]): ClubTransferBalance[] {
         leagueId: r.clubLeagueId,
         inCount: 0,
         outCount: 0,
-        spendEur: 0,
-        earnEur: 0,
-        netEur: 0,
-        knownFeeCount: 0,
+        inByCategory: emptyCounts(),
+        outByCategory: emptyCounts(),
       };
       byClub.set(r.clubId, b);
     }
+    const cat = classifyTransfer(r.type);
     if (isIn) {
       b.inCount++;
-      if (r.feeEur != null) {
-        b.spendEur += r.feeEur;
-        b.knownFeeCount++;
-      }
+      b.inByCategory[cat]++;
     } else {
       b.outCount++;
-      if (r.feeEur != null) {
-        b.earnEur += r.feeEur;
-        b.knownFeeCount++;
-      }
+      b.outByCategory[cat]++;
     }
-    b.netEur = b.earnEur - b.spendEur;
   }
-  return [...byClub.values()].sort((a, b) => a.netEur - b.netEur);
+  return [...byClub.values()].sort(
+    (a, b) => b.inCount + b.outCount - (a.inCount + a.outCount)
+  );
 }
 
 /** Bilance přestupů klubů vybraných lig (čte DB, agreguje přes computeBalances). */
@@ -154,7 +173,7 @@ export async function getClubBalances(
     select: {
       clubId: true,
       clubLeagueId: true,
-      feeEur: true,
+      type: true,
       inTeamId: true,
       inTeamName: true,
       inTeamLogo: true,

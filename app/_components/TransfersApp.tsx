@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { ClubTransferBalance, Transfer } from "@/lib/types";
+import type { ClubTransferBalance, Transfer, TransferCategory } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -29,11 +29,21 @@ function fmtEur(n: number): string {
   return `${a} €`;
 }
 
-/** Bilance se znaménkem (− = čistá investice, + = čistý výdělek). */
-function fmtNet(n: number): string {
-  if (n === 0) return "0 €";
-  return `${n < 0 ? "−" : "+"}${fmtEur(n)}`;
-}
+const CATEGORY_LABELS: Record<TransferCategory, string> = {
+  permanent: "Trvalé",
+  loan: "Hostování",
+  loanReturn: "Návraty",
+  free: "Zdarma",
+  other: "Ostatní",
+};
+// Pořadí zobrazení kategorií.
+const CATEGORY_ORDER: TransferCategory[] = [
+  "permanent",
+  "loan",
+  "loanReturn",
+  "free",
+  "other",
+];
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" });
@@ -247,8 +257,8 @@ function BalanceTable({
   return (
     <>
       <p className="mt-4 text-[11px] text-muted">
-        Bilance dle dostupných částek (zdroj často neuvádí přesnou cenu – počty jsou úplné,
-        částky orientační). Klikni na klub pro detail.
+        Bilance podle počtu a typu přestupů (API neuvádí ceny). ↓ příchody, ↑ odchody;
+        v řádku trvalé a hostování. Klikni na klub pro detail.
       </p>
       <div className="mt-2 space-y-2">
         {balances.map((b) => {
@@ -265,18 +275,15 @@ function BalanceTable({
                 className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
               >
                 <TeamLogo src={b.teamLogo ?? undefined} alt={b.teamName} size={22} />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                  {b.teamName}
-                </span>
-                <span className="shrink-0 text-[11px] text-muted">
-                  ↓{b.inCount} ↑{b.outCount}
-                </span>
-                <span
-                  className={`shrink-0 text-sm font-bold tabular-nums ${
-                    b.netEur < 0 ? "text-negative" : b.netEur > 0 ? "text-positive" : "text-muted"
-                  }`}
-                >
-                  {fmtNet(b.netEur)}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground">{b.teamName}</div>
+                  <div className="text-[11px] text-muted">
+                    trvalé ↓{b.inByCategory.permanent} ↑{b.outByCategory.permanent} · hostování ↓
+                    {b.inByCategory.loan} ↑{b.outByCategory.loan}
+                  </div>
+                </div>
+                <span className="shrink-0 text-sm font-bold tabular-nums text-foreground">
+                  ↓{b.inCount} <span className="text-muted">/</span> ↑{b.outCount}
                 </span>
                 <span aria-hidden className="shrink-0 text-muted">
                   {open ? "▾" : "▸"}
@@ -284,13 +291,9 @@ function BalanceTable({
               </button>
               {open && (
                 <div className="border-t border-border px-3 py-2">
-                  <div className="mb-2 grid grid-cols-3 gap-2 text-center text-[11px]">
-                    <MiniStat label="Příchody" value={String(b.inCount)} />
-                    <MiniStat label="Odchody" value={String(b.outCount)} />
-                    <MiniStat
-                      label="Výdaje / příjmy"
-                      value={`${fmtEur(b.spendEur)} / ${fmtEur(b.earnEur)}`}
-                    />
+                  <div className="mb-3 grid grid-cols-2 gap-3">
+                    <CategoryBlock title="Příchody" total={b.inCount} counts={b.inByCategory} />
+                    <CategoryBlock title="Odchody" total={b.outCount} counts={b.outByCategory} />
                   </div>
                   <ul className="space-y-1 text-xs">
                     {clubTransfers.map((t) => {
@@ -328,11 +331,31 @@ function BalanceTable({
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function CategoryBlock({
+  title,
+  total,
+  counts,
+}: {
+  title: string;
+  total: number;
+  counts: Record<TransferCategory, number>;
+}) {
   return (
-    <div className="rounded-lg bg-background p-1.5">
-      <div className="font-bold tabular-nums text-foreground">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
+    <div className="rounded-lg bg-background p-2">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted">
+          {title}
+        </span>
+        <span className="text-sm font-bold tabular-nums text-foreground">{total}</span>
+      </div>
+      <ul className="mt-1 space-y-0.5">
+        {CATEGORY_ORDER.filter((c) => counts[c] > 0).map((c) => (
+          <li key={c} className="flex justify-between text-[11px] text-muted">
+            <span>{CATEGORY_LABELS[c]}</span>
+            <span className="tabular-nums text-foreground">{counts[c]}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
