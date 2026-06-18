@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseTransferFee, buildClubTransferRows } from "./transfers";
 import { computeBalances, classifyTransfer, type BalanceInput } from "./transferStore";
+import { transferWindowStart } from "./catalog";
 import type { ApiTransferPlayer } from "./apiFootball";
 
 describe("parseTransferFee", () => {
@@ -47,7 +48,9 @@ describe("buildClubTransferRows", () => {
   };
 
   it("vybere jen přestupy v okně, kterých se klub účastní", () => {
-    const rows = buildClubTransferRows(100, 39, 2025, [player]);
+    // explicitní start okna (1. 7. 2025) → 2024 mimo, 2025-09 jiný klub
+    const windowStart = Date.UTC(2025, 6, 1);
+    const rows = buildClubTransferRows(100, 39, 2025, [player], windowStart);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       clubId: 100,
@@ -107,5 +110,18 @@ describe("computeBalances", () => {
     expect(b.inByCategory.permanent).toBe(1);
     expect(b.inByCategory.loan).toBe(1);
     expect(b.outByCategory.permanent).toBe(1);
+  });
+});
+
+describe("transferWindowStart", () => {
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  it("zima (leden–červen) → 1. 1. téhož roku", () => {
+    expect(iso(transferWindowStart(new Date("2026-06-18T12:00:00Z")))).toBe("2026-01-01");
+    expect(iso(transferWindowStart(new Date("2026-02-15T00:00:00Z")))).toBe("2026-01-01");
+  });
+  it("léto (červenec–prosinec) → 1. 7. téhož roku", () => {
+    expect(iso(transferWindowStart(new Date("2026-07-01T00:00:00Z")))).toBe("2026-07-01");
+    expect(iso(transferWindowStart(new Date("2026-09-10T00:00:00Z")))).toBe("2026-07-01");
+    expect(iso(transferWindowStart(new Date("2026-12-31T23:00:00Z")))).toBe("2026-07-01");
   });
 });

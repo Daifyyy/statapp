@@ -11,6 +11,18 @@ export function computeSeason(now: Date = new Date()): number {
 export const CURRENT_SEASON = computeSeason();
 export const PREVIOUS_SEASON = CURRENT_SEASON - 1;
 
+/**
+ * Začátek aktuálního přestupního okna. Dvě okna ročně: **zimní** (od 1. 1.) a **letní**
+ * (od 1. 7.). Mezi okny i po uzavření vrací start posledního **otevřeného** okna → přestupy
+ * „zůstanou" zobrazené, dokud nezačne další okno (kdy se nahradí). Slouží k filtru přestupů
+ * (zobrazení i prune) – viz `lib/data/transfers.ts`.
+ */
+export function transferWindowStart(now: Date = new Date()): Date {
+  const y = now.getUTCFullYear();
+  const month = now.getUTCMonth() + 1; // 1–12
+  return month >= 7 ? new Date(Date.UTC(y, 6, 1)) : new Date(Date.UTC(y, 0, 1));
+}
+
 /** Evropské poháry (TOP-3) pro cross-country kontext: UCL, UEL, UECL. */
 export const EURO_LEAGUE_IDS = [2, 3, 848];
 

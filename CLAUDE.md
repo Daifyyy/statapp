@@ -165,11 +165,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   nikdy ne živě per request. Studené naplnění lokálně / `?league=ID`.
 - **Pipeline** (`lib/data/transfers.ts`): `runRefreshTransfers` (`TRANSFER_LEAGUES`=Top-5,
   sdílí ID s `PREDICTION_LEAGUES`) → `getTeamsByLeague` → `fetchTeamTransfers(team)` →
-  filtr na aktuální okno (datum ≥ start `CURRENT_SEASON`) → `parseTransferFee` → `upsertTransfer`.
-  Řádek je **z perspektivy dotazovaného klubu** (`clubId`/`clubLeagueId`): in/out nesou oba
-  kluby, `clubId` říká čí pohled → jednoznačná bilance i u přestupů mezi dvěma top-5 kluby
-  (uloží se z obou perspektiv, list se dedupuje při čtení). Cron
+  filtr na **aktuální přestupové okno** (`transferWindowStart`, catalog.ts) → `parseTransferFee`
+  → `upsertTransfer`. Řádek je **z perspektivy dotazovaného klubu** (`clubId`/`clubLeagueId`):
+  in/out nesou oba kluby, `clubId` říká čí pohled → jednoznačná bilance i u přestupů mezi dvěma
+  top-5 kluby (uloží se z obou perspektiv, list se dedupuje při čtení). Cron
   `app/api/cron/refresh-transfers` (denně ve `vercel.json`, `CRON_SECRET`, `?league=ID`).
+- **Přestupové okno** (`transferWindowStart`): dvě okna ročně – **zimní** (od 1. 1.) a **letní**
+  (od 1. 7.); mezi okny i po uzavření vrací start posledního otevřeného okna. Filtruje se na
+  čtení (`getLeagueTransfers`/`getClubBalances` – `date ≥ windowStart`) i při zápisu; cron navíc
+  starší okna **prunne** (`pruneTransfersBefore`). Důsledek: dokončené okno **zůstane** zobrazené,
+  dokud nezačne další (kdy se obsah **nahradí**).
 - **Bilance** (`lib/data/transferStore.ts`): `computeBalances` (čistá fce + test) = počty
   IN/OUT per klub + rozpad po **kategoriích** (`classifyTransfer`: permanent / loan / loanReturn
   / free / other). API peněžní částky **prakticky nedává** (ověřeno: 2 z 6326 přestupů mají

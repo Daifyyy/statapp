@@ -6,6 +6,7 @@ import type {
   TransferCategoryCounts,
 } from "@/lib/types";
 import { prisma } from "@/lib/db";
+import { transferWindowStart } from "./catalog";
 
 /**
  * Úložiště přestupů nad tabulkou `Transfer` (real DB). Plní ho cron na pozadí
@@ -75,7 +76,10 @@ export async function getLeagueTransfers(
   limit = 200
 ): Promise<Transfer[]> {
   const rows = await prisma.transfer.findMany({
-    where: { clubLeagueId: { in: leagueIds } },
+    where: {
+      clubLeagueId: { in: leagueIds },
+      date: { gte: transferWindowStart() }, // jen aktuální přestupové okno
+    },
     orderBy: { date: "desc" },
   });
   const seen = new Set<string>();
@@ -169,7 +173,10 @@ export async function getClubBalances(
   leagueIds: number[]
 ): Promise<ClubTransferBalance[]> {
   const rows = await prisma.transfer.findMany({
-    where: { clubLeagueId: { in: leagueIds } },
+    where: {
+      clubLeagueId: { in: leagueIds },
+      date: { gte: transferWindowStart() }, // jen aktuální přestupové okno
+    },
     select: {
       clubId: true,
       clubLeagueId: true,
@@ -183,4 +190,12 @@ export async function getClubBalances(
     },
   });
   return computeBalances(rows);
+}
+
+/** Smaže přestupy starší než dané datum (předchozí okna) – „nahrazení" po startu okna. */
+export async function pruneTransfersBefore(windowStartMs: number): Promise<number> {
+  const res = await prisma.transfer.deleteMany({
+    where: { date: { lt: new Date(windowStartMs) } },
+  });
+  return res.count;
 }

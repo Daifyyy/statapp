@@ -1,7 +1,11 @@
 import { getTeamsByLeague } from "./repository";
 import { fetchTeamTransfers, type ApiTransferPlayer } from "./apiFootball";
-import { CURRENT_SEASON } from "./catalog";
-import { upsertTransfer, type TransferUpsert } from "./transferStore";
+import { CURRENT_SEASON, transferWindowStart } from "./catalog";
+import {
+  upsertTransfer,
+  pruneTransfersBefore,
+  type TransferUpsert,
+} from "./transferStore";
 import { logError } from "@/lib/logError";
 
 /**
@@ -16,11 +20,6 @@ import { logError } from "@/lib/logError";
 
 /** Sledované klubové ligy pro přestupy (Top-5; sdílí seznam s predikcemi). */
 export const TRANSFER_LEAGUES = [39, 140, 135, 78, 61];
-
-/** Začátek aktuálního přestupního okna = start aktuální sezóny (API: season = rok startu). */
-function seasonStartMs(season: number): number {
-  return Date.UTC(season, 6, 1); // 1. července
-}
 
 /**
  * Best-effort převod volného textu `type` z API na částku v EUR.
@@ -50,7 +49,7 @@ export function buildClubTransferRows(
   clubLeagueId: number,
   season: number,
   players: ApiTransferPlayer[],
-  windowStartMs = seasonStartMs(season)
+  windowStartMs = transferWindowStart().getTime()
 ): TransferUpsert[] {
   const rows: TransferUpsert[] = [];
   for (const p of players) {
@@ -87,8 +86,9 @@ export function buildClubTransferRows(
  */
 export async function runRefreshTransfers(
   leagueIds: number[] = TRANSFER_LEAGUES
-): Promise<{ leagues: number; clubs: number; transfers: number }> {
+): Promise<{ leagues: number; clubs: number; transfers: number; pruned: number }> {
   const season = CURRENT_SEASON;
+  const windowStartMs = transferWindowStart().getTime();
   let clubs = 0;
   let transfers = 0;
   for (const leagueId of leagueIds) {
@@ -102,7 +102,7 @@ export async function runRefreshTransfers(
       clubs++;
       try {
         const players = await fetchTeamTransfers(team.id);
-        const rows = buildClubTransferRows(team.id, leagueId, season, players);
+        const rows = buildClubTransferRows(team.id, leagueId, season, players, windowStartMs);
         for (const row of rows) {
           await upsertTransfer(row);
           transfers++;
@@ -113,5 +113,7 @@ export async function runRefreshTransfers(
       }
     }
   }
-  return { leagues: leagueIds.length, clubs, transfers };
+  // Smaž přestupy z předchozích oken → po startu nového okna se obsah „nahradí".
+  const pruned = await pruneTransfersBefore(windowStartMs);
+  return { leagues: leagueIds.length, clubs, transfers, pruned };
 }
