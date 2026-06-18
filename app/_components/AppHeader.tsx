@@ -12,15 +12,22 @@ import type { SessionUser } from "./sessionUser";
  * (textový popisek `hidden sm:inline`), kontejner `flex-wrap` jako pojistka,
  * aby se nic nepřetékalo na úzkém displeji.
  */
+export interface NavItem {
+  href: string;
+  label: string;
+  emoji: string;
+}
+
 export function AppHeader({
   user,
   nav,
   share = false,
 }: {
   user: SessionUser | null;
-  nav: { href: string; label: string; emoji: string };
+  nav: NavItem | NavItem[];
   share?: boolean;
 }) {
+  const items = Array.isArray(nav) ? nav : [nav];
   return (
     <header className="flex flex-wrap items-center justify-between gap-2">
       <Image
@@ -32,14 +39,17 @@ export function AppHeader({
         className="rounded-xl"
       />
       <div className="flex items-center gap-1.5 sm:gap-2">
-        <Link
-          href={nav.href}
-          aria-label={nav.label}
-          className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
-        >
-          <span aria-hidden>{nav.emoji}</span>
-          <span className="hidden sm:inline"> {nav.label}</span>
-        </Link>
+        {items.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-label={item.label}
+            className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
+          >
+            <span aria-hidden>{item.emoji}</span>
+            <span className="hidden sm:inline"> {item.label}</span>
+          </Link>
+        ))}
         {share && <ShareButton />}
         <ThemeToggle />
         <AccountMenu user={user} />

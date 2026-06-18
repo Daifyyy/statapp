@@ -353,7 +353,10 @@ export function CompareApp({
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
       <AppHeader
         user={user}
-        nav={{ href: "/predikce", label: "Tipy", emoji: "📈" }}
+        nav={[
+          { href: "/predikce", label: "Tipy", emoji: "📈" },
+          { href: "/transfers", label: "Přestupy", emoji: "🔄" },
+        ]}
         share
       />
 

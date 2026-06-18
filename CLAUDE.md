@@ -158,6 +158,28 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
+## Záložka Přestupy (FREE seznam + PRO bilance)
+- **Princip:** přestupy top-5 klubových lig se stahují **jen dávkově na pozadí (cron)** do
+  tabulky `Transfer`; záložka `/transfers` i bilance **jen ČTOU z DB**. `/transfers` (API)
+  **neumí filtr podle ligy** (jen `team`) → iterace přes ~20 týmů × 5 lig ≈ 100 volání, proto
+  nikdy ne živě per request. Studené naplnění lokálně / `?league=ID`.
+- **Pipeline** (`lib/data/transfers.ts`): `runRefreshTransfers` (`TRANSFER_LEAGUES`=Top-5,
+  sdílí ID s `PREDICTION_LEAGUES`) → `getTeamsByLeague` → `fetchTeamTransfers(team)` →
+  filtr na aktuální okno (datum ≥ start `CURRENT_SEASON`) → `parseTransferFee` → `upsertTransfer`.
+  Řádek je **z perspektivy dotazovaného klubu** (`clubId`/`clubLeagueId`): in/out nesou oba
+  kluby, `clubId` říká čí pohled → jednoznačná bilance i u přestupů mezi dvěma top-5 kluby
+  (uloží se z obou perspektiv, list se dedupuje při čtení). Cron
+  `app/api/cron/refresh-transfers` (denně ve `vercel.json`, `CRON_SECRET`, `?league=ID`).
+- **Bilance** (`lib/data/transferStore.ts`): `computeBalances` (čistá fce + test) = počty
+  IN/OUT + součet `feeEur` (in=výdaj, out=příjem, net) per klub. `feeEur` je **best-effort
+  parse** z volného textu `type` (`parseTransferFee`: „€ 20M"→20M, „Free"→0, „Loan"/„N/A"→null) –
+  API spolehlivé částky nedává → **počty úplné, částky orientační** (UI to píše).
+- **Gating:** seznam přestupů je **FREE**; interaktivní tabulka bilance + detail klubu je **PRO**
+  (`/api/transfers` vrací `transfers` vždy, `balances` jen pro PRO, jinak `balancesLocked`).
+- **Mock režim:** `lib/data/mock/transfers.ts` (generátor nad mock kluby) → záložka funguje
+  bez DB/API. UI `TransfersApp.tsx` (filtr lig chips, přepínač Přestupy/Bilance, `ProLock`).
+- Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce.
+
 ## PWA (instalace na iOS/Android)
 - Manifest `app/manifest.ts` (Next metadata route → `/manifest.webmanifest`), ikony
   v `public/` (`icon-192/512`, `icon-maskable-512`, `apple-touch-icon`) generované ze

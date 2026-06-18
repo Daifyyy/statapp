@@ -155,6 +155,32 @@ model FixturePrediction {
   @@index([status, kickoff])
 }
 
+/// Přestup hráče (záložka Přestupy, top-5 lig). Plní cron na pozadí (refresh-transfers);
+/// záložka i bilance jen ČTOU. Řádek je z perspektivy dotazovaného klubu (`clubId`):
+/// in/out strany nesou oba kluby, `clubId` říká, čí pohled to je → jednoznačná bilance.
+/// `feeEur` je best-effort parse z volného textu `type` (často null – API nedává částky).
+model Transfer {
+  id           String   @id // `${clubId}:${playerId}:${dateISO}:${inId|0}:${outId|0}`
+  clubId       Int
+  clubLeagueId Int
+  season       Int
+  playerId     Int
+  playerName   String
+  date         DateTime
+  type         String?
+  feeEur       Float?
+  inTeamId     Int?
+  inTeamName   String?
+  inTeamLogo   String?
+  outTeamId    Int?
+  outTeamName  String?
+  outTeamLogo  String?
+  fetchedAt    DateTime @default(now())
+
+  @@index([clubLeagueId, date])
+  @@index([clubId])
+}
+
 /// Oblíbené porovnání (PRO). Drží IDs pro re-run i JSON snapshot pro okamžité zobrazení.
 model SavedComparison {
   id              String   @id @default(cuid())

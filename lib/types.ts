@@ -201,6 +201,44 @@ export interface Injury {
   reason: string;
 }
 
+/**
+ * Jeden přestup (záložka Přestupy). `feeEur` je best-effort odhad z volného textu
+ * `type` z API – často `null` (API neuvádí spolehlivé částky). `in*` = kam hráč přišel,
+ * `out*` = odkud odešel.
+ */
+export interface Transfer {
+  playerId: number;
+  playerName: string;
+  date: string; // ISO
+  type: string | null; // surový text z API ("Loan" | "Free" | "€ 20M" | "N/A" …)
+  feeEur: number | null; // parsovaná částka v EUR, null = neznámá
+  inTeamId: number | null;
+  inTeamName: string | null;
+  inTeamLogo: string | null;
+  outTeamId: number | null;
+  outTeamName: string | null;
+  outTeamLogo: string | null;
+  leagueId: number; // liga, pro kterou byl záznam stažen
+  season: number;
+}
+
+/** Bilance přestupů jednoho klubu (počty + best-effort částky). */
+export interface ClubTransferBalance {
+  teamId: number;
+  teamName: string;
+  teamLogo: string | null;
+  leagueId: number;
+  inCount: number;
+  outCount: number;
+  /** Součet známých částek za příchozí / odchozí hráče (jen kde fee parsovatelná). */
+  spendEur: number;
+  earnEur: number;
+  /** earnEur − spendEur (záporné = čistá investice). */
+  netEur: number;
+  /** Kolik přestupů mělo parsovatelnou částku (kvůli „neúplná data" poznámce). */
+  knownFeeCount: number;
+}
+
 /** Příspěvek jednoho časového okna do váženého průměru (pro tooltip). */
 export interface WindowBreakdown {
   window: WindowKey;

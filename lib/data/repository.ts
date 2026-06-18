@@ -1,11 +1,20 @@
-import type { Injury, League, PredictionRow, Team } from "@/lib/types";
+import type {
+  ClubTransferBalance,
+  Injury,
+  League,
+  PredictionRow,
+  Team,
+  Transfer,
+} from "@/lib/types";
 import { isRealDataConfigured } from "@/lib/db";
 import { LEAGUES, buildTeams } from "./mock/seed";
 import { mockUpcomingPredictions, mockSettledPredictions } from "./mock/predictions";
+import { mockLeagueTransfers, mockClubBalances } from "./mock/transfers";
 import {
   getUpcomingPredictionRows,
   getSettledPredictions,
 } from "./predictionStore";
+import { getLeagueTransfers, getClubBalances } from "./transferStore";
 import * as real from "./realRepository";
 
 /**
@@ -65,6 +74,20 @@ export async function getUpcomingPredictions(): Promise<PredictionRow[]> {
 export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
   if (useReal) return getSettledPredictions();
   return mockSettledPredictions();
+}
+
+/** Aktuální přestupy vybraných lig (real = DB store, mock = generátor). */
+export async function getTransfers(leagueIds: number[]): Promise<Transfer[]> {
+  if (useReal) return getLeagueTransfers(leagueIds);
+  return mockLeagueTransfers(leagueIds);
+}
+
+/** Bilance přestupů klubů vybraných lig (real = DB agregace, mock = generátor). */
+export async function getTransferBalances(
+  leagueIds: number[]
+): Promise<ClubTransferBalance[]> {
+  if (useReal) return getClubBalances(leagueIds);
+  return mockClubBalances(leagueIds);
 }
 
 const MOCK_INJURY_REASONS = [

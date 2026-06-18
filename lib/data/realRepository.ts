@@ -16,6 +16,7 @@ import {
   saveMatchStats,
   type MatchContext,
 } from "./cache";
+import { selectCurrentInjuries } from "./injuries";
 import {
   CLUB_LEAGUES,
   CURRENT_SEASON,
@@ -159,22 +160,9 @@ export async function getTeamInjuries(
     const raw = await cachedJson(`inj:${teamId}:${season}`, INJ_TTL, () =>
       fetchTeamInjuries(teamId, season)
     );
-    // Nejnovější první → první výskyt hráče je ten aktuální.
-    const sorted = [...raw].sort((a, b) =>
-      (b.fixture?.date ?? "").localeCompare(a.fixture?.date ?? "")
-    );
-    const seen = new Set<number>();
-    const out: Injury[] = [];
-    for (const it of sorted) {
-      if (seen.has(it.player.id)) continue;
-      seen.add(it.player.id);
-      out.push({
-        playerId: it.player.id,
-        name: it.player.name,
-        reason: it.reason || it.type || "Zranění",
-      });
-    }
-    return out;
+    // Filtr stáří + dedup (čistá funkce): API vrací zranění napříč celou sezónou,
+    // tak vyřadíme zastaralá (uzdravená) i záznamy bez data – viz injuries.ts.
+    return selectCurrentInjuries(raw);
   } catch {
     return [];
   }

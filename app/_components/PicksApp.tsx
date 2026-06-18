@@ -115,7 +115,13 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader user={user} nav={{ href: "/", label: "Porovnání", emoji: "⇄" }} />
+      <AppHeader
+        user={user}
+        nav={[
+          { href: "/", label: "Porovnání", emoji: "⇄" },
+          { href: "/transfers", label: "Přestupy", emoji: "🔄" },
+        ]}
+      />
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Predikční tipy</h1>
       <p className="mt-1 text-sm text-muted">

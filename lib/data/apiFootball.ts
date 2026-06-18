@@ -155,10 +155,37 @@ const injuryItemSchema = z.object({
 });
 const injuriesSchema = z.array(injuryItemSchema);
 
+// /transfers vrací per hráče pole jeho přestupů (teams.in = kam přišel, out = odkud).
+// `type` je volný text (částka „€ 20M" / „Loan" / „Free" / „N/A" / null) – nespolehlivý.
+const transferTeamSchema = z.object({
+  id: z.number().nullable(), // protistrana může být neznámá (null)
+  name: z.string().nullable().optional(),
+  logo: z.string().nullable().optional(),
+});
+const transferPlayerSchema = z.object({
+  player: z.object({ id: z.number(), name: z.string() }),
+  transfers: z
+    .array(
+      z.object({
+        date: z.string().nullable().optional(),
+        type: z.string().nullable().optional(),
+        teams: z
+          .object({
+            in: transferTeamSchema.nullable().optional(),
+            out: transferTeamSchema.nullable().optional(),
+          })
+          .optional(),
+      })
+    )
+    .default([]),
+});
+const transfersSchema = z.array(transferPlayerSchema);
+
 export type ApiTeam = z.infer<typeof teamItemSchema>;
 export type ApiFixture = z.infer<typeof fixtureItemSchema>;
 export type ApiFixtureStats = z.infer<typeof fixtureStatsSchema>;
 export type ApiInjury = z.infer<typeof injuryItemSchema>;
+export type ApiTransferPlayer = z.infer<typeof transferPlayerSchema>;
 
 // ---- Veřejné fetchery ----
 
@@ -208,6 +235,14 @@ export function fetchFixtureStatistics(fixture: number) {
 /** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */
 export function fetchTeamInjuries(team: number, season: number) {
   return apiGet("/injuries", { team, season }, injuriesSchema);
+}
+
+/**
+ * Přestupy hráčů týmu (příchody i odchody). `/transfers` neumí filtr podle ligy ani
+ * sezóny – vrací celou historii přestupů hráčů týmu, filtrovat dle data se musí u nás.
+ */
+export function fetchTeamTransfers(team: number) {
+  return apiGet("/transfers", { team }, transfersSchema);
 }
 
 /** Mapuje názvy statistik API-Football na naše metriky. */
