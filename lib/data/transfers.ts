@@ -68,6 +68,7 @@ export function buildClubTransferRows(
         date: new Date(ts).toISOString(),
         type: t.type ?? null,
         feeEur: parseTransferFee(t.type),
+        marketValueEur: null, // API-Football tržní hodnotu nemá (dead code)
         inTeamId: inId,
         inTeamName: t.teams?.in?.name ?? null,
         inTeamLogo: t.teams?.in?.logo ?? null,

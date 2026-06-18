@@ -24,6 +24,7 @@ export type TransferUpsert = {
   date: string; // ISO
   type: string | null;
   feeEur: number | null;
+  marketValueEur: number | null;
   inTeamId: number | null;
   inTeamName: string | null;
   inTeamLogo: string | null;
@@ -47,6 +48,22 @@ export async function upsertTransfer(row: TransferUpsert): Promise<void> {
   });
 }
 
+/** Plně nahradí obsah tabulky `Transfer` (TM dataset je jediný zdroj) – wipe + bulk insert. */
+export async function replaceTransfers(rows: TransferUpsert[]): Promise<number> {
+  await prisma.transfer.deleteMany({});
+  if (rows.length === 0) return 0;
+  const seen = new Set<string>();
+  const data = [];
+  for (const r of rows) {
+    const id = transferId(r);
+    if (seen.has(id)) continue; // pojistka proti duplicitě (stejný klub, perspektiva)
+    seen.add(id);
+    data.push({ id, ...r, date: new Date(r.date), fetchedAt: new Date() });
+  }
+  const res = await prisma.transfer.createMany({ data, skipDuplicates: true });
+  return res.count;
+}
+
 function toTransfer(p: DbTransfer): Transfer {
   return {
     playerId: p.playerId,
@@ -55,6 +72,7 @@ function toTransfer(p: DbTransfer): Transfer {
     type: p.type,
     category: classifyTransfer(p.type),
     feeEur: p.feeEur,
+    marketValueEur: p.marketValueEur,
     inTeamId: p.inTeamId,
     inTeamName: p.inTeamName,
     inTeamLogo: p.inTeamLogo,
@@ -122,6 +140,7 @@ export type BalanceInput = Pick<
   | "clubId"
   | "clubLeagueId"
   | "type"
+  | "feeEur"
   | "inTeamId"
   | "inTeamName"
   | "inTeamLogo"
@@ -132,8 +151,9 @@ export type BalanceInput = Pick<
 
 /**
  * Agregace bilance per klub z řádků (perspektiva klubu: každý řádek patří `clubId`).
- * in-strana = příchod, out-strana = odchod; navíc rozpad po kategoriích (`classifyTransfer`).
- * Čistá funkce. Řadí dle celkové aktivity (nejvíc přestupů první).
+ * in = příchod (výdaj `feeEur`), out = odchod (příjem). net = earn − spend.
+ * Kategorie (`classifyTransfer`) se počítají dál, ale UI je nepoužívá (dead code).
+ * Čistá funkce. Řadí dle čisté investice (netEur vzestupně = největší investor první).
  */
 export function computeBalances(rows: BalanceInput[]): ClubTransferBalance[] {
   const byClub = new Map<number, ClubTransferBalance>();
@@ -150,23 +170,35 @@ export function computeBalances(rows: BalanceInput[]): ClubTransferBalance[] {
         leagueId: r.clubLeagueId,
         inCount: 0,
         outCount: 0,
+        spendEur: 0,
+        earnEur: 0,
+        netEur: 0,
+        knownFeeCount: 0,
         inByCategory: emptyCounts(),
         outByCategory: emptyCounts(),
       };
       byClub.set(r.clubId, b);
     }
     const cat = classifyTransfer(r.type);
+    const fee = r.feeEur && r.feeEur > 0 ? r.feeEur : 0;
     if (isIn) {
       b.inCount++;
       b.inByCategory[cat]++;
+      if (fee > 0) {
+        b.spendEur += fee;
+        b.knownFeeCount++;
+      }
     } else {
       b.outCount++;
       b.outByCategory[cat]++;
+      if (fee > 0) {
+        b.earnEur += fee;
+        b.knownFeeCount++;
+      }
     }
+    b.netEur = b.earnEur - b.spendEur;
   }
-  return [...byClub.values()].sort(
-    (a, b) => b.inCount + b.outCount - (a.inCount + a.outCount)
-  );
+  return [...byClub.values()].sort((a, b) => a.netEur - b.netEur);
 }
 
 /** Bilance přestupů klubů vybraných lig (čte DB, agreguje přes computeBalances). */
@@ -182,6 +214,7 @@ export async function getClubBalances(
       clubId: true,
       clubLeagueId: true,
       type: true,
+      feeEur: true,
       inTeamId: true,
       inTeamName: true,
       inTeamLogo: true,

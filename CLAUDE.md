@@ -158,37 +158,38 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
-## Záložka Přestupy (FREE seznam + PRO bilance)
-- **Princip:** přestupy top-5 klubových lig se stahují **jen dávkově na pozadí (cron)** do
-  tabulky `Transfer`; záložka `/transfers` i bilance **jen ČTOU z DB**. `/transfers` (API)
-  **neumí filtr podle ligy** (jen `team`) → iterace přes ~20 týmů × 5 lig ≈ 100 volání, proto
-  nikdy ne živě per request. Studené naplnění lokálně / `?league=ID`.
-- **Pipeline** (`lib/data/transfers.ts`): `runRefreshTransfers` (`TRANSFER_LEAGUES`=Top-5,
-  sdílí ID s `PREDICTION_LEAGUES`) → `getTeamsByLeague` → `fetchTeamTransfers(team)` →
-  filtr na **aktuální přestupové okno** (`transferWindowStart`, catalog.ts) → `parseTransferFee`
-  → `upsertTransfer`. Řádek je **z perspektivy dotazovaného klubu** (`clubId`/`clubLeagueId`):
-  in/out nesou oba kluby, `clubId` říká čí pohled → jednoznačná bilance i u přestupů mezi dvěma
-  top-5 kluby (uloží se z obou perspektiv, list se dedupuje při čtení). Cron
-  `app/api/cron/refresh-transfers` (denně ve `vercel.json`, `CRON_SECRET`, `?league=ID`).
-- **Přestupové okno** (`transferWindowStart`): dvě okna ročně – **zimní** (od 1. 1.) a **letní**
-  (od 1. 7.); mezi okny i po uzavření vrací start posledního otevřeného okna. Filtruje se na
-  čtení (`getLeagueTransfers`/`getClubBalances` – `date ≥ windowStart`) i při zápisu; cron navíc
-  starší okna **prunne** (`pruneTransfersBefore`). Důsledek: dokončené okno **zůstane** zobrazené,
-  dokud nezačne další (kdy se obsah **nahradí**).
-- **Bilance** (`lib/data/transferStore.ts`): `computeBalances` (čistá fce + test) = počty
-  IN/OUT per klub + rozpad po **kategoriích** (`classifyTransfer`: permanent / loan / loanReturn
-  / free / other). API peněžní částky **prakticky nedává** (ověřeno: 2 z 6326 přestupů mají
-  cenu – `type` nese jen kategorie typu „Loan"/„Transfer"/„Free agent"/„Back from Loan"), proto
-  bilance stojí na **typu pohybu, ne na penězích**. `parseTransferFee`/`feeEur` zůstávají jen
-  pro řádek v seznamu (zobrazí cenu tam, kde výjimečně je).
-- **Gating:** přehled klubů (počty) je **FREE**; **detail** klubu (kteří hráči) je **PRO**
-  (`/api/transfers` vrací `balances` vždy, `transfers` jen pro PRO, jinak `detailLocked`).
-- **UI `TransfersApp.tsx` (klubocentrické, mobile-first):** žádný plochý seznam přes celou ligu
-  (firehose). Hlavní pohled = **tabulka klubů** řazená dle aktivity; přepínač rozsahu
-  **Jen trvalé** (default – odšumí návraty z hostování/N/A) vs **Vše** (i hostování); klik na klub
-  rozbalí detail jeho přestupů (PRO). `Transfer.category` (z `classifyTransfer`) nese kategorii,
-  ať klient filtruje bez serverového kódu. Filtr lig = chips.
-- **Mock režim:** `lib/data/mock/transfers.ts` (generátor nad mock kluby) → záložka funguje bez DB/API.
+## Záložka Přestupy (money-first, zdroj = Transfermarkt dataset)
+- **Princip:** přestupy top-5 lig se importují **dávkově na pozadí** do tabulky `Transfer`;
+  záložka `/transfers` i bilance **jen ČTOU z DB**. Zdroj je **volný Transfermarkt dataset**
+  (`dcaribou/transfermarkt-datasets`, CC0, R2 bucket, aktualizace týdně) – jediný, který nese
+  **reálné ceny** (`transfer_fee`); API-Football ceny prakticky nemá (2 z 6326). Dataset nemá
+  typ (hostování/trvalé) → bilance je **peněžní** (nákupy − prodeje), kategorie se odvozují jen
+  z ceny (placené vs ostatní).
+- **Import** (`lib/data/transfersDataset.ts`): `importTransfersFromDataset` → `fetch` `transfers.csv.gz`
+  (R2 URL) → `gunzipSync` → `parseCsv` (vlastní RFC4180, bez závislosti) → filtr **aktuálního okna**
+  (`windowStart ≤ date ≤ dnes`, vyřadí budoucí/junk data) **a** našich klubů přes
+  **`clubCrosswalk.ts`** (statická mapa TM club_id → API-Football team id + leagueId; vygenerováno
+  `scripts/buildCrosswalk.ts`, ruční kontrola). Řádek je **z perspektivy našeho klubu**
+  (`clubId`/`clubLeagueId`), logo z API-Football, `feeEur`/`marketValueEur` z TM. `replaceTransfers`
+  tabulku **plně nahradí** (TM = jediný zapisovatel). Spouštění: `npm run import-transfers` (lokálně)
+  + cron `app/api/cron/import-transfers` (denně, `CRON_SECRET`).
+- **Přestupové okno** (`transferWindowStart`, catalog.ts): zimní (od 1. 1.) / letní (od 1. 7.);
+  mezi okny vrací start posledního otevřeného. Filtruje se i na čtení
+  (`getLeagueTransfers`/`getClubBalances` – `date ≥ windowStart`). Dokončené okno **zůstane**,
+  dokud nezačne další (kdy ho import **nahradí**). Pozor: zimní okno bývá chudé (málo placených
+  přestupů), hlavní objem je v létě; TM má navíc dost cen „nezveřejněno" → `feeEur` 0/null.
+- **Bilance** (`computeBalances`, transferStore.ts): per klub `spendEur`/`earnEur`/`netEur`
+  (z `feeEur`) + počty IN/OUT; řazení dle `netEur` (největší investor první). Kategorie
+  (`inByCategory`…) se počítají dál, ale UI je nepoužívá (viz dead code níže).
+- **Gating:** přehled + bilance klubů (počty, peníze) = **FREE**; **detail** klubu (kteří hráči,
+  za kolik) = **PRO** (`/api/transfers` vrací `balances` vždy, `transfers` jen PRO, jinak `detailLocked`).
+- **UI `TransfersApp.tsx`** (klubocentrické, mobile-first): tabulka klubů s **net spend** + počty,
+  přepínač **Jen placené** (default) vs **Vše**, klik = detail (cena + datum) pro PRO. Filtr lig = chips.
+- **Dead code pro návrat** (`MODE` v `TransfersApp.tsx` = `"money" | "category"`): předchozí
+  kategoriové řešení (počty po typech z API-Footballu) zůstává jako `CategoryView` + API-Football
+  pipeline `lib/data/transfers.ts` (`runRefreshTransfers`, `fetchTeamTransfers`, `classifyTransfer`,
+  `parseTransferFee`) a route `app/api/cron/refresh-transfers` – nepoužité, přepnutelné.
+- **Mock režim:** `lib/data/mock/transfers.ts` → záložka funguje bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce.
 
 ## PWA (instalace na iOS/Android)

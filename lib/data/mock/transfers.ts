@@ -74,6 +74,7 @@ export function mockLeagueTransfers(leagueIds: number[]): Transfer[] {
       type: r.type,
       category: classifyTransfer(r.type),
       feeEur: r.feeEur,
+      marketValueEur: r.feeEur, // mock: tržní hodnota ~ cena
       inTeamId: r.inTeamId,
       inTeamName: r.inTeamName,
       inTeamLogo: r.inTeamLogo,

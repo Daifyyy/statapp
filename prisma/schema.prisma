@@ -169,6 +169,7 @@ model Transfer {
   date         DateTime
   type         String?
   feeEur       Float?
+  marketValueEur Float?
   inTeamId     Int?
   inTeamName   String?
   inTeamLogo   String?

@@ -212,7 +212,8 @@ export interface Transfer {
   date: string; // ISO
   type: string | null; // surový text z API ("Loan" | "Free" | "€ 20M" | "N/A" …)
   category: TransferCategory; // odvozená kategorie (klient filtruje bez serverového kódu)
-  feeEur: number | null; // parsovaná částka v EUR, null = neznámá
+  feeEur: number | null; // částka přestupu v EUR (TM dataset), null/0 = neznámá/nezveřejněná
+  marketValueEur: number | null; // tržní hodnota hráče v čase přestupu (TM)
   inTeamId: number | null;
   inTeamName: string | null;
   inTeamLogo: string | null;
@@ -232,7 +233,7 @@ export type TransferCategory = "permanent" | "loan" | "loanReturn" | "free" | "o
 /** Počty přestupů po kategoriích (pro jednu stranu – příchody nebo odchody). */
 export type TransferCategoryCounts = Record<TransferCategory, number>;
 
-/** Bilance přestupů jednoho klubu: počty IN/OUT celkem i po kategoriích. */
+/** Bilance přestupů jednoho klubu: peníze (z TM cen) + počty; kategorie ponechány (dead code). */
 export interface ClubTransferBalance {
   teamId: number;
   teamName: string;
@@ -240,6 +241,13 @@ export interface ClubTransferBalance {
   leagueId: number;
   inCount: number;
   outCount: number;
+  /** Součet cen příchozích / odchozích (jen kde fee>0). net = earn − spend. */
+  spendEur: number;
+  earnEur: number;
+  netEur: number;
+  /** Kolik přestupů má známou cenu (fee>0) – kvůli „neúplná data" poznámce. */
+  knownFeeCount: number;
+  /** Rozpad po kategoriích – ponecháno pro případný návrat ke kategoriovému zobrazení. */
   inByCategory: TransferCategoryCounts;
   outByCategory: TransferCategoryCounts;
 }

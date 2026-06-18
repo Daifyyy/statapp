@@ -83,6 +83,7 @@ describe("computeBalances", () => {
     return {
       clubId: 100,
       clubLeagueId: 39,
+      feeEur: null,
       inTeamId: 100,
       inTeamName: "Klub A",
       inTeamLogo: "a.png",
@@ -93,23 +94,34 @@ describe("computeBalances", () => {
     };
   }
   const rows: BalanceInput[] = [
-    row({ type: "Transfer" }), // příchod trvalý
-    row({ type: "Loan" }), // příchod hostování
-    // odchod trvalý (klub 100 je out)
-    row({ type: "Transfer", inTeamId: 300, inTeamName: "Klub C", outTeamId: 100, outTeamName: "Klub A" }),
+    row({ type: "Transfer", feeEur: 10_000_000 }), // příchod placený
+    row({ type: "Loan", feeEur: null }), // příchod bez ceny
+    // odchod placený (klub 100 je out)
+    row({
+      type: "Transfer",
+      feeEur: 4_000_000,
+      inTeamId: 300,
+      inTeamName: "Klub C",
+      outTeamId: 100,
+      outTeamName: "Klub A",
+    }),
   ];
 
-  it("agreguje počty IN/OUT i kategorie z perspektivy clubId", () => {
+  it("agreguje počty IN/OUT i peněžní bilanci z perspektivy clubId", () => {
     const [b] = computeBalances(rows);
     expect(b).toMatchObject({
       teamId: 100,
       teamName: "Klub A",
       inCount: 2,
       outCount: 1,
+      spendEur: 10_000_000,
+      earnEur: 4_000_000,
+      netEur: -6_000_000,
+      knownFeeCount: 2, // loan bez ceny se nepočítá
     });
+    // kategorie se počítají dál (dead code pro návrat)
     expect(b.inByCategory.permanent).toBe(1);
     expect(b.inByCategory.loan).toBe(1);
-    expect(b.outByCategory.permanent).toBe(1);
   });
 });
 
