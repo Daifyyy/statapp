@@ -27,6 +27,10 @@ const CATEGORY_LABELS: Record<TransferCategory, string> = {
   other: "Ostatní",
 };
 
+function fmtDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" });
+}
+
 /** Počty pro aktuální filtr: jen trvalé vs. všechny typy. */
 function scopeCounts(b: ClubTransferBalance, showAll: boolean) {
   return showAll
@@ -303,9 +307,12 @@ function ClubRow({
                     <span className="min-w-0 flex-1 truncate text-foreground">
                       {t.playerName}
                     </span>
-                    <span className="min-w-0 max-w-[40%] shrink-0 truncate text-right text-muted">
+                    <span className="min-w-0 max-w-[35%] shrink-0 truncate text-right text-muted">
                       {incoming ? "← " : "→ "}
                       {counterpart ?? "—"}
+                    </span>
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted">
+                      {fmtDate(t.date)}
                     </span>
                     <span className="hidden shrink-0 text-[10px] text-muted sm:inline">
                       {CATEGORY_LABELS[t.category]}
