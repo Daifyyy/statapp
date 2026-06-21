@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
 import { isNationalTournamentLeague } from "@/lib/data/catalog";
-import type { BacktestResult, TrackRecord } from "@/lib/picks/trackRecord";
+import type { BacktestResult, BacktestSample, TrackRecord } from "@/lib/picks/trackRecord";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -234,9 +234,63 @@ function StrategyPanel({
               Malý vzorek – čísla jsou zatím orientační.
             </p>
           )}
+          {backtest.samples.length > 0 && (
+            <div className="mt-3 border-t border-border pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Posledních {backtest.samples.length} z {backtest.n} tipů
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {backtest.samples.map((s) => (
+                  <SampleRow key={s.fixtureId} sample={s} />
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </section>
+  );
+}
+
+function sampleTipLabel(sample: BacktestSample): string {
+  if (sample.market === "over25") return MARKET_LABELS.over25;
+  if (sample.market === "btts") return MARKET_LABELS.btts;
+  return sample.side === "home" ? "Domácí výhra" : "Hostující výhra";
+}
+
+function SampleRow({ sample }: { sample: BacktestSample }) {
+  const date = new Date(sample.kickoff).toLocaleDateString("cs-CZ", {
+    day: "numeric",
+    month: "numeric",
+  });
+  return (
+    <li className="rounded-lg bg-background px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <span
+          className={`shrink-0 text-sm font-bold ${
+            sample.hit ? "text-positive" : "text-negative"
+          }`}
+          aria-label={sample.hit ? "Tip vyšel" : "Tip nevyšel"}
+        >
+          {sample.hit ? "✓" : "✗"}
+        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px]">
+          <TeamLogo src={sample.home.logoUrl} alt={sample.home.name} size={16} />
+          <span className="min-w-0 truncate font-medium text-home">{sample.home.name}</span>
+          <span className="shrink-0 font-bold tabular-nums text-foreground">
+            {sample.homeGoals}:{sample.awayGoals}
+          </span>
+          <span className="min-w-0 truncate font-medium text-away">{sample.away.name}</span>
+          <TeamLogo src={sample.away.logoUrl} alt={sample.away.name} size={16} />
+        </div>
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[11px] text-muted">
+        <span className="truncate">
+          {date} · {sampleTipLabel(sample)}
+        </span>
+        <span className="shrink-0 tabular-nums">{Math.round(sample.prob * 100)} %</span>
+      </div>
+    </li>
   );
 }
 

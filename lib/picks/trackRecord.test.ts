@@ -94,4 +94,39 @@ describe("backtestRule", () => {
     expect(r.n).toBe(1);
     expect(r.hits).toBe(1);
   });
+
+  it("samples: jen splňující řádky, hit odpovídá výsledku, side/prob z pravidla", () => {
+    const rows = [
+      row({ fixtureId: 1, homeWin: 0.7, homeGoals: 2, awayGoals: 0 }), // tip + trefa
+      row({ fixtureId: 2, homeWin: 0.7, homeGoals: 0, awayGoals: 1 }), // tip + minul
+      row({ fixtureId: 3, homeWin: 0.5, homeGoals: 3, awayGoals: 0 }), // pod prahem → mimo
+    ];
+    const r = backtestRule(rows, { market: "win", venue: "home", minProb: 0.65 });
+    expect(r.samples).toHaveLength(2);
+    const s1 = r.samples.find((s) => s.fixtureId === 1)!;
+    expect(s1.hit).toBe(true);
+    expect(s1.side).toBe("home");
+    expect(s1.prob).toBeCloseTo(0.7);
+    expect(s1.homeGoals).toBe(2);
+    expect(r.samples.find((s) => s.fixtureId === 2)!.hit).toBe(false);
+    expect(r.samples.some((s) => s.fixtureId === 3)).toBe(false);
+  });
+
+  it("samples: seřazené dle kickoff sestupně a oříznuté na limit; n/hits přes celou historii", () => {
+    const mk = (id: number, daysAgo: number) =>
+      row({
+        fixtureId: id,
+        homeWin: 0.7,
+        homeGoals: 2,
+        awayGoals: 0,
+        kickoff: new Date(Date.now() - daysAgo * 86400000).toISOString(),
+      });
+    // 4 platné tipy s různým datem (vstup schválně nesetříděný)
+    const rows = [mk(1, 4), mk(2, 1), mk(3, 3), mk(4, 2)];
+    const r = backtestRule(rows, { market: "win", venue: "home", minProb: 0.65 }, 2);
+    expect(r.n).toBe(4); // n přes celou historii
+    expect(r.hits).toBe(4);
+    expect(r.samples).toHaveLength(2); // oříznuto na limit
+    expect(r.samples.map((s) => s.fixtureId)).toEqual([2, 4]); // nejnovější první
+  });
 });
