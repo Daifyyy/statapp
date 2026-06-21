@@ -27,6 +27,10 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     status: "NS",
     homeGoals: null,
     awayGoals: null,
+    benchAvailable: false,
+    benchHomeWin: null,
+    benchDraw: null,
+    benchAwayWin: null,
     ...over,
   };
 }
@@ -70,16 +74,30 @@ describe("evaluateRule", () => {
 });
 
 describe("filterPicks", () => {
-  it("vrátí jen splňující a seřadí dle pravděpodobnosti sestupně", () => {
+  it("vrátí jen splňující a seřadí dle nejbližšího výkopu", () => {
+    const day = (n: number) => new Date(Date.now() + n * 86400000).toISOString();
     const rows = [
-      row({ fixtureId: 1, homeWin: 0.66 }),
-      row({ fixtureId: 2, homeWin: 0.8 }),
-      row({ fixtureId: 3, homeWin: 0.5 }), // pod prahem
-      row({ fixtureId: 4, available: false, homeWin: 0.99 }), // nedostupná
+      row({ fixtureId: 1, homeWin: 0.66, kickoff: day(3) }),
+      row({ fixtureId: 2, homeWin: 0.8, kickoff: day(1) }),
+      row({ fixtureId: 3, homeWin: 0.5, kickoff: day(2) }), // pod prahem
+      row({ fixtureId: 4, available: false, homeWin: 0.99, kickoff: day(0) }), // nedostupná
     ];
     const picks = filterPicks(rows, { market: "win", venue: "home", minProb: 0.65 });
     expect(picks.map((p) => p.fixtureId)).toEqual([2, 1]);
     expect(picks[0].side).toBe("home");
     expect(picks[0].explanation).toContain("Domácí");
+  });
+
+  it("při stejném dni řadí nejvyšší pravděpodobnost první", () => {
+    const sameDay = "2026-07-01T18:00:00.000Z";
+    const sameDayLater = "2026-07-01T20:00:00.000Z";
+    const nextDay = "2026-07-02T15:00:00.000Z";
+    const rows = [
+      row({ fixtureId: 1, homeWin: 0.7, kickoff: sameDay }),
+      row({ fixtureId: 2, homeWin: 0.9, kickoff: sameDayLater }),
+      row({ fixtureId: 3, homeWin: 0.95, kickoff: nextDay }),
+    ];
+    const picks = filterPicks(rows, { market: "win", venue: "home", minProb: 0.65 });
+    expect(picks.map((p) => p.fixtureId)).toEqual([2, 1, 3]);
   });
 });

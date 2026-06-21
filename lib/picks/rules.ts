@@ -84,7 +84,10 @@ function explain(
   return `${name} ${where} favorit · ${pct} % na výhru`;
 }
 
-/** Vybere a seřadí tipy splňující pravidlo (nejvyšší pravděpodobnost první). */
+/**
+ * Vybere a seřadí tipy splňující pravidlo: nejdříve hrané zápasy první,
+ * při stejném dni nejvyšší pravděpodobnost první.
+ */
 export function filterPicks(
   rows: PredictionRow[],
   rule: PickRule
@@ -106,5 +109,9 @@ export function filterPicks(
       explanation: explain(row, rule.market, m.side, m.prob),
     });
   }
-  return picks.sort((a, b) => b.prob - a.prob);
+  return picks.sort((a, b) => {
+    const dayCmp = a.kickoff.slice(0, 10).localeCompare(b.kickoff.slice(0, 10));
+    if (dayCmp !== 0) return dayCmp;
+    return b.prob - a.prob;
+  });
 }
