@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { PWARegister } from "./_components/PWARegister";
 import { InstallPrompt } from "./_components/InstallPrompt";
@@ -63,6 +64,7 @@ export default function RootLayout({
         {children}
         <PWARegister />
         <InstallPrompt />
+        <Analytics />
       </body>
     </html>
   );

@@ -222,6 +222,24 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   prompt); detekce standalone (už nainstalováno → skryto), „odloženo" v `localStorage` (7 dní).
   Ruční vyvolání z menu/patičky přes `installBus.ts` (`InstallLink.tsx`).
 
+## SEO / sdílení / analytika
+- **Dynamický OG obrázek** `app/og/route.tsx` (`ImageResponse` z `next/og`, 1200×630):
+  čte názvy týmů z query `?h=&a=` a vykreslí „Tým A vs Tým B" kartu (bez query = obecná).
+  **Záměrně bez server lookupu** v routě → scraper odkazu nespustí žádné API volání.
+  Pozn.: statická OG text je bez diakritiky (default font satori).
+- **`generateMetadata` v `app/page.tsx`** (server komponenta): u konkrétního porovnání
+  (oba `home`/`away` známé) dohledá názvy **1× kešovaným** `getTeamsByLeague` (katalogový
+  read, ne drahý per-match fetch), složí `title`/`description`, `alternates.canonical`
+  (dedup permutací parametrů) a OG/twitter (`summary_large_image`) s odkazem na `/og?h=&a=`.
+  Lookup selže-li → vrátí `{}` a dědí statická metadata z `layout.tsx`. Metabase = `AUTH_URL`.
+- **`app/sitemap.ts` + `app/robots.ts`** (Next metadata routes): sitemap = 3 hlavní záložky
+  (porovnání s týmy se neindexují plošně – kombinatorika + canonical), robots povolí vše
+  kromě `/api/`. BASE z `AUTH_URL` (fallback prod doména).
+- **Analytika:** Vercel Web Analytics (`@vercel/analytics`), `<Analytics/>` v `layout.tsx`
+  (pageviews zdarma, bez cookies; aktivní jen na Vercelu v produkci). Vlastní eventy přes
+  `track(...)`: `share` (`AppHeader`), `signin_from_prolock` / `trial_unlock` (`ProLock`).
+  **JSON-LD vynecháno záměrně** (`SportsEvent` sémanticky nesedí na statistické porovnání).
+
 ## DB
 Prisma 6 + Postgres (Neon). Tabulky `ApiCache` (TTL) + `MatchStatCache` (trvalá)
 + účty (`User`/`Account`/`Session`/`VerificationToken`) + `SavedComparison` (oblíbené).

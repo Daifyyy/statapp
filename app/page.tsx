@@ -1,5 +1,6 @@
+import type { Metadata } from "next";
 import { CompareApp, type InitialSelection } from "./_components/CompareApp";
-import { getLeagues } from "@/lib/data/repository";
+import { getLeagues, getTeamsByLeague } from "@/lib/data/repository";
 import type { EntityType } from "@/lib/types";
 import { getCurrentUser } from "@/lib/authUser";
 import { InstallLink } from "./_components/InstallLink";
@@ -8,6 +9,64 @@ import type { SessionUser } from "./_components/sessionUser";
 function num(v: string | string[] | undefined): number | undefined {
   const n = Number(Array.isArray(v) ? v[0] : v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** Název týmu z ligy dle id (kešovaný katalogový read; null = nenalezeno/chyba). */
+async function teamName(
+  leagueId: number | undefined,
+  teamId: number | undefined
+): Promise<string | null> {
+  if (leagueId == null || teamId == null) return null;
+  try {
+    const teams = await getTeamsByLeague(leagueId);
+    return teams.find((t) => t.id === teamId)?.name ?? null;
+  } catch {
+    return null; // metadata nesmí shodit stránku
+  }
+}
+
+// Dynamická metadata pro sdílení a SEO: u konkrétního porovnání „Tým A vs Tým B"
+// + dynamický OG obrázek (/og) a kanonická URL. Bez týmů spadne na default z layoutu.
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}): Promise<Metadata> {
+  const sp = await searchParams;
+  const homeLeague = num(sp.homeLeague);
+  const awayLeague = num(sp.awayLeague);
+  const home = num(sp.home);
+  const away = num(sp.away);
+
+  const [hn, an] = await Promise.all([
+    teamName(homeLeague, home),
+    teamName(awayLeague, away),
+  ]);
+  if (!hn || !an) return {}; // dědí statická metadata z layoutu
+
+  const title = `${hn} vs ${an} — porovnání | Predictapp`;
+  const description = `Statistické porovnání ${hn} a ${an}: forma, doma/venku, predikce zápasu a klíčové signály.`;
+  const ogUrl = `/og?h=${encodeURIComponent(hn)}&a=${encodeURIComponent(an)}`;
+  const modeRaw = Array.isArray(sp.mode) ? sp.mode[0] : sp.mode;
+  const mode = modeRaw === "NATIONAL" ? "NATIONAL" : "CLUB";
+  const canonical = `/?mode=${mode}&homeLeague=${homeLeague}&awayLeague=${awayLeague}&home=${home}&away=${away}`;
+
+  return {
+    title,
+    description,
+    alternates: { canonical },
+    openGraph: {
+      title,
+      description,
+      images: [{ url: ogUrl, width: 1200, height: 630, alt: `${hn} vs ${an}` }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [ogUrl],
+    },
+  };
 }
 
 export default async function Home({

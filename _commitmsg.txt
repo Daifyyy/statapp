@@ -1,0 +1,13 @@
+feat: růst & akvizice – dynamické OG karty, SEO základ, Vercel Analytics
+
+Fáze 2 (growth):
+- Dynamický OG obrázek (app/og, ImageResponse) "Tým A vs Tým B" z query názvů
+  → bohatý náhled při sdílení; bez API volání při scrapování odkazu.
+- generateMetadata na page.tsx: title/description/canonical + OG/Twitter
+  (summary_large_image) pro konkrétní porovnání, 1× kešovaný lookup názvů.
+- SEO: app/sitemap.ts + app/robots.ts (Next metadata routes), canonical dedup.
+- Analytika: Vercel Web Analytics (<Analytics/> v layoutu), vlastní eventy
+  track() share / signin_from_prolock / trial_unlock.
+- CLAUDE.md: nová sekce SEO / sdílení / analytika.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

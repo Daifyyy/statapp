@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
+import { track } from "@vercel/analytics";
 import { ThemeToggle } from "./ThemeToggle";
 import { AccountMenu } from "./AccountMenu";
 import type { SessionUser } from "./sessionUser";
@@ -62,6 +63,7 @@ function ShareButton() {
   const [state, setState] = useState<"idle" | "copied" | "error">("idle");
   async function share() {
     const url = window.location.href;
+    track("share");
     // Mobil: nativní share sheet (jen v secure kontextu). Zrušení uživatelem
     // (AbortError) bereme jako tichý konec; jinou chybu řeší fallback na schránku.
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {

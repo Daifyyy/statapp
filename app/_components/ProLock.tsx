@@ -1,6 +1,7 @@
 "use client";
 
 import { signIn } from "next-auth/react";
+import { track } from "@vercel/analytics";
 import type { SessionUser } from "./sessionUser";
 
 const PRO_FEATURES = [
@@ -49,7 +50,10 @@ export function ProLock({
           <>
             <button
               type="button"
-              onClick={() => void signIn("google")}
+              onClick={() => {
+                track("signin_from_prolock");
+                void signIn("google");
+              }}
               className="rounded-full bg-positive px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
             >
               Přihlas se a vyzkoušej PRO zdarma (1×)
@@ -62,7 +66,10 @@ export function ProLock({
           <>
             <button
               type="button"
-              onClick={onUnlockTrial}
+              onClick={() => {
+                track("trial_unlock");
+                onUnlockTrial();
+              }}
               disabled={unlocking}
               className="rounded-full bg-positive px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
             >
