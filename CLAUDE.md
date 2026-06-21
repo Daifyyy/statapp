@@ -283,3 +283,47 @@ znaku (https, bez koncového `/`).
   - **HOTOVO i track-record benchmarku v UI:** `computeBenchmarkTrackRecord`
     (`lib/picks/trackRecord.ts`, sdílí `scoreProbs` s `calibrate`) → `api/picks/stats` →
     `BenchmarkPanel` v `PicksApp`. Reálná čísla naskočí po dost settlnutých klubových zápasech.
+
+## Go-to-market / dostat web do oběhu (postup k provedení)
+Technické základy jsou hotové (viz „SEO / sdílení / analytika"). Tohle je **ruční**
+checklist mimo kód, seřazený podle poměru přínos/úsilí. Provádět postupně.
+
+**Ověření po deployi (po každém nasazení Fáze 2):**
+- Analytics: Vercel → projekt → **Analytics** (návštěvy, top stránky, referrers) a
+  **Events** (vlastní eventy `share` / `signin_from_prolock` / `trial_unlock` = konverzní
+  trychtýř). Web Analytics je třeba **1× zapnout v dashboardu** (Project → Analytics → Enable).
+- OG náhled: zkopíruj URL porovnání → vlož do [opengraph.xyz] nebo Messengeru; má se ukázat
+  karta „Tým A vs Tým B". Sítě OG **cachují** → změny protlač [FB Sharing Debugger].
+- SEO soubory žijí: `/(robots.txt)` a `/(sitemap.xml)` na prod doméně.
+
+**Krok 1 — Google Search Console (nutnost, ~15 min, zdarma):**
+- [search.google.com/search-console] → přidat doménu → ověřit (DNS nebo HTML meta tag
+  v `layout.tsx`) → **Sitemaps → vložit `sitemap.xml` → Submit**. Performance pak ukáže
+  dotazy, na které tě lidi nacházejí. Totéž volitelně Bing Webmaster Tools.
+
+**Krok 2 — Long-tail SEO (největší dlouhodobá páka):**
+- Lidi googlí konkrétní zápasy („Sparta Slavia statistiky", „kdo vyhraje … predikce").
+  Porovnání už mají **dynamický titulek/popis** přesně na to (`generateMetadata`).
+- Zvážit generování odkazů na **vybraná derby/zápasy sezóny** do sitemapy (ať je Google
+  objeví bez čekání). Držet rychlost (Core Web Vitals → už loading skeletony + cache).
+
+**Krok 3 — Komunity (přímý provoz hned, než naběhne SEO):**
+- FB skupiny o fotbale/sázení (CZ/SK), Discord/Reddit (r/fotbal, r/soccerbetting),
+  X/Twitter před velkými zápasy. **Vždy sdílet konkrétní zápas, ne homepage** (konkrétní
+  OG karta = klik). Přidat hodnotu (číslo/tip), ne spam.
+
+**Krok 4 — Benchmark jako marketing:**
+- Až `BenchmarkPanel` ukáže, že vedeme nad API-Footballem, je to nejsilnější hook:
+  „náš model trefil 1X2 v X %". Screenshot → příspěvek do sázkařských komunit.
+
+**Krok 5 — Vlastní doména (důvěra + CTR):**
+- `statapp-uvol.vercel.app` je těžko zapamatovatelné. Koupit doménu, nastavit ve Vercelu
+  **a v `AUTH_URL`**. Pozor: po změně projít Google OAuth redirect URI + `AUTH_URL`
+  (viz Deployment výše) – jinak `redirect_uri_mismatch`.
+
+**Krok 6 — PWA retence:**
+- Aktivně nabízet „Přidej na plochu" vracejícím se (už máš `InstallPrompt`). Instalovaný
+  uživatel se vrací častěji – nezíská nové, ale udrží stávající.
+
+**Doporučené pořadí pro 1. vlnu:** (1) Search Console + sitemap → (2) vlastní doména →
+(3) pár příspěvků do komunit s konkrétním zápasem (okamžitý provoz + první data v Analytics).
