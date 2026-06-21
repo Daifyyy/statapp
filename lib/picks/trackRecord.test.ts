@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PredictionRow } from "@/lib/types";
-import { backtestRule } from "./trackRecord";
+import { backtestRule, computeBenchmarkTrackRecord } from "./trackRecord";
 
 function row(over: Partial<PredictionRow> = {}): PredictionRow {
   return {
@@ -132,5 +132,57 @@ describe("backtestRule", () => {
     expect(r.hits).toBe(4);
     expect(r.samples).toHaveLength(2); // oříznuto na limit
     expect(r.samples.map((s) => s.fixtureId)).toEqual([2, 4]); // nejnovější první
+  });
+});
+
+describe("computeBenchmarkTrackRecord", () => {
+  const bench = (over: Partial<PredictionRow>) =>
+    row({
+      benchAvailable: true,
+      benchHomeWin: 0.5,
+      benchDraw: 0.25,
+      benchAwayWin: 0.25,
+      ...over,
+    });
+
+  it("počítá jen řádky, kde mají oba modely dostupnou predikci i skóre", () => {
+    const rows = [
+      bench({ fixtureId: 1, homeGoals: 2, awayGoals: 0 }), // oba dostupné + odehráno
+      bench({ fixtureId: 2, benchAvailable: false, benchHomeWin: null }), // bez benchmarku
+      row({ fixtureId: 3, homeGoals: 1, awayGoals: 1 }), // bez benchmarku (default)
+      bench({ fixtureId: 4, available: false, homeGoals: 1, awayGoals: 0 }), // náš model nedostupný
+      bench({ fixtureId: 5, homeGoals: null, awayGoals: null }), // neodehráno
+    ];
+    const r = computeBenchmarkTrackRecord(rows);
+    expect(r.n).toBe(1);
+    expect(r.our?.n).toBe(1);
+    expect(r.bench?.n).toBe(1);
+  });
+
+  it("prázdná podmnožina → n 0 a null skóre", () => {
+    const r = computeBenchmarkTrackRecord([row({ homeGoals: 1, awayGoals: 0 })]);
+    expect(r.n).toBe(0);
+    expect(r.our).toBeNull();
+    expect(r.bench).toBeNull();
+  });
+
+  it("oba na stejné podmnožině; přesnost dle argmaxu (shoda/neshoda)", () => {
+    // Náš model favorizuje domácí (0.6), benchmark hosty (0.6). Domácí vyhráli.
+    const rows = [
+      bench({
+        fixtureId: 1,
+        homeWin: 0.6,
+        draw: 0.2,
+        awayWin: 0.2,
+        benchHomeWin: 0.2,
+        benchDraw: 0.2,
+        benchAwayWin: 0.6,
+        homeGoals: 2,
+        awayGoals: 0,
+      }),
+    ];
+    const r = computeBenchmarkTrackRecord(rows);
+    expect(r.our?.accuracy).toBe(1); // trefil domácí
+    expect(r.bench?.accuracy).toBe(0); // trefil hosty
   });
 });

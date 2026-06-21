@@ -81,6 +81,7 @@ describe("toFreeResult", () => {
       awayWin: 0.3,
       bttsYes: 0.5,
       over25: 0.5,
+      topScores: [],
       lowConfidence: false,
     },
     insightReport: { verdict: "x", keySignals: [], home: [], away: [] },

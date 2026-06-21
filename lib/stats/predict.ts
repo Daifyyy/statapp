@@ -1,9 +1,10 @@
-import type { MatchPrediction, TeamComparison } from "@/lib/types";
+import type { MatchPrediction, ScoreProbability, TeamComparison } from "@/lib/types";
 import { lowConfidenceOf, valueOrTotal } from "./metricLookup";
 
 const MAX_GOALS = 10; // mřížka Poissonu (0..10 pro každý tým)
 const MIN_LAMBDA = 0.2;
 const MAX_LAMBDA = 5;
+const TOP_SCORES = 5; // kolik nejpravděpodobnějších přesných skóre vydat
 
 /**
  * Dixon–Coles parametr závislosti ρ. Nezávislý Poisson podhodnocuje nízkoskórové
@@ -37,6 +38,7 @@ export function predictMatch(
       awayWin: 0,
       bttsYes: 0,
       over25: 0,
+      topScores: [],
       lowConfidence: true,
     };
   }
@@ -53,6 +55,7 @@ export function predictMatch(
   let over25 = 0;
   let bttsYes = 0;
   let total = 0;
+  const scores: ScoreProbability[] = [];
   for (let i = 0; i <= MAX_GOALS; i++) {
     for (let j = 0; j <= MAX_GOALS; j++) {
       const p = ph[i] * pa[j] * drawTau(i, j, lambdaHome, lambdaAway);
@@ -62,6 +65,7 @@ export function predictMatch(
       else awayWin += p;
       if (i + j >= 3) over25 += p;
       if (i >= 1 && j >= 1) bttsYes += p;
+      scores.push({ home: i, away: j, prob: p });
     }
   }
   // Re-normalizace (uťatá mřížka + korekce nezachová přesně 1).
@@ -71,6 +75,12 @@ export function predictMatch(
   awayWin /= norm;
   over25 /= norm;
   bttsYes /= norm;
+
+  // Nejpravděpodobnější přesná skóre z téže opravené mřížky (normalizovaná).
+  const topScores = scores
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, TOP_SCORES)
+    .map((s) => ({ home: s.home, away: s.away, prob: s.prob / norm }));
 
   const lowConfidence =
     lowConfidenceOf(home.values, "GOALS_FOR", "HOME") ||
@@ -85,6 +95,7 @@ export function predictMatch(
     awayWin,
     bttsYes,
     over25,
+    topScores,
     lowConfidence,
   };
 }

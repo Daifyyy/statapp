@@ -66,6 +66,8 @@ function predictionOf(row: PredictionRow): MatchPrediction {
     awayWin: row.awayWin,
     bttsYes: row.bttsYes,
     over25: row.over25,
+    // Přesná skóre nejsou v uloženém řádku (UI-only obohacení z živé mřížky); pravidla je nepotřebují.
+    topScores: [],
     lowConfidence: row.lowConfidence,
   };
 }

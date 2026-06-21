@@ -83,6 +83,38 @@ describe("predictMatch", () => {
     expect(p.lowConfidence).toBe(true);
   });
 
+  it("topScores: seřazené sestupně, validní skóre, prob ≤ součet 1X2", () => {
+    const p = predictMatch(
+      team({ GOALS_FOR: 1.8, GOALS_AGAINST: 1.1 }),
+      team({ GOALS_FOR: 1.2, GOALS_AGAINST: 1.6 })
+    );
+    expect(p.topScores.length).toBeGreaterThan(0);
+    expect(p.topScores.length).toBeLessThanOrEqual(5);
+    // sestupně dle prob
+    for (let i = 1; i < p.topScores.length; i++) {
+      expect(p.topScores[i - 1].prob).toBeGreaterThanOrEqual(p.topScores[i].prob);
+    }
+    // platná nezáporná celá skóre + prob v rozsahu
+    for (const s of p.topScores) {
+      expect(Number.isInteger(s.home)).toBe(true);
+      expect(Number.isInteger(s.away)).toBe(true);
+      expect(s.prob).toBeGreaterThan(0);
+      expect(s.prob).toBeLessThanOrEqual(1);
+    }
+    // součet top skóre nepřekročí celkovou pravděpodobnost (1)
+    const sum = p.topScores.reduce((a, s) => a + s.prob, 0);
+    expect(sum).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it("topScores: nedostupná predikce → prázdné pole", () => {
+    const empty: TeamComparison = {
+      team: { id: 1, name: "X", logoUrl: "", country: "" },
+      values: [],
+      summary: [],
+    };
+    expect(predictMatch(empty, empty).topScores).toEqual([]);
+  });
+
   it("bez gólových i xG dat → predikce nedostupná (ne falešná 50/50)", () => {
     const empty: TeamComparison = {
       team: { id: 1, name: "Nováček", logoUrl: "", country: "" },

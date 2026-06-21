@@ -13,7 +13,7 @@ export function MatchPrediction({
   homeName: string;
   awayName: string;
 }) {
-  const { homeWin, draw, awayWin, lambdaHome, lambdaAway, bttsYes, over25 } =
+  const { homeWin, draw, awayWin, lambdaHome, lambdaAway, bttsYes, over25, topScores } =
     prediction;
   const pct = (x: number) => Math.round(x * 100);
 
@@ -72,6 +72,27 @@ export function MatchPrediction({
         <Chip label="Oba skórují" value={`${pct(bttsYes)} %`} />
         <Chip label="Přes 2.5 gólu" value={`${pct(over25)} %`} />
       </div>
+
+      {topScores.length > 0 && (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            Nejpravděpodobnější výsledky
+          </p>
+          <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+            {topScores.map((s) => (
+              <span
+                key={`${s.home}-${s.away}`}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-background px-2.5 py-1 text-xs"
+              >
+                <strong className="tabular-nums text-foreground">
+                  {s.home}:{s.away}
+                </strong>
+                <span className="tabular-nums text-muted">{pct(s.prob)} %</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

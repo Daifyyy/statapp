@@ -20,7 +20,8 @@ function rowFrom(
   status: string,
   homeGoals: number | null,
   awayGoals: number | null,
-  leagueId: number = home.leagueId
+  leagueId: number = home.leagueId,
+  bench: { home: number; draw: number; away: number } | null = null
 ): PredictionRow {
   const r = compareTeams(home, away);
   const p = r.prediction!;
@@ -48,12 +49,29 @@ function rowFrom(
     status,
     homeGoals,
     awayGoals,
-    // Benchmark se plní jen reálnou pipeline (API-Football); mock ho nemá.
-    benchAvailable: false,
-    benchHomeWin: null,
-    benchDraw: null,
-    benchAwayWin: null,
+    // Benchmark (predikce API-Footballu) se reálně plní jen klubovou pipeline.
+    // V mocku ho dodáváme jen odehraným klubovým řádkům (viz mockSettledPredictions),
+    // aby srovnávací panel fungoval bez DB/API.
+    benchAvailable: bench != null,
+    benchHomeWin: bench?.home ?? null,
+    benchDraw: bench?.draw ?? null,
+    benchAwayWin: bench?.away ?? null,
   };
+}
+
+/**
+ * Mock benchmark = naše predikce regresovaná k uniformní (1/3) → realisticky vypadající,
+ * ale slabší konkurent (méně vyhraněný → typicky horší log-loss). Deterministické, žádný
+ * trik na „vždy vyhrajeme" – jen méně sebevědomé pravděpodobnosti.
+ */
+function benchFrom(p: { homeWin: number; draw: number; awayWin: number }) {
+  const k = 0.65; // podíl zachované „síly" predikce, zbytek táhne k 1/3
+  const mix = (x: number) => k * x + (1 - k) * (1 / 3);
+  const h = mix(p.homeWin);
+  const d = mix(p.draw);
+  const a = mix(p.awayWin);
+  const s = h + d + a;
+  return { home: h / s, draw: d / s, away: a / s };
 }
 
 /** Dvojice klubů ze stejné ligy (po sobě jdoucí). */
@@ -113,7 +131,9 @@ export function mockUpcomingPredictions(): PredictionRow[] {
 
 /** Odehrané mock predikce s výsledkem (pro track-record). Každý 3. = překvapení. */
 export function mockSettledPredictions(): PredictionRow[] {
-  const pairs = clubPairs().slice(8, 20);
+  // Stejné páry jako nadcházející (mock seed má jen pár klubů), jiné fixtureId/datum
+  // a status FT → track-record i benchmark panel se v mocku reálně naplní.
+  const pairs = clubPairs();
   return pairs.map(([h, a], i) => {
     const r = compareTeams(h, a);
     const p = r.prediction!;
@@ -134,7 +154,9 @@ export function mockSettledPredictions(): PredictionRow[] {
       new Date(Date.now() - (i + 1) * DAY).toISOString(),
       "FT",
       hg,
-      ag
+      ag,
+      h.leagueId,
+      benchFrom(p)
     );
   });
 }

@@ -5,7 +5,12 @@ import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
 import { isNationalTournamentLeague } from "@/lib/data/catalog";
-import type { BacktestResult, BacktestSample, TrackRecord } from "@/lib/picks/trackRecord";
+import type {
+  BacktestResult,
+  BacktestSample,
+  BenchmarkTrackRecord,
+  TrackRecord,
+} from "@/lib/picks/trackRecord";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -66,6 +71,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [track, setTrack] = useState<TrackRecord | null>(null);
+  const [benchmark, setBenchmark] = useState<BenchmarkTrackRecord | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
 
   const retry = useCallback(() => {
@@ -99,6 +105,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
       .then((d) => {
         if (!active) return;
         if (d.trackRecord) setTrack(d.trackRecord);
+        setBenchmark(d.benchmark ?? null);
         setBacktest(d.backtest ?? null);
       })
       .catch(() => {});
@@ -138,6 +145,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
             <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
           )}
           {track && <TrackRecordPanel track={track} />}
+          {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
 
           <RuleControls
             market={market}
@@ -333,6 +341,70 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-lg font-bold tabular-nums text-foreground">{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
     </div>
+  );
+}
+
+function BenchmarkPanel({ benchmark }: { benchmark: BenchmarkTrackRecord }) {
+  const { n, our, bench } = benchmark;
+  if (!our || !bench) return null;
+  const pct = (x: number) => `${Math.round(x * 100)} %`;
+  const small = n < 30;
+  // Log-loss je férovější ukazatel kvality pravděpodobností než holá přesnost
+  // (nižší = lepší). Verdikt podle něj, ne podle argmaxu (ten je zašuměný).
+  const better =
+    our.logloss < bench.logloss
+      ? "our"
+      : our.logloss > bench.logloss
+        ? "bench"
+        : "tie";
+  return (
+    <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Náš model vs. API-Football
+        </p>
+        <span className="text-[11px] text-muted">{n} společných zápasů</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <div
+          className={`rounded-xl p-2.5 ${
+            better === "our" ? "bg-positive/10 ring-1 ring-positive/30" : "bg-background"
+          }`}
+        >
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {pct(our.accuracy)}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">Náš model</div>
+        </div>
+        <div
+          className={`rounded-xl p-2.5 ${
+            better === "bench" ? "bg-positive/10 ring-1 ring-positive/30" : "bg-background"
+          }`}
+        >
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {pct(bench.accuracy)}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">API-Football</div>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-muted">
+        Přesnost 1X2 (argmax) na stejných zápasech. Kvalita pravděpodobností (log-loss,
+        nižší = lepší):{" "}
+        <span className="font-semibold text-foreground">{our.logloss.toFixed(3)}</span> vs{" "}
+        {bench.logloss.toFixed(3)} →{" "}
+        {better === "our"
+          ? "✅ vedeme"
+          : better === "bench"
+            ? "⚠ vede API-Football"
+            : "≈ vyrovnané"}
+        .
+      </p>
+      {small && (
+        <p className="mt-2 text-[11px] text-warning">
+          Malý vzorek – čísla jsou zatím orientační.
+        </p>
+      )}
+    </section>
   );
 }
 

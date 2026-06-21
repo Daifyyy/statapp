@@ -48,6 +48,92 @@ export function computeTrackRecord(rows: PredictionRow[]): TrackRecord {
   };
 }
 
+// --- Benchmark vs. API-Football (1X2) -----------------------------------
+// Náš model vs. predikce API-Footballu na STEJNÉ podmnožině (oba mají
+// dostupnou predikci 1X2 a zápas je odehraný) → férové srovnání přesnosti.
+// Sdíleno se `scripts/calibrate.ts` (jeden zdroj pravdy pro skórování).
+
+/** Pravděpodobnosti 1X2 (součet ~1). */
+export interface ProbTriple {
+  home: number;
+  draw: number;
+  away: number;
+}
+
+/** Výběr 1X2 pravděpodobností z řádku – null = pro daný model nedostupné. */
+export type ProbPick = (r: PredictionRow) => ProbTriple | null;
+
+export const ourProbs: ProbPick = (r) =>
+  r.available ? { home: r.homeWin, draw: r.draw, away: r.awayWin } : null;
+
+export const benchProbs: ProbPick = (r) =>
+  r.benchAvailable &&
+  r.benchHomeWin != null &&
+  r.benchDraw != null &&
+  r.benchAwayWin != null
+    ? { home: r.benchHomeWin, draw: r.benchDraw, away: r.benchAwayWin }
+    : null;
+
+/** Multiclass skóre 1X2: přesnost (argmax), Brier a log-loss (nižší = lepší). */
+export interface ModelScore {
+  n: number;
+  accuracy: number; // argmax 1X2 vs. skutečnost
+  brier: number; // multiclass Brier
+  logloss: number;
+}
+
+/** Skóre vybraných 1X2 pravděpodobností nad odehranými řádky (čistá funkce). */
+export function scoreProbs(rows: PredictionRow[], pick: ProbPick): ModelScore {
+  let brier = 0;
+  let logloss = 0;
+  let hits = 0;
+  let n = 0;
+  for (const r of rows) {
+    if (r.homeGoals == null || r.awayGoals == null) continue;
+    const p = pick(r);
+    if (!p) continue;
+    const oH = r.homeGoals > r.awayGoals ? 1 : 0;
+    const oA = r.homeGoals < r.awayGoals ? 1 : 0;
+    const oD = r.homeGoals === r.awayGoals ? 1 : 0;
+    brier += (p.home - oH) ** 2 + (p.draw - oD) ** 2 + (p.away - oA) ** 2;
+    const pObs = oH ? p.home : oA ? p.away : p.draw;
+    logloss += -Math.log(Math.max(pObs, 1e-9));
+    const argmax = p.home >= p.draw && p.home >= p.away ? "H" : p.away >= p.draw ? "A" : "D";
+    const actual = oH ? "H" : oA ? "A" : "D";
+    if (argmax === actual) hits++;
+    n++;
+  }
+  return n
+    ? { n, accuracy: hits / n, brier: brier / n, logloss: logloss / n }
+    : { n: 0, accuracy: 0, brier: 0, logloss: 0 };
+}
+
+export interface BenchmarkTrackRecord {
+  n: number; // společná podmnožina (oba modely dostupné + odehráno)
+  our: ModelScore | null;
+  bench: ModelScore | null;
+}
+
+/**
+ * Side-by-side track-record: náš model vs. API-Football jen na zápasech, kde mají
+ * oba dostupnou predikci 1X2 (jinak nesrovnatelné). Jen 1X2 (benchmark nese jen ten).
+ */
+export function computeBenchmarkTrackRecord(rows: PredictionRow[]): BenchmarkTrackRecord {
+  const both = rows.filter(
+    (r) =>
+      r.homeGoals != null &&
+      r.awayGoals != null &&
+      ourProbs(r) != null &&
+      benchProbs(r) != null
+  );
+  if (both.length === 0) return { n: 0, our: null, bench: null };
+  return {
+    n: both.length,
+    our: scoreProbs(both, ourProbs),
+    bench: scoreProbs(both, benchProbs),
+  };
+}
+
 /**
  * Backtest tipovací strategie: kdyby uživatel sázel podle `rule` na historii,
  * jaké úspěšnosti by dosáhl. Čistá funkce – sdílí `evaluateRule` (kvalifikace

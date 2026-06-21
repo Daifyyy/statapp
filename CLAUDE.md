@@ -56,8 +56,10 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Predikce** (`lib/stats/predict.ts`, `CompareResult.prediction`) – **Poisson** z očekávaných
   gólů (útok týmu × obrana soupeře, venue-specific, fallback TOTAL, volitelné zpevnění xG)
   s **Dixon–Coles korekcí** nízkých skóre (`DC_RHO`, `drawTau`; ρ<0 zvyšuje remízy 0:0/1:1).
-  V/R/P, BTTS i Over 2.5 se počítají z téže opravené mřížky. Chybí-li gólová i xG data,
-  vrací `available:false` (UI zobrazí „nedostatek dat", ne falešnou 50/50). UI `MatchPrediction.tsx`.
+  V/R/P, BTTS, Over 2.5 i **top-N nejpravděpodobnějších přesných skóre** (`topScores`) se
+  počítají z téže opravené mřížky → vzájemně konzistentní (`topScores` je UI-only obohacení
+  z živé mřížky, **neukládá se** do `PredictionRow`/`FixturePrediction`). Chybí-li gólová i xG
+  data, vrací `available:false` (UI zobrazí „nedostatek dat", ne falešnou 50/50). UI `MatchPrediction.tsx`.
 - **Insights = rule-engine** (`lib/insights/`): `engine.ts` spustí registry pravidel
   (`rules/team.ts` per-tým napříč metrikami, `rules/form.ts` série/PPG z `lib/stats/streaks.ts`,
   `rules/matchup.ts` syntéza obou týmů + vysvětlení predikce, `rules/verdict.ts` verdikt).
@@ -146,8 +148,10 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
   `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (nadcházející tipy; PRO přes
   `getEntitlement`, FREE→`{locked}`), `app/api/picks/stats` (`lib/picks/trackRecord.ts`:
-  `computeTrackRecord` = globální track-record + `backtestRule` = backtest navoleného
-  pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`.
+  `computeTrackRecord` = globální track-record + `computeBenchmarkTrackRecord` = side-by-side
+  náš model vs. API-Football na společné podmnožině (viz benchmark níže) + `backtestRule` =
+  backtest navoleného pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`
+  (panely `TrackRecordPanel` / `BenchmarkPanel` / `StrategyPanel`).
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
   úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`). Počítá **jen
@@ -162,10 +166,15 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   dotáhne **jen pro klubové ligy** (`!national`) a **1×/zápas** (`hasBenchmark` guard →
   srovnatelný okamžik + nízké náklady), výpadek nezastaví náš řádek. `saveBenchmark`
   (`predictionStore.ts`) má vlastní cyklus (mimo `upsertPrediction`/`PredictionUpsert`).
-  Výsledek doplní `settle-results` (společný), `calibrate` pak skóruje **oba modely na
-  stejné podmnožině** (`benchAvailable && available`) → side-by-side 1X2 přesnost/Brier/log-loss.
-  Rozsah jen **1X2** (Over 2.5/BTTS dává API jen volným textem → vynecháno).
+  Výsledek doplní `settle-results` (společný). Skórování oboumodelů na **stejné podmnožině**
+  (`benchAvailable && available`) je sdílené: `scoreProbs`/`ourProbs`/`benchProbs` v
+  `lib/picks/trackRecord.ts` (jeden zdroj pravdy) používá jak `calibrate` (CLI Brier/log-loss),
+  tak `computeBenchmarkTrackRecord` (API `picks/stats` → `BenchmarkPanel` v `PicksApp`,
+  verdikt dle log-loss, `n<30` orientační). Rozsah jen **1X2** (Over 2.5/BTTS dává API jen
+  volným textem → vynecháno).
 - **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
+  Odehrané mock řádky nesou i syntetický benchmark (naše predikce regresovaná k 1/3) →
+  `BenchmarkPanel` se vykreslí i v mocku.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
 ## Záložka Přestupy (money-first, zdroj = Transfermarkt dataset)
@@ -253,5 +262,6 @@ znaku (https, bez koncového `/`).
   v sekci o predikční záložce výše. Implementováno (schéma `bench*`, `fetchPrediction`,
   guard v `runPredictUpcoming`, `saveBenchmark`, side-by-side v `calibrate`). Čeká na data
   (klubové ligy v sezóně) → spusť `npm run calibrate` po dost settlnutých zápasech.
-  - **Mimo 1. iteraci (zatím TODO):** track-record benchmarku do `lib/picks/trackRecord.ts`
-    + UI sloupec v PicksApp – řešit až podle výsledku z `calibrate`.
+  - **HOTOVO i track-record benchmarku v UI:** `computeBenchmarkTrackRecord`
+    (`lib/picks/trackRecord.ts`, sdílí `scoreProbs` s `calibrate`) → `api/picks/stats` →
+    `BenchmarkPanel` v `PicksApp`. Reálná čísla naskočí po dost settlnutých klubových zápasech.

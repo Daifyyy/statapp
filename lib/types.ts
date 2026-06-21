@@ -280,6 +280,13 @@ export interface TeamComparison {
 }
 
 /** Predikce zápasu z očekávaných gólů (Poisson). Domácí = první tým. */
+/** Jedno přesné skóre s pravděpodobností (z téže opravené mřížky jako 1X2). */
+export interface ScoreProbability {
+  home: number; // góly domácích
+  away: number; // góly hostů
+  prob: number; // 0–1
+}
+
 export interface MatchPrediction {
   /** false = chybí gólová i xG data → predikci nelze vydat (UI zobrazí hlášku). */
   available: boolean;
@@ -290,6 +297,8 @@ export interface MatchPrediction {
   awayWin: number; // 0–1
   bttsYes: number; // 0–1 (oba skórují)
   over25: number; // 0–1 (3+ gólů celkem)
+  /** Nejpravděpodobnější přesná skóre (sestupně), z téže opravené mřížky. Prázdné, když available=false. */
+  topScores: ScoreProbability[];
   lowConfidence: boolean; // malý vzorek pod predikcí
 }
 

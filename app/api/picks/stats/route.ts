@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { getSettledPredictionRows } from "@/lib/data/repository";
 import { getCurrentUser } from "@/lib/authUser";
 import { getEntitlement } from "@/lib/entitlements";
-import { backtestRule, computeTrackRecord } from "@/lib/picks/trackRecord";
+import {
+  backtestRule,
+  computeBenchmarkTrackRecord,
+  computeTrackRecord,
+} from "@/lib/picks/trackRecord";
 import { ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
@@ -33,6 +37,7 @@ export async function GET(req: Request) {
     const rows = await getSettledPredictionRows();
     return NextResponse.json({
       trackRecord: computeTrackRecord(rows),
+      benchmark: computeBenchmarkTrackRecord(rows),
       backtest: backtestRule(rows, parsed.data),
     });
   } catch (e) {

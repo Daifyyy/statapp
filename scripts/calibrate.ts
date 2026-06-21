@@ -7,7 +7,12 @@
 import { getSettledPredictions } from "../lib/data/predictionStore.ts";
 import { MODEL_VERSION } from "../lib/data/predictions.ts";
 import { drawTau, poissonVector } from "../lib/stats/predict.ts";
-import { computeTrackRecord } from "../lib/picks/trackRecord.ts";
+import {
+  computeTrackRecord,
+  scoreProbs,
+  ourProbs,
+  benchProbs,
+} from "../lib/picks/trackRecord.ts";
 import type { PredictionRow } from "../lib/types.ts";
 
 const MAX_GOALS = 10;
@@ -34,45 +39,8 @@ function logLikelihood(rows: PredictionRow[], rho: number): number {
   return ll;
 }
 
-/** Výběr pravděpodobností 1X2 z řádku (náš model / benchmark) – null = nedostupné. */
-type ProbPick = (r: PredictionRow) => { home: number; draw: number; away: number } | null;
-
-const ourProbs: ProbPick = (r) =>
-  r.available ? { home: r.homeWin, draw: r.draw, away: r.awayWin } : null;
-
-const benchProbs: ProbPick = (r) =>
-  r.benchAvailable && r.benchHomeWin != null && r.benchDraw != null && r.benchAwayWin != null
-    ? { home: r.benchHomeWin, draw: r.benchDraw, away: r.benchAwayWin }
-    : null;
-
-/** Multiclass Brier + log-loss + 1X2 přesnost (argmax) z vybraných pravděpodobností. */
-function probScores(
-  rows: PredictionRow[],
-  pick: ProbPick
-): { brier: number; logloss: number; accuracy: number; n: number } {
-  let brier = 0;
-  let logloss = 0;
-  let hits = 0;
-  let n = 0;
-  for (const r of rows) {
-    if (r.homeGoals == null || r.awayGoals == null) continue;
-    const p = pick(r);
-    if (!p) continue;
-    const oH = r.homeGoals > r.awayGoals ? 1 : 0;
-    const oA = r.homeGoals < r.awayGoals ? 1 : 0;
-    const oD = r.homeGoals === r.awayGoals ? 1 : 0;
-    brier += (p.home - oH) ** 2 + (p.draw - oD) ** 2 + (p.away - oA) ** 2;
-    const pObs = oH ? p.home : oA ? p.away : p.draw;
-    logloss += -Math.log(Math.max(pObs, 1e-9));
-    const argmax = p.home >= p.draw && p.home >= p.away ? "H" : p.away >= p.draw ? "A" : "D";
-    const actual = oH ? "H" : oA ? "A" : "D";
-    if (argmax === actual) hits++;
-    n++;
-  }
-  return n
-    ? { brier: brier / n, logloss: logloss / n, accuracy: hits / n, n }
-    : { brier: 0, logloss: 0, accuracy: 0, n: 0 };
-}
+// 1X2 výběr pravděpodobností a skórování sdílí lib/picks/trackRecord.ts (ourProbs,
+// benchProbs, scoreProbs) → jeden zdroj pravdy s API track-recordem.
 
 async function main() {
   const rows = await getSettledPredictions(MODEL_VERSION);
@@ -90,7 +58,7 @@ async function main() {
   console.log("1X2 přesnost:", tr.outcomeAccuracy != null ? `${(tr.outcomeAccuracy * 100).toFixed(1)} %` : "—");
   console.log("Přes 2.5:", tr.over25Accuracy != null ? `${(tr.over25Accuracy * 100).toFixed(1)} %` : "—");
   console.log("Oba skórují:", tr.bttsAccuracy != null ? `${(tr.bttsAccuracy * 100).toFixed(1)} %` : "—");
-  const ps = probScores(rows, ourProbs);
+  const ps = scoreProbs(rows, ourProbs);
   console.log(`Brier (1X2): ${ps.brier.toFixed(4)} | log-loss: ${ps.logloss.toFixed(4)} (n=${ps.n})`);
 
   // Side-by-side benchmark: náš model vs. predikce API-Footballu na STEJNÉ podmnožině
@@ -100,8 +68,8 @@ async function main() {
   if (both.length === 0) {
     console.log("Žádné odehrané zápasy s benchmarkem od API. Sbírá se z klubových lig (mimo sezónu prázdno).");
   } else {
-    const ours = probScores(both, ourProbs);
-    const bench = probScores(both, benchProbs);
+    const ours = scoreProbs(both, ourProbs);
+    const bench = scoreProbs(both, benchProbs);
     const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
     console.log(`Společných zápasů: ${both.length}`);
     console.log(`              náš model      API-Football`);
