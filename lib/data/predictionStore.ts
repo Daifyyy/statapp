@@ -8,10 +8,17 @@ import { FINISHED_STATUSES } from "./apiFootball";
  * pozadí; predikční záložka / track-record / kalibrace odsud jen ČTOU.
  */
 
-/** Predikční část jednoho řádku k upsertu (bez výsledku – ten doplní settle). */
+/** Predikční část jednoho řádku k upsertu (bez výsledku – ten doplní settle;
+ * bez benchmarku – ten má vlastní cyklus přes `saveBenchmark`). */
 export type PredictionUpsert = Omit<
   PredictionRow,
-  "status" | "homeGoals" | "awayGoals"
+  | "status"
+  | "homeGoals"
+  | "awayGoals"
+  | "benchAvailable"
+  | "benchHomeWin"
+  | "benchDraw"
+  | "benchAwayWin"
 > & { kickoff: string };
 
 function toRow(p: FixturePrediction): PredictionRow {
@@ -39,6 +46,10 @@ function toRow(p: FixturePrediction): PredictionRow {
     status: p.status,
     homeGoals: p.homeGoals,
     awayGoals: p.awayGoals,
+    benchAvailable: p.benchAvailable,
+    benchHomeWin: p.benchHomeWin,
+    benchDraw: p.benchDraw,
+    benchAwayWin: p.benchAwayWin,
   };
 }
 
@@ -70,6 +81,38 @@ export async function upsertPrediction(row: PredictionUpsert): Promise<void> {
     where: { fixtureId: row.fixtureId },
     create: { fixtureId: row.fixtureId, ...data },
     update: data,
+  });
+}
+
+/**
+ * Je už uložený benchmark (API predikce) pro tento zápas? Drží pravidlo „fetch 1×"
+ * (predikujeme při 1. zachycení, API se mění blíž k výkopu → záměrně neaktualizovat).
+ */
+export async function hasBenchmark(fixtureId: number): Promise<boolean> {
+  const row = await prisma.fixturePrediction.findUnique({
+    where: { fixtureId },
+    select: { benchHomeWin: true },
+  });
+  return row?.benchHomeWin != null;
+}
+
+/**
+ * Uloží benchmark (predikce API-Footballu 1X2) na existující řádek. Samostatný
+ * životní cyklus od naší predikce (`upsertPrediction` ho nepřepisuje).
+ */
+export async function saveBenchmark(
+  fixtureId: number,
+  bench: { home: number; draw: number; away: number }
+): Promise<void> {
+  await prisma.fixturePrediction.update({
+    where: { fixtureId },
+    data: {
+      benchAvailable: true,
+      benchHomeWin: bench.home,
+      benchDraw: bench.draw,
+      benchAwayWin: bench.away,
+      benchFetchedAt: new Date(),
+    },
   });
 }
 

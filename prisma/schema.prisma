@@ -150,6 +150,14 @@ model FixturePrediction {
   homeGoals     Int?
   awayGoals     Int?
   settledAt     DateTime?
+  // Interní benchmark: predikce API-Footballu (1X2) pro tentýž zápas. Paralelní
+  // sloupec na témže řádku → settle skóruje oba modely zadarmo. Nikdy se nevystavuje
+  // ve FREE/PRO API, jen pro offline srovnání (scripts/calibrate.ts). Jen klubové ligy.
+  benchAvailable Boolean  @default(false)
+  benchHomeWin   Float?
+  benchDraw      Float?
+  benchAwayWin   Float?
+  benchFetchedAt DateTime?
 
   @@index([leagueId, kickoff])
   @@index([status, kickoff])

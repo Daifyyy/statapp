@@ -48,6 +48,11 @@ function rowFrom(
     status,
     homeGoals,
     awayGoals,
+    // Benchmark se plní jen reálnou pipeline (API-Football); mock ho nemá.
+    benchAvailable: false,
+    benchHomeWin: null,
+    benchDraw: null,
+    benchAwayWin: null,
   };
 }
 

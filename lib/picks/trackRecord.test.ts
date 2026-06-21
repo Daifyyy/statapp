@@ -27,6 +27,10 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     status: "FT",
     homeGoals: 1,
     awayGoals: 0,
+    benchAvailable: false,
+    benchHomeWin: null,
+    benchDraw: null,
+    benchAwayWin: null,
     ...over,
   };
 }

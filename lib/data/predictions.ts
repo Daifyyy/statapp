@@ -12,12 +12,15 @@ import { compareTeams } from "@/lib/stats/compare";
 import {
   fetchLeagueUpcomingFixtures,
   fetchFixturesByIds,
+  fetchPrediction,
   FINISHED_STATUSES,
 } from "./apiFootball";
 import {
   upsertPrediction,
   getUnsettledPredictions,
   applyResult,
+  hasBenchmark,
+  saveBenchmark,
 } from "./predictionStore";
 
 /**
@@ -109,6 +112,20 @@ export async function runPredictUpcoming(
           modelVersion: MODEL_VERSION,
         });
         predicted++;
+
+        // Interní benchmark: predikce API-Footballu (1X2) na týž řádek. Jen klubové
+        // ligy (reprezentace API predikce nemá), jen 1× za život zápasu (drží náklady
+        // i srovnatelný okamžik). Výpadek/null nesmí shodit náš řádek.
+        if (!national) {
+          try {
+            if (!(await hasBenchmark(f.fixture.id))) {
+              const bench = await fetchPrediction(f.fixture.id);
+              if (bench) await saveBenchmark(f.fixture.id, bench);
+            }
+          } catch {
+            // benchmark je best-effort
+          }
+        }
       } catch {
         // přeskoč problémový zápas, pokračuj dál
       }

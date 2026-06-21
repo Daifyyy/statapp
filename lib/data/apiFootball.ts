@@ -181,6 +181,25 @@ const transferPlayerSchema = z.object({
 });
 const transfersSchema = z.array(transferPlayerSchema);
 
+// Predikce API-Footballu (interní benchmark). `percent` jsou řetězce „45%"; bereme
+// jen 1X2, zbytek (goals/advice/winner) ignorujeme. Tolerantní – chybějící pole = null.
+const predictionItemSchema = z.object({
+  predictions: z
+    .object({
+      percent: z
+        .object({
+          home: z.string().nullable().optional(),
+          draw: z.string().nullable().optional(),
+          away: z.string().nullable().optional(),
+        })
+        .partial()
+        .optional(),
+    })
+    .partial()
+    .optional(),
+});
+const predictionsSchema = z.array(predictionItemSchema);
+
 export type ApiTeam = z.infer<typeof teamItemSchema>;
 export type ApiFixture = z.infer<typeof fixtureItemSchema>;
 export type ApiFixtureStats = z.infer<typeof fixtureStatsSchema>;
@@ -230,6 +249,33 @@ export function fetchFixturesByIds(ids: number[]) {
 /** Per-zápas statistiky (rohy, fauly, střely, xG). */
 export function fetchFixtureStatistics(fixture: number) {
   return apiGet("/fixtures/statistics", { fixture }, fixtureStatsSchema);
+}
+
+/** „45%" → 0.45; null/„N/A"/prázdno → null. */
+function parsePercent(s: string | null | undefined): number | null {
+  if (!s) return null;
+  const n = parseFloat(s.replace("%", "").trim());
+  return Number.isFinite(n) ? n / 100 : null;
+}
+
+/**
+ * Predikce 1X2 od API-Footballu (interní benchmark). Vrací pravděpodobnosti
+ * normalizované na součet 1, nebo `null` když API predikci nemá (časté mimo top-5)
+ * či je neúplná. Mimo `compareTeams` – jen offline srovnání přesnosti.
+ */
+export async function fetchPrediction(
+  fixture: number
+): Promise<{ home: number; draw: number; away: number } | null> {
+  const res = await apiGet("/predictions", { fixture }, predictionsSchema);
+  const pct = res[0]?.predictions?.percent;
+  if (!pct) return null;
+  const home = parsePercent(pct.home);
+  const draw = parsePercent(pct.draw);
+  const away = parsePercent(pct.away);
+  if (home == null || draw == null || away == null) return null;
+  const sum = home + draw + away;
+  if (sum <= 0) return null;
+  return { home: home / sum, draw: draw / sum, away: away / sum };
 }
 
 /** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */

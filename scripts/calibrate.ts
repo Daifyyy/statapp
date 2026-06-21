@@ -34,23 +34,44 @@ function logLikelihood(rows: PredictionRow[], rho: number): number {
   return ll;
 }
 
-/** Multiclass Brier + log-loss z uložených pravděpodobností 1X2. */
-function probScores(rows: PredictionRow[]): { brier: number; logloss: number; n: number } {
+/** Výběr pravděpodobností 1X2 z řádku (náš model / benchmark) – null = nedostupné. */
+type ProbPick = (r: PredictionRow) => { home: number; draw: number; away: number } | null;
+
+const ourProbs: ProbPick = (r) =>
+  r.available ? { home: r.homeWin, draw: r.draw, away: r.awayWin } : null;
+
+const benchProbs: ProbPick = (r) =>
+  r.benchAvailable && r.benchHomeWin != null && r.benchDraw != null && r.benchAwayWin != null
+    ? { home: r.benchHomeWin, draw: r.benchDraw, away: r.benchAwayWin }
+    : null;
+
+/** Multiclass Brier + log-loss + 1X2 přesnost (argmax) z vybraných pravděpodobností. */
+function probScores(
+  rows: PredictionRow[],
+  pick: ProbPick
+): { brier: number; logloss: number; accuracy: number; n: number } {
   let brier = 0;
   let logloss = 0;
+  let hits = 0;
   let n = 0;
   for (const r of rows) {
-    if (!r.available || r.homeGoals == null || r.awayGoals == null) continue;
+    if (r.homeGoals == null || r.awayGoals == null) continue;
+    const p = pick(r);
+    if (!p) continue;
     const oH = r.homeGoals > r.awayGoals ? 1 : 0;
     const oA = r.homeGoals < r.awayGoals ? 1 : 0;
     const oD = r.homeGoals === r.awayGoals ? 1 : 0;
-    brier +=
-      (r.homeWin - oH) ** 2 + (r.draw - oD) ** 2 + (r.awayWin - oA) ** 2;
-    const pObs = oH ? r.homeWin : oA ? r.awayWin : r.draw;
+    brier += (p.home - oH) ** 2 + (p.draw - oD) ** 2 + (p.away - oA) ** 2;
+    const pObs = oH ? p.home : oA ? p.away : p.draw;
     logloss += -Math.log(Math.max(pObs, 1e-9));
+    const argmax = p.home >= p.draw && p.home >= p.away ? "H" : p.away >= p.draw ? "A" : "D";
+    const actual = oH ? "H" : oA ? "A" : "D";
+    if (argmax === actual) hits++;
     n++;
   }
-  return n ? { brier: brier / n, logloss: logloss / n, n } : { brier: 0, logloss: 0, n: 0 };
+  return n
+    ? { brier: brier / n, logloss: logloss / n, accuracy: hits / n, n }
+    : { brier: 0, logloss: 0, accuracy: 0, n: 0 };
 }
 
 async function main() {
@@ -69,8 +90,32 @@ async function main() {
   console.log("1X2 přesnost:", tr.outcomeAccuracy != null ? `${(tr.outcomeAccuracy * 100).toFixed(1)} %` : "—");
   console.log("Přes 2.5:", tr.over25Accuracy != null ? `${(tr.over25Accuracy * 100).toFixed(1)} %` : "—");
   console.log("Oba skórují:", tr.bttsAccuracy != null ? `${(tr.bttsAccuracy * 100).toFixed(1)} %` : "—");
-  const ps = probScores(rows);
+  const ps = probScores(rows, ourProbs);
   console.log(`Brier (1X2): ${ps.brier.toFixed(4)} | log-loss: ${ps.logloss.toFixed(4)} (n=${ps.n})`);
+
+  // Side-by-side benchmark: náš model vs. predikce API-Footballu na STEJNÉ podmnožině
+  // (jen řádky, kde mají oba dostupnou predikci) → férové srovnání přesnosti.
+  const both = rows.filter((r) => ourProbs(r) != null && benchProbs(r) != null);
+  console.log("\n=== Benchmark vs. API-Football (1X2, společná podmnožina) ===");
+  if (both.length === 0) {
+    console.log("Žádné odehrané zápasy s benchmarkem od API. Sbírá se z klubových lig (mimo sezónu prázdno).");
+  } else {
+    const ours = probScores(both, ourProbs);
+    const bench = probScores(both, benchProbs);
+    const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
+    console.log(`Společných zápasů: ${both.length}`);
+    console.log(`              náš model      API-Football`);
+    console.log(`1X2 přesnost: ${pct(ours.accuracy).padEnd(14)} ${pct(bench.accuracy)}`);
+    console.log(`Brier:        ${ours.brier.toFixed(4).padEnd(14)} ${bench.brier.toFixed(4)}  (nižší = lepší)`);
+    console.log(`log-loss:     ${ours.logloss.toFixed(4).padEnd(14)} ${bench.logloss.toFixed(4)}  (nižší = lepší)`);
+    const verdict =
+      ours.logloss < bench.logloss
+        ? "✅ Náš model má nižší log-loss (lepší)."
+        : ours.logloss > bench.logloss
+          ? "⚠ API-Football má nižší log-loss (lepší)."
+          : "≈ Vyrovnané.";
+    console.log(verdict + (both.length < 30 ? " (Malý vzorek <30 – orientační.)" : ""));
+  }
 
   console.log("\n=== MLE Dixon–Coles ρ ===");
   let best = { rho: 0, ll: -Infinity };

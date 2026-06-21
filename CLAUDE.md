@@ -155,6 +155,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   predikcí, jinak je výsledek orientační. `DC_RHO` je zatím publikovaný default −0.13
   (Dixon–Coles 1997), nekalibrovaný na vlastních datech – čeká na dost settlnutých predikcí
   (první dataset se sbírá z MS 2026; settle dělá cron `settle-results`).
+- **Interní benchmark vs. API-Football** (jen offline měření, **nikdy ve FREE/PRO API**,
+  **nesahá na `compareTeams`**): paralelní sloupce `bench*` na řádku `FixturePrediction`
+  (predikce API-Footballu 1X2). `fetchPrediction` (`apiFootball.ts`) parsne `percent`
+  (`"45%"`→0.45) a normalizuje na součet 1; `runPredictUpcoming` ji po uložení naší predikce
+  dotáhne **jen pro klubové ligy** (`!national`) a **1×/zápas** (`hasBenchmark` guard →
+  srovnatelný okamžik + nízké náklady), výpadek nezastaví náš řádek. `saveBenchmark`
+  (`predictionStore.ts`) má vlastní cyklus (mimo `upsertPrediction`/`PredictionUpsert`).
+  Výsledek doplní `settle-results` (společný), `calibrate` pak skóruje **oba modely na
+  stejné podmnožině** (`benchAvailable && available`) → side-by-side 1X2 přesnost/Brier/log-loss.
+  Rozsah jen **1X2** (Over 2.5/BTTS dává API jen volným textem → vynecháno).
 - **Mock režim:** `lib/data/mock/predictions.ts` (generátor) → záložka funguje i bez DB/API.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
@@ -239,37 +249,9 @@ znaku (https, bez koncového `/`).
   přes `visualViewport` / `meta viewport interactive-widget`. Nutno ladit přímo na
   zařízení (Safari Web Inspector).
 
-- **TODO: Benchmark predikcí vs. API-Football (interní měření přesnosti).** Cíl: poprvé
-  zjistit, jestli náš Poisson+Dixon–Coles model poráží/prohrává s vlastními predikcemi
-  API-Footballu. **Ne** produkční model – jen **interní srovnávací sloupec**, nikdy se
-  nevystavuje ve FREE/PRO API a **nedotýká se `compareTeams`** (jádro zůstává čisté).
-  Rozsah = **1X2** (home/draw/away). Over 2.5 / BTTS vědomě vynechat – API je dává jen
-  jako volný text (`advice`/`under_over`), parsing by zanesl víc šumu než hodnoty.
-  - **Co API vrací** (`/predictions?fixture=ID`): `percent.home/draw/away` jako řetězce
-    `"45%"` → parsnout na 0.45 + normalizovat na součet 1. `goals`/`advice`/`winner`
-    nepoužívat. Prázdná `response` (časté mimo top-5) → benchmark nedostupný.
-  - **Krok 1 – schéma** (`prisma/schema.prisma`, model `FixturePrediction`): přidat
-    **nullable** sloupce (paralelní benchmark na témže řádku → `settle-results` doplní
-    výsledek 1× a skóruje oba modely zadarmo; nullable = `prisma db push` nedestruktivní):
-    `benchAvailable Boolean @default(false)`, `benchHomeWin/benchDraw/benchAwayWin Float?`,
-    `benchFetchedAt DateTime?`. Pak `npx prisma db push` (Neon je sdílená s prod → nasadit
-    kód hned).
-  - **Krok 2 – API vrstva** (`lib/data/apiFootball.ts`): `fetchPrediction(fixtureId)`
-    + tolerantní zod schéma, vrací `{home,draw,away}|null`.
-  - **Krok 3 – orchestrace** (`runPredictUpcoming` v `lib/data/predictions.ts`): po uložení
-    naší predikce 1 volání `/predictions` **s pojistkami:** jen klubové ligy
-    (`PREDICTION_LEAGUES`, ne reprezentace – tam API predikce nemá), **jen když ještě není
-    uložená** (`benchHomeWin == null` → 1×/zápas za život, drží náklady ~desítky volání/den),
-    `null`/výpadek nezastaví náš řádek (try/catch, `benchAvailable=false`).
-  - **Krok 4 – store** (`lib/data/predictionStore.ts` + `PredictionRow` v `lib/types.ts`):
-    rozšířit `toRow` o bench pole + **samostatná** `saveBenchmark(fixtureId, {home,draw,away})`
-    (jiný životní cyklus než naše predikce, neruší ji).
-  - **Krok 5 – skórování** (`scripts/calibrate.ts`): zobecnit `probScores()` na výběr
-    sloupců, zavolat 2× nad stejnými settled řádky → side-by-side Brier/log-loss
-    (bench jen na podmnožině `benchAvailable && available` = férové srovnání). To je jádro
-    hodnoty – po dost settlnutých zápasech dá číslo „jsme lepší/horší/nastejno".
-  - **Mimo 1. iteraci:** track-record do `lib/picks/trackRecord.ts` + UI sloupec v PicksApp –
-    řešit až podle výsledku z `calibrate`.
-  - **Pozor:** časování – my predikujeme při 1. zachycení, API updatuje blíž k výkopu →
-    guard „fetch 1×" drží obě predikce ze srovnatelného okamžiku (záměrně neaktualizovat).
-    `modelVersion` filtr v kalibraci drží srovnání konzistentní (bench je na stejném řádku).
+- **HOTOVO: Benchmark predikcí vs. API-Football** – viz „Interní benchmark vs. API-Football"
+  v sekci o predikční záložce výše. Implementováno (schéma `bench*`, `fetchPrediction`,
+  guard v `runPredictUpcoming`, `saveBenchmark`, side-by-side v `calibrate`). Čeká na data
+  (klubové ligy v sezóně) → spusť `npm run calibrate` po dost settlnutých zápasech.
+  - **Mimo 1. iteraci (zatím TODO):** track-record benchmarku do `lib/picks/trackRecord.ts`
+    + UI sloupec v PicksApp – řešit až podle výsledku z `calibrate`.

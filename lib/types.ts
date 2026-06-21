@@ -356,6 +356,11 @@ export interface PredictionRow {
   status: string; // "NS" | "FT" | "AET" | "PEN" | …
   homeGoals: number | null;
   awayGoals: number | null;
+  // Interní benchmark: predikce API-Footballu (1X2) pro tentýž zápas. Mimo FREE/PRO API.
+  benchAvailable: boolean;
+  benchHomeWin: number | null;
+  benchDraw: number | null;
+  benchAwayWin: number | null;
 }
 
 /** Trh, na který pravidlo cílí. */
