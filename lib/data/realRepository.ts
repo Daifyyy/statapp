@@ -1,6 +1,7 @@
-import type { Injury, League, MatchStat, Metric, Team } from "@/lib/types";
+import type { FixtureDay, Injury, League, MatchStat, Metric, Team } from "@/lib/types";
 import {
   fetchFixtureStatistics,
+  fetchFixturesByDate,
   fetchLastFixtures,
   fetchLeagueTeams,
   fetchTeamFixtures,
@@ -10,6 +11,7 @@ import {
   type ApiFixture,
   type ApiFixtureStats,
 } from "./apiFootball";
+import { normalizeUpcomingFixtures } from "./fixtures";
 import {
   cachedJson,
   getCachedMatchStats,
@@ -30,6 +32,7 @@ import {
 
 const LIST_TTL = 60 * 60 * 24; // 24 h pro seznamy (dokončené sezóny jsou stabilní)
 const INJ_TTL = 60 * 60 * 6; // 6 h pro zranění (soupiska se mění průběžně)
+const FIX_TTL = 60 * 60; // 1 h pro denní rozpis (časy/zápasy se mohou měnit)
 const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
 const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
@@ -166,6 +169,25 @@ export async function getTeamInjuries(
   } catch {
     return [];
   }
+}
+
+/**
+ * Nadcházející zápasy našich lig pro zadané dny (`YYYY-MM-DD`). 1 volání `/fixtures?date=`
+ * na den (přes TTL cache) → levné. Výpadek jednoho dne nezhasne ostatní (vrátí prázdno).
+ */
+export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]> {
+  return Promise.all(
+    dates.map(async (date) => {
+      try {
+        const raw = await cachedJson(`fixdate:${date}`, FIX_TTL, () =>
+          fetchFixturesByDate(date)
+        );
+        return { date, fixtures: normalizeUpcomingFixtures(raw) };
+      } catch {
+        return { date, fixtures: [] };
+      }
+    })
+  );
 }
 
 // ---- Sestavení reprezentace ----

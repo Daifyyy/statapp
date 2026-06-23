@@ -125,7 +125,8 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
       <AppHeader
         user={user}
         nav={[
-          { href: "/", label: "Porovnání", emoji: "⇄" },
+          { href: "/", label: "Zápasy", emoji: "📅" },
+          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
         ]}
       />
@@ -510,7 +511,7 @@ function PickRow({ pick }: { pick: MatchPick }) {
   // Reprezentační turnaje (MS) se v plném porovnání neotevírají – týmy jsou
   // cross-konfederační a deep-link (mode=CLUB) by nesedl → vykreslíme neklikací kartu.
   const national = isNationalTournamentLeague(pick.leagueId);
-  const href = `/?mode=CLUB&homeLeague=${pick.leagueId}&awayLeague=${pick.leagueId}&home=${pick.home.id}&away=${pick.away.id}`;
+  const href = `/porovnani?mode=CLUB&homeLeague=${pick.leagueId}&awayLeague=${pick.leagueId}&home=${pick.home.id}&away=${pick.away.id}`;
   const cardClass =
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (

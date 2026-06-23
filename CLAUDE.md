@@ -73,6 +73,30 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **`lib/data/repository.ts`** přepíná real/mock podle env (`isRealDataConfigured`).
   Reálné: `realRepository.ts`; mock: `mock/seed.ts` + `generate.ts`.
 
+## Záložka Zápasy (domovská obrazovka `/` = rychlý vstup k predikci)
+- **Princip:** úvodní obrazovka `/` je seznam **nadcházejících zápasů (dnes + zítra)
+  seskupený podle ligy**; klik na zápas otevře **Porovnání s předvyplněnými týmy**, které se
+  samo přepočítá včetně predikce → **žádné ruční vybírání týmů**. Porovnání se proto přesunulo
+  z `/` na **`/porovnani`** (`app/porovnani/page.tsx`, dříve `app/page.tsx`).
+- **Seznam je jen navigace – nic se nepočítá živě tady.** Predikce vzniká až klikem přes
+  existující deep-link do `CompareApp` (`/porovnani?mode=CLUB&homeLeague=&awayLeague=&home=&away=`,
+  auto-`runCompare`) → **žádný nový výpočetní kód**, `compareTeams` ani gating (`toFreeResult`)
+  se nemění (predikce zůstává PRO jako dnes). Stejný deep-link už staví `PicksApp` (`PickRow`).
+- **Data:** `fetchFixturesByDate(date)` (`apiFootball.ts`) = **1 volání `/fixtures?date=`
+  na den** (timezone `Europe/Prague`) → levné. `getFixturesByDates(dates)`
+  (`realRepository.ts`, TTL `ApiCache` 1 h, výpadek dne nezhasne ostatní) profiltruje přes
+  **`FIXTURE_LIST_LEAGUE_IDS`** (`catalog.ts` = 18 klubových lig + reprezentace), vyřadí
+  dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
+  (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
+  `lib/data/mock/fixtures.ts` (funguje bez DB/API).
+- **UI `ZapasyApp.tsx`** (client, mobile-first jako `PickRow`): přepínač **Dnes/Zítra** (lokální
+  state nad už načtenými daty, žádný další fetch), v rámci dne **skupiny podle ligy**.
+  Reprezentační zápasy (`national`, `isNationalTournamentLeague`) jsou **neklikací karty**
+  (cross-konfederační deep-link by nesedl – stejně jako v `PicksApp`).
+- **Zpětná kompatibilita:** starý sdílený odkaz `/?home=&away=` v `app/page.tsx`
+  **přesměruje** na `/porovnani?…` (zachová sdílení i OG kartu). Nav „Zápasy" (📅) + přesměrování
+  „Porovnání" na `/porovnani` je napříč `CompareApp`/`PicksApp`/`TransfersApp`.
+
 ## Datový model / okna (DŮLEŽITÉ)
 - `MatchStat` nese `season` (ligová sezóna) + odvozené `isBaseline` (dopočítá se při
   sestavení v `realRepository`, neukládá se → odolné vůči přechodu sezón).
@@ -227,14 +251,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   čte názvy týmů z query `?h=&a=` a vykreslí „Tým A vs Tým B" kartu (bez query = obecná).
   **Záměrně bez server lookupu** v routě → scraper odkazu nespustí žádné API volání.
   Pozn.: statická OG text je bez diakritiky (default font satori).
-- **`generateMetadata` v `app/page.tsx`** (server komponenta): u konkrétního porovnání
-  (oba `home`/`away` známé) dohledá názvy **1× kešovaným** `getTeamsByLeague` (katalogový
-  read, ne drahý per-match fetch), složí `title`/`description`, `alternates.canonical`
-  (dedup permutací parametrů) a OG/twitter (`summary_large_image`) s odkazem na `/og?h=&a=`.
-  Lookup selže-li → vrátí `{}` a dědí statická metadata z `layout.tsx`. Metabase = `AUTH_URL`.
-- **`app/sitemap.ts` + `app/robots.ts`** (Next metadata routes): sitemap = 3 hlavní záložky
-  (porovnání s týmy se neindexují plošně – kombinatorika + canonical), robots povolí vše
-  kromě `/api/`. BASE z `AUTH_URL` (fallback prod doména).
+- **`generateMetadata` v `app/porovnani/page.tsx`** (server komponenta; Porovnání žije na
+  `/porovnani`, viz „Záložka Zápasy"): u konkrétního porovnání (oba `home`/`away` známé)
+  dohledá názvy **1× kešovaným** `getTeamsByLeague` (katalogový read, ne drahý per-match
+  fetch), složí `title`/`description`, `alternates.canonical` (`/porovnani?…`, dedup permutací
+  parametrů) a OG/twitter (`summary_large_image`) s odkazem na `/og?h=&a=`. Lookup selže-li →
+  vrátí `{}` a dědí statická metadata z `layout.tsx`. Metabase = `AUTH_URL`.
+- **`app/sitemap.ts` + `app/robots.ts`** (Next metadata routes): sitemap = 4 hlavní záložky
+  (`/` Zápasy, `/porovnani`, `/predikce`, `/transfers`; konkrétní porovnání se neindexují
+  plošně – kombinatorika + canonical), robots povolí vše kromě `/api/`. BASE z `AUTH_URL`
+  (fallback prod doména).
 - **Analytika:** Vercel Web Analytics (`@vercel/analytics`), `<Analytics/>` v `layout.tsx`
   (pageviews zdarma, bez cookies; aktivní jen na Vercelu v produkci). Vlastní eventy přes
   `track(...)`: `share` (`AppHeader`), `signin_from_prolock` / `trial_unlock` (`ProLock`).

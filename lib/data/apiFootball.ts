@@ -246,6 +246,18 @@ export function fetchFixturesByIds(ids: number[]) {
   return apiGet("/fixtures", { ids: ids.join("-") }, z.array(fixtureItemSchema));
 }
 
+/**
+ * Všechny zápasy daného dne (`date` = `YYYY-MM-DD`) napříč ligami – 1 volání. `timezone`
+ * zajistí správné hranice dne (jinak bere zónu účtu). Filtr na naše ligy se dělá u nás.
+ */
+export function fetchFixturesByDate(date: string) {
+  return apiGet(
+    "/fixtures",
+    { date, timezone: "Europe/Prague" },
+    z.array(fixtureItemSchema)
+  );
+}
+
 /** Per-zápas statistiky (rohy, fauly, střely, xG). */
 export function fetchFixtureStatistics(fixture: number) {
   return apiGet("/fixtures/statistics", { fixture }, fixtureStatsSchema);

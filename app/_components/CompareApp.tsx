@@ -354,6 +354,7 @@ export function CompareApp({
       <AppHeader
         user={user}
         nav={[
+          { href: "/", label: "Zápasy", emoji: "📅" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
         ]}

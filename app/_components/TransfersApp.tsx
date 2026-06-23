@@ -148,7 +148,8 @@ function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: Leagu
       <AppHeader
         user={user}
         nav={[
-          { href: "/", label: "Porovnání", emoji: "⇄" },
+          { href: "/", label: "Zápasy", emoji: "📅" },
+          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
         ]}
       />
@@ -332,7 +333,8 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
       <AppHeader
         user={user}
         nav={[
-          { href: "/", label: "Porovnání", emoji: "⇄" },
+          { href: "/", label: "Zápasy", emoji: "📅" },
+          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
         ]}
       />

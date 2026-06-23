@@ -112,6 +112,15 @@ export function isNationalTournamentLeague(leagueId: number): boolean {
   return ALL_NATIONAL_PREDICTION_LEAGUE_IDS.includes(leagueId);
 }
 
+/**
+ * Ligy zobrazované v záložce „Zápasy" (denní seznam): kurátorované klubové ligy
+ * + reprezentační soutěže. Jeden zdroj pravdy pro filtr `/fixtures?date=`.
+ */
+export const FIXTURE_LIST_LEAGUE_IDS = [
+  ...CLUB_LEAGUES.map((l) => l.id),
+  ...ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
+];
+
 /** Má soutěž reálné domácí/venku (Liga národů) → build s venue splitem (ne neutrální)? */
 export function isNationalHomeAwayLeague(leagueId: number): boolean {
   return NATIONAL_HOME_AWAY_LEAGUE_IDS.includes(leagueId);
@@ -120,6 +129,10 @@ export function isNationalHomeAwayLeague(leagueId: number): boolean {
 /** URL loga týmu z jeho ID (stejný tvar jako API-Football `team.logo`). */
 export const teamLogoUrl = (id: number) =>
   `https://media.api-sports.io/football/teams/${id}.png`;
+
+/** URL loga ligy/soutěže z jejího ID (stejný tvar jako API-Football `league.logo`). */
+export const leagueLogoUrl = (id: number) =>
+  `https://media.api-sports.io/football/leagues/${id}.png`;
 
 export const NATIONAL_LEAGUES: League[] = CONFEDERATIONS.map((c) => ({
   id: c.id,

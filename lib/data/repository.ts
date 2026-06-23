@@ -1,5 +1,6 @@
 import type {
   ClubTransferBalance,
+  FixtureDay,
   Injury,
   League,
   PredictionRow,
@@ -9,6 +10,7 @@ import type {
 import { isRealDataConfigured } from "@/lib/db";
 import { LEAGUES, buildTeams } from "./mock/seed";
 import { mockUpcomingPredictions, mockSettledPredictions } from "./mock/predictions";
+import { mockFixturesByDates } from "./mock/fixtures";
 import { mockLeagueTransfers, mockClubBalances } from "./mock/transfers";
 import {
   getUpcomingPredictionRows,
@@ -62,6 +64,12 @@ export async function getCompareTeam(
 ): Promise<Team | null> {
   if (useReal) return real.getCompareTeam(teamId, leagueId, includeEuro);
   return allMockTeams().find((t) => t.id === teamId) ?? null;
+}
+
+/** Nadcházející zápasy našich lig na zadané dny (real = API+cache, mock = generátor). */
+export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]> {
+  if (useReal) return real.getFixturesByDates(dates);
+  return mockFixturesByDates(dates);
 }
 
 /** Nadcházející predikce pro záložku (real = DB store, mock = generátor). */
