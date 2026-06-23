@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
-import { isNationalTournamentLeague } from "@/lib/data/catalog";
 import type {
   BacktestResult,
   BacktestSample,
@@ -14,6 +13,7 @@ import type {
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
+import { buildCompareHref } from "./compareHref";
 import type { SessionUser } from "./sessionUser";
 
 type Venue = "home" | "away" | "any";
@@ -136,54 +136,53 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         Nadcházející zápasy vybrané podle pravidla z předpočítaných predikcí.
       </p>
 
+      {/* Agregátní/historické panely (track-record, benchmark, backtest) jsou FREE –
+          budují důvěru. Zamčený je jen seznam konkrétních nadcházejících tipů. */}
+      {backtest && (
+        <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
+      )}
+      {track && <TrackRecordPanel track={track} />}
+      {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
+
+      <RuleControls
+        market={market}
+        venue={venue}
+        minProb={minProb}
+        onMarket={setMarket}
+        onVenue={setVenue}
+        onMinProb={setMinProb}
+        onPreset={applyPreset}
+      />
+
+      {/* Sekce nadcházejících tipů = PRO. FREE/anonym → ProLock místo seznamu. */}
       {locked ? (
         <div className="mt-4">
           <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
         </div>
+      ) : loading && !picks ? (
+        <PicksSkeleton />
+      ) : error ? (
+        <Empty>
+          <p>{error}</p>
+          <button
+            type="button"
+            onClick={retry}
+            className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
+          >
+            ↻ Zkusit znovu
+          </button>
+        </Empty>
+      ) : picks && picks.length > 0 ? (
+        <ul className="mt-4 space-y-2">
+          {picks.map((p) => (
+            <PickRow key={p.fixtureId} pick={p} />
+          ))}
+        </ul>
       ) : (
-        <>
-          {backtest && (
-            <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
-          )}
-          {track && <TrackRecordPanel track={track} />}
-          {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
-
-          <RuleControls
-            market={market}
-            venue={venue}
-            minProb={minProb}
-            onMarket={setMarket}
-            onVenue={setVenue}
-            onMinProb={setMinProb}
-            onPreset={applyPreset}
-          />
-
-          {loading && !picks ? (
-            <PicksSkeleton />
-          ) : error ? (
-            <Empty>
-              <p>{error}</p>
-              <button
-                type="button"
-                onClick={retry}
-                className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
-              >
-                ↻ Zkusit znovu
-              </button>
-            </Empty>
-          ) : picks && picks.length > 0 ? (
-            <ul className="mt-4 space-y-2">
-              {picks.map((p) => (
-                <PickRow key={p.fixtureId} pick={p} />
-              ))}
-            </ul>
-          ) : (
-            <Empty>
-              Žádné nadcházející zápasy neodpovídají pravidlu. Mimo sezónu (léto) nemají
-              top ligy naplánované zápasy – zkus jiné pravidlo nebo se vrať během sezóny.
-            </Empty>
-          )}
-        </>
+        <Empty>
+          Žádné nadcházející zápasy neodpovídají pravidlu. Mimo sezónu (léto) nemají
+          top ligy naplánované zápasy – zkus jiné pravidlo nebo se vrať během sezóny.
+        </Empty>
       )}
     </main>
   );
@@ -508,10 +507,9 @@ function PickRow({ pick }: { pick: MatchPick }) {
     hour: "2-digit",
     minute: "2-digit",
   });
-  // Reprezentační turnaje (MS) se v plném porovnání neotevírají – týmy jsou
-  // cross-konfederační a deep-link (mode=CLUB) by nesedl → vykreslíme neklikací kartu.
-  const national = isNationalTournamentLeague(pick.leagueId);
-  const href = `/porovnani?mode=CLUB&homeLeague=${pick.leagueId}&awayLeague=${pick.leagueId}&home=${pick.home.id}&away=${pick.away.id}`;
+  // Klikací, když známe „ligu" obou stran (klub vždy; reprezentace po dohledání
+  // konfederace každého týmu – cross-konfederační MS zápas → dvě konfederace).
+  const href = buildCompareHref(pick);
   const cardClass =
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (
@@ -538,15 +536,15 @@ function PickRow({ pick }: { pick: MatchPick }) {
   );
   return (
     <li>
-      {national ? (
-        <div className={cardClass}>{inner}</div>
-      ) : (
+      {href != null ? (
         <Link
           href={href}
           className={`${cardClass} transition hover:border-foreground/30`}
         >
           {inner}
         </Link>
+      ) : (
+        <div className={cardClass}>{inner}</div>
       )}
     </li>
   );

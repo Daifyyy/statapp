@@ -74,34 +74,46 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   Reálné: `realRepository.ts`; mock: `mock/seed.ts` + `generate.ts`.
 
 ## Záložka Zápasy (domovská obrazovka `/` = rychlý vstup k predikci)
-- **Princip:** úvodní obrazovka `/` je seznam **nadcházejících zápasů (dnes + zítra)
-  seskupený podle ligy**; klik na zápas otevře **Porovnání s předvyplněnými týmy**, které se
-  samo přepočítá včetně predikce → **žádné ruční vybírání týmů**. Porovnání se proto přesunulo
-  z `/` na **`/porovnani`** (`app/porovnani/page.tsx`, dříve `app/page.tsx`).
+- **Princip:** úvodní obrazovka `/` má **přepínač Program / Výsledky** (`ZapasyApp`,
+  lokální `view` state nad už načtenými daty – obojí přijde ze serveru, žádný další fetch):
+  - **Program** = seznam **nadcházejících zápasů (dnes + dalších 6 dní, `LOOKAHEAD_DAYS=7`
+    v `app/page.tsx`) seskupený podle ligy**; klik na zápas otevře **Porovnání s předvyplněnými
+    týmy**, které se samo přepočítá včetně predikce → **žádné ruční vybírání týmů**.
+  - **Výsledky** = jak dopadly **naše nedávné predikce** (skóre + ✓/✗ zda 1X2 trefilo) – viz níže.
+  Porovnání se proto přesunulo z `/` na **`/porovnani`** (`app/porovnani/page.tsx`).
 - **Seznam je jen navigace – nic se nepočítá živě tady.** Predikce vzniká až klikem přes
-  existující deep-link do `CompareApp` (`/porovnani?mode=CLUB&homeLeague=&awayLeague=&home=&away=`,
-  auto-`runCompare`) → **žádný nový výpočetní kód**, `compareTeams` ani gating (`toFreeResult`)
-  se nemění (predikce zůstává PRO jako dnes). Stejný deep-link už staví `PicksApp` (`PickRow`).
-- **Data:** `fetchFixturesByDate(date)` (`apiFootball.ts`) = **1 volání `/fixtures?date=`
+  existující deep-link do `CompareApp` (auto-`runCompare`) → **žádný nový výpočetní kód**,
+  `compareTeams` ani gating (`toFreeResult`) se nemění (predikce zůstává PRO jako dnes). Stejný
+  deep-link staví i `PicksApp` (`PickRow`) a Výsledky (`ResultRow`) – sdílený stavitel
+  **`buildCompareHref`** (`app/_components/compareHref.ts`, vrací `string|null` = klikací jen
+  když známe „ligu" obou stran; jeden zdroj pravdy pro všechny tři řádky).
+- **Data (Program):** `fetchFixturesByDate(date)` (`apiFootball.ts`) = **1 volání `/fixtures?date=`
   na den** (timezone `Europe/Prague`) → levné. `getFixturesByDates(dates)`
-  (`realRepository.ts`, TTL `ApiCache` 1 h, výpadek dne nezhasne ostatní) profiltruje přes
+  (`realRepository.ts`, TTL `ApiCache` 1 h, paralelně, výpadek dne nezhasne ostatní) profiltruje přes
   **`FIXTURE_LIST_LEAGUE_IDS`** (`catalog.ts` = 18 klubových lig + reprezentace), vyřadí
   dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
   (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
   `lib/data/mock/fixtures.ts` (funguje bez DB/API).
-- **Deep-link target (klub i reprezentace):** `UpcomingFixture.compareMode` +
-  `home/awayCompareLeagueId`. Klub → CLUB mód, „liga" = `leagueId` u obou. Reprezentace →
-  **NATIONAL mód, kde „ligou" každého týmu je jeho konfederace** – tu `getFixturesByDates`
-  dotáhne reverzní mapou `teamId→konfederace` z cachovaných reprezentačních seznamů
-  (`buildNationalConfedMap`, lazy jen když jsou v rozpisu reprezentační zápasy). Cross-konfederační
-  zápas (MS: Portugalsko UEFA vs Uzbekistán AFC) → `homeLeague=<konfA>&awayLeague=<konfB>`.
-  Tím klik **znovupoužije existující `/api/compare`+`CompareApp`+gating beze změny**
-  (`getCompareTeam`→`buildNationalTeam` přes konfederaci = venue-neutrální, shodné s predikční
-  pipeline). Když se konfederace týmu nedohledá (`null`), řádek je neklikací.
-- **UI `ZapasyApp.tsx`** (client, mobile-first jako `PickRow`): přepínač **Dnes/Zítra** (lokální
-  state nad už načtenými daty, žádný další fetch), v rámci dne **skupiny podle ligy**. Řádek je
-  klikací, když známe „ligu" obou stran pro deep-link (klub vždy; reprezentace po dohledání
-  konfederací).
+- **Data (Výsledky):** `getRecentResults()` (`repository.ts`) = posledních ~14 dní settlnutých
+  predikcí (`getRecentSettledPredictions` z `predictionStore`, jen čte DB) → čistý mapper
+  **`summarizeSettled`** (`lib/picks/results.ts`, testy `results.test.ts`) na `SettledMatch`
+  (skóre + predikovaná strana 1X2 + `outcomeHit`, sdílí `argmaxOutcome`/`actualOutcome` s
+  `trackRecord.ts`). **FREE** (jen historie, žádný budoucí tip). Reprezentačním řádkům dohledá
+  konfederace (`getNationalConfedMap`). Mock: `mockSettledPredictions` → funguje bez DB/API.
+- **Deep-link target (klub i reprezentace):** `compareMode` + `home/awayCompareLeagueId`
+  (na `UpcomingFixture`, `MatchPick` i `SettledMatch`). Klub → CLUB mód, „liga" = `leagueId`
+  u obou. Reprezentace → **NATIONAL mód, kde „ligou" každého týmu je jeho konfederace** – tu
+  dotáhne reverzní mapa `teamId→konfederace` z cachovaných reprezentačních seznamů
+  (`buildNationalConfedMap`, exportovaná jako `getNationalConfedMap`; lazy jen když jsou v rozpisu
+  reprezentační zápasy). Cross-konfederační zápas (MS: Portugalsko UEFA vs Uzbekistán AFC) →
+  `homeLeague=<konfA>&awayLeague=<konfB>`. Tím klik **znovupoužije existující
+  `/api/compare`+`CompareApp`+gating beze změny** (`getCompareTeam`→`buildNationalTeam` přes
+  konfederaci = venue-neutrální, shodné s predikční pipeline). Když se konfederace nedohledá
+  (`null`), řádek je neklikací.
+- **UI `ZapasyApp.tsx`** (client, mobile-first): přepínač Program/Výsledky; v Programu
+  **horizontálně scrollovatelný pásek dní** (Dnes/Zítra/„So 28. 6.", víkendy zvýrazněné),
+  v rámci dne **skupiny podle ligy**; ve Výsledcích plochý seznam nejnovější první + souhrn
+  „trefeno X z Y". Řádky klikací dle `buildCompareHref` (klub vždy; reprezentace po dohledání konfederací).
 - **Zpětná kompatibilita:** starý sdílený odkaz `/?home=&away=` v `app/page.tsx`
   **přesměruje** na `/porovnani?…` (zachová sdílení i OG kartu). Nav „Zápasy" (📅) + přesměrování
   „Porovnání" na `/porovnani` je napříč `CompareApp`/`PicksApp`/`TransfersApp`.
@@ -175,16 +187,20 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `runSettleResults` dotáhne skóre dle `fixtureId` (`fetchFixturesByIds`) bez ohledu na ligu.
   Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
   `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). Reprezentační
-  řádky v `PicksApp` nemají proklik na plné porovnání (cross-konfederační deep-link by nesedl;
-  detekce přes `isNationalTournamentLeague`).
+  řádky v `PicksApp` **jsou klikací**: `/api/picks` jim dohledá konfederaci každého týmu
+  (`getNationalConfedMap`) a deep-link míří do NATIONAL Porovnání (stejně jako Zápasy);
+  `MatchPick` proto nese `compareMode`+`home/awayCompareLeagueId`, klikatelnost řeší
+  `buildCompareHref` (tým bez dohledané konfederace → `null` = neklikací).
 - **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
   `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
-  `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (nadcházející tipy; PRO přes
-  `getEntitlement`, FREE→`{locked}`), `app/api/picks/stats` (`lib/picks/trackRecord.ts`:
+  `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (**nadcházející tipy = PRO** přes
+  `getEntitlement`, FREE→`{locked}` → v UI `ProLock` jen místo seznamu tipů), `app/api/picks/stats`
+  (**FREE** – agregátní/historické metriky nic konkrétního neprozrazují; `lib/picks/trackRecord.ts`:
   `computeTrackRecord` = globální track-record + `computeBenchmarkTrackRecord` = side-by-side
   náš model vs. API-Football na společné podmnožině (viz benchmark níže) + `backtestRule` =
   backtest navoleného pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`
-  (panely `TrackRecordPanel` / `BenchmarkPanel` / `StrategyPanel`).
+  (panely `TrackRecordPanel` / `BenchmarkPanel` / `StrategyPanel` + `RuleControls` se renderují
+  **vždy = FREE**; zamčený `ProLock` je jen na místě seznamu konkrétních nadcházejících tipů).
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
   úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`). Počítá **jen

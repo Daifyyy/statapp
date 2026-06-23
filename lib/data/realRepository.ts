@@ -176,6 +176,10 @@ export async function getTeamInjuries(
  * k deep-linku reprezentačních zápasů do NATIONAL módu Porovnání (tým z libovolné
  * konfederace, např. na MS). Lazy – staví se jen když jsou v rozpisu reprezentační zápasy.
  */
+export async function getNationalConfedMap(): Promise<Map<number, number>> {
+  return buildNationalConfedMap();
+}
+
 async function buildNationalConfedMap(): Promise<Map<number, number>> {
   const map = new Map<number, number>();
   await Promise.all(

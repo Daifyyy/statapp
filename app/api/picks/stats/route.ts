@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSettledPredictionRows } from "@/lib/data/repository";
-import { getCurrentUser } from "@/lib/authUser";
-import { getEntitlement } from "@/lib/entitlements";
 import {
   backtestRule,
   computeBenchmarkTrackRecord,
@@ -11,17 +9,13 @@ import { ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
 
-// Track-record modelu + backtest strategie (PRO) z odehraných predikcí.
+// Track-record modelu + benchmark + backtest strategie z odehraných predikcí.
+// **FREE** (agregátní/historické metriky nic konkrétního neprozrazují a budují
+// důvěru – marketingový hák). PRO zůstává jen seznam nadcházejících tipů (/api/picks).
 // `trackRecord` je globální (parametry ho nemění); `backtest` aplikuje navolené
 // pravidlo na historii (úspěšnost „kdybys takhle sázel"). Čte jen z DB, nepočítá živě.
 export async function GET(req: Request) {
   if (!allowRequest(`picks-stats:${clientKey(req)}`, 60, 60_000)) return tooMany();
-
-  const user = await getCurrentUser();
-  const ent = getEntitlement(
-    user ? { tier: user.tier, proTrialUsed: user.proTrialUsed } : null
-  );
-  if (!ent.pro) return NextResponse.json({ locked: true });
 
   const sp = new URL(req.url).searchParams;
   const parsed = ruleSchema.safeParse({

@@ -1,10 +1,33 @@
 import { NextResponse } from "next/server";
-import { getUpcomingPredictions } from "@/lib/data/repository";
+import {
+  getUpcomingPredictions,
+  getNationalConfedMap,
+} from "@/lib/data/repository";
 import { getCurrentUser } from "@/lib/authUser";
 import { getEntitlement } from "@/lib/entitlements";
 import { filterPicks, ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
+import type { MatchPick } from "@/lib/types";
+
+/**
+ * Doplní reprezentačním tipům (turnaj) konfederaci každého týmu → deep-link do
+ * NATIONAL Porovnání. Mapu dotáhne jen když nějaký národní tip existuje (jinak 0
+ * práce navíc). Tým bez dohledané konfederace zůstane `null` = neklikací řádek.
+ */
+async function enrichNationalLeagues(picks: MatchPick[]): Promise<MatchPick[]> {
+  if (!picks.some((p) => p.compareMode === "NATIONAL")) return picks;
+  const confed = await getNationalConfedMap();
+  return picks.map((p) =>
+    p.compareMode === "NATIONAL"
+      ? {
+          ...p,
+          homeCompareLeagueId: confed.get(p.home.id) ?? null,
+          awayCompareLeagueId: confed.get(p.away.id) ?? null,
+        }
+      : p
+  );
+}
 
 // Predikční záložka (PRO). Čte PŘEDPOČÍTANÉ predikce z DB a filtruje dle pravidla.
 // Nepočítá živě → levné a rychlé. FREE/anonym → { locked: true } (UI ukáže ProLock).
@@ -30,7 +53,7 @@ export async function GET(req: Request) {
 
   try {
     const rows = await getUpcomingPredictions();
-    const picks = filterPicks(rows, parsed.data);
+    const picks = await enrichNationalLeagues(filterPicks(rows, parsed.data));
     return NextResponse.json({ picks, total: rows.length });
   } catch (e) {
     logError("api/picks", e);

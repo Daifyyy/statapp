@@ -169,3 +169,23 @@ export async function getSettledPredictions(
   });
   return rows.map(toRow);
 }
+
+/**
+ * Nedávno odehrané predikce pro záložku „Výsledky" (poslední `days` dní, max
+ * `limit`). Nenačítá celou historii – seznam je jen UI pohled na čerstvé výsledky.
+ */
+export async function getRecentSettledPredictions(
+  { days = 14, limit = 40 }: { days?: number; limit?: number } = {}
+): Promise<PredictionRow[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rows = await prisma.fixturePrediction.findMany({
+    where: {
+      status: { in: [...FINISHED_STATUSES] },
+      homeGoals: { not: null },
+      kickoff: { gte: since },
+    },
+    orderBy: { kickoff: "desc" },
+    take: limit,
+  });
+  return rows.map(toRow);
+}

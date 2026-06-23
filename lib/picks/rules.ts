@@ -6,6 +6,7 @@ import type {
   PickRule,
   PredictionRow,
 } from "@/lib/types";
+import { isNationalTournamentLeague } from "@/lib/data/catalog";
 
 /**
  * Pravidla výběru zápasů do predikční záložky. Čisté funkce nad uloženými
@@ -98,6 +99,9 @@ export function filterPicks(
   for (const row of rows) {
     const m = evaluateRule(row, rule);
     if (!m.ok) continue;
+    // Klub → CLUB mód, „liga" = `leagueId` u obou (deep-link rovnou klikací).
+    // Reprezentační turnaj → NATIONAL mód, konfederace doplní `/api/picks` (zde null).
+    const national = isNationalTournamentLeague(row.leagueId);
     picks.push({
       fixtureId: row.fixtureId,
       kickoff: row.kickoff,
@@ -109,6 +113,9 @@ export function filterPicks(
       side: m.side,
       prob: m.prob,
       explanation: explain(row, rule.market, m.side, m.prob),
+      compareMode: national ? "NATIONAL" : "CLUB",
+      homeCompareLeagueId: national ? null : row.leagueId,
+      awayCompareLeagueId: national ? null : row.leagueId,
     });
   }
   return picks.sort((a, b) => {

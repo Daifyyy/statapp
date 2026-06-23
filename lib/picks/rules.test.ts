@@ -100,4 +100,26 @@ describe("filterPicks", () => {
     const picks = filterPicks(rows, { market: "win", venue: "home", minProb: 0.65 });
     expect(picks.map((p) => p.fixtureId)).toEqual([2, 1, 3]);
   });
+
+  it("klubový tip → CLUB deep-link s leagueId u obou stran", () => {
+    const picks = filterPicks([row({ leagueId: 39, homeWin: 0.8 })], {
+      market: "win",
+      venue: "home",
+      minProb: 0.65,
+    });
+    expect(picks[0].compareMode).toBe("CLUB");
+    expect(picks[0].homeCompareLeagueId).toBe(39);
+    expect(picks[0].awayCompareLeagueId).toBe(39);
+  });
+
+  it("reprezentační turnaj (MS=1) → NATIONAL mód a konfederace null (dotahuje route)", () => {
+    const picks = filterPicks([row({ leagueId: 1, homeWin: 0.8 })], {
+      market: "win",
+      venue: "home",
+      minProb: 0.65,
+    });
+    expect(picks[0].compareMode).toBe("NATIONAL");
+    expect(picks[0].homeCompareLeagueId).toBeNull();
+    expect(picks[0].awayCompareLeagueId).toBeNull();
+  });
 });

@@ -428,6 +428,38 @@ export interface MatchPick {
   prob: number;
   /** Krátké vysvětlení (z uložených hodnot). */
   explanation: string;
+  /** Mód cílového Porovnání (klub vs. reprezentace) – pro deep-link prokliku. */
+  compareMode: EntityType;
+  /**
+   * „Liga" pro deep-link: klub → `leagueId` u obou; reprezentační turnaj →
+   * konfederace každého týmu (dotahuje `/api/picks`; `null` = neklikací řádek).
+   */
+  homeCompareLeagueId: number | null;
+  awayCompareLeagueId: number | null;
+}
+
+/**
+ * Dohraný zápas s vyhodnocenou predikcí pro záložku „Výsledky" (jak dopadly naše
+ * predikce). Odvozeno z odehraných `PredictionRow` (status FINISHED, známé skóre).
+ * Deep-link pole jako u `MatchPick` (klik = porovnání týmů).
+ */
+export interface SettledMatch {
+  fixtureId: number;
+  leagueId: number;
+  leagueLogoUrl: string;
+  kickoff: string;
+  home: { id: number; name: string; logoUrl: string };
+  away: { id: number; name: string; logoUrl: string };
+  homeGoals: number;
+  awayGoals: number;
+  /** Predikovaný výsledek 1X2 (argmax) a jeho pravděpodobnost. */
+  predictedSide: "home" | "draw" | "away";
+  predictedProb: number;
+  /** Trefila predikce 1X2 skutečný výsledek? */
+  outcomeHit: boolean;
+  compareMode: EntityType;
+  homeCompareLeagueId: number | null;
+  awayCompareLeagueId: number | null;
 }
 
 export interface CompareResult {

@@ -12,14 +12,22 @@ export interface TrackRecord {
   bttsAccuracy: number | null; // predikce oba skórují (≥50 %) vs. realita
 }
 
-function argmaxOutcome(r: PredictionRow): "home" | "draw" | "away" {
+export function argmaxOutcome(r: PredictionRow): "home" | "draw" | "away" {
   if (r.homeWin >= r.draw && r.homeWin >= r.awayWin) return "home";
   if (r.awayWin >= r.draw && r.awayWin >= r.homeWin) return "away";
   return "draw";
 }
 
-function actualOutcome(hg: number, ag: number): "home" | "draw" | "away" {
+export function actualOutcome(hg: number, ag: number): "home" | "draw" | "away" {
   return hg > ag ? "home" : hg < ag ? "away" : "draw";
+}
+
+/** Pravděpodobnost dané strany 1X2 z řádku (pro zobrazení predikce u výsledku). */
+export function probOfSide(
+  r: PredictionRow,
+  side: "home" | "draw" | "away"
+): number {
+  return side === "home" ? r.homeWin : side === "away" ? r.awayWin : r.draw;
 }
 
 export function computeTrackRecord(rows: PredictionRow[]): TrackRecord {

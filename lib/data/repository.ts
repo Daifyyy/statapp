@@ -4,6 +4,7 @@ import type {
   Injury,
   League,
   PredictionRow,
+  SettledMatch,
   Team,
   Transfer,
 } from "@/lib/types";
@@ -15,7 +16,9 @@ import { mockLeagueTransfers, mockClubBalances } from "./mock/transfers";
 import {
   getUpcomingPredictionRows,
   getSettledPredictions,
+  getRecentSettledPredictions,
 } from "./predictionStore";
+import { summarizeSettled } from "@/lib/picks/results";
 import { getLeagueTransfers, getClubBalances } from "./transferStore";
 import * as real from "./realRepository";
 
@@ -78,10 +81,43 @@ export async function getUpcomingPredictions(): Promise<PredictionRow[]> {
   return mockUpcomingPredictions();
 }
 
+/**
+ * Reverzní mapa `teamId → konfederace` pro deep-link reprezentačních řádků
+ * (Tipy/Výsledky → NATIONAL Porovnání). Real = z cachovaných reprezentačních
+ * seznamů; mock = prázdná (národní mock řádky zůstanou neklikací, bez pádu).
+ */
+export async function getNationalConfedMap(): Promise<Map<number, number>> {
+  if (useReal) return real.getNationalConfedMap();
+  return new Map();
+}
+
 /** Odehrané predikce s výsledkem pro track-record (real = DB, mock = generátor). */
 export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
   if (useReal) return getSettledPredictions();
   return mockSettledPredictions();
+}
+
+/**
+ * Nedávno dohrané zápasy s vyhodnocenou predikcí pro záložku „Výsledky".
+ * Real = posledních pár dní z DB + dohledání konfederací pro reprezentační deep-link;
+ * mock = generátor. FREE (jen historie, žádný konkrétní budoucí tip).
+ */
+export async function getRecentResults(): Promise<SettledMatch[]> {
+  const rows = useReal
+    ? await getRecentSettledPredictions()
+    : mockSettledPredictions();
+  const matches = summarizeSettled(rows);
+
+  // Reprezentačním řádkům dohledej konfederaci každého týmu (deep-link do NATIONAL).
+  if (useReal && matches.some((m) => m.compareMode === "NATIONAL")) {
+    const confed = await real.getNationalConfedMap();
+    for (const m of matches) {
+      if (m.compareMode !== "NATIONAL") continue;
+      m.homeCompareLeagueId = confed.get(m.home.id) ?? null;
+      m.awayCompareLeagueId = confed.get(m.away.id) ?? null;
+    }
+  }
+  return matches;
 }
 
 /** Aktuální přestupy vybraných lig (real = DB store, mock = generátor). */

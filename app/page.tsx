@@ -1,16 +1,19 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ZapasyApp } from "./_components/ZapasyApp";
-import { getFixturesByDates } from "@/lib/data/repository";
+import { getFixturesByDates, getRecentResults } from "@/lib/data/repository";
 import { getCurrentUser } from "@/lib/authUser";
 import { InstallLink } from "./_components/InstallLink";
 import type { SessionUser } from "./_components/sessionUser";
 
 export const metadata: Metadata = {
-  title: "Zápasy dnes a zítra — Predictapp",
+  title: "Fotbalové zápasy tento týden — Predictapp",
   description:
-    "Nadcházející fotbalové zápasy na dnešek a zítřek podle ligy. Klikni a získej rovnou statistické porovnání a predikci.",
+    "Nadcházející fotbalové zápasy na tento týden podle ligy. Klikni a získej rovnou statistické porovnání a predikci.",
 };
+
+/** Kolik dní dopředu načítat do rozpisu (dnes + dalších 6). */
+const LOOKAHEAD_DAYS = 7;
 
 // Den ve formátu YYYY-MM-DD v pražské zóně (správné hranice „dnes/zítra").
 function pragueDate(d: Date): string {
@@ -51,13 +54,17 @@ export default async function Home({
     : null;
 
   const now = new Date();
-  const today = pragueDate(now);
-  const tomorrow = pragueDate(new Date(now.getTime() + 24 * 60 * 60 * 1000));
-  const days = await getFixturesByDates([today, tomorrow]);
+  const dates = Array.from({ length: LOOKAHEAD_DAYS }, (_, i) =>
+    pragueDate(new Date(now.getTime() + i * 24 * 60 * 60 * 1000))
+  );
+  const [days, results] = await Promise.all([
+    getFixturesByDates(dates),
+    getRecentResults(),
+  ]);
 
   return (
     <div className="flex-1">
-      <ZapasyApp days={days} user={user} />
+      <ZapasyApp days={days} results={results} user={user} />
       <footer className="mx-auto max-w-3xl px-4 py-8 text-center text-xs text-muted">
         <p>
           Klikni na zápas a otevře se statistické porovnání obou týmů s predikcí —

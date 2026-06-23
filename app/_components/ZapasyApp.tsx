@@ -2,25 +2,30 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import type { FixtureDay, UpcomingFixture } from "@/lib/types";
+import type { FixtureDay, SettledMatch, UpcomingFixture } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { buildCompareHref } from "./compareHref";
 import type { SessionUser } from "./sessionUser";
 
+type View = "program" | "results";
+
 /**
- * Záložka „Zápasy" = domovská obrazovka pro rychlý přístup k predikci. Ukáže
- * nadcházející zápasy (dnes/zítra) seskupené podle ligy; klik na klubový zápas
- * otevře Porovnání s předvyplněnými týmy, které se samo přepočítá včetně predikce
- * (žádné ruční zadávání). Reprezentační zápasy jsou neklikací (cross-konfederační
- * deep-link by nesedl). Seznam je jen navigace – nic se nepočítá živě tady.
+ * Záložka „Zápasy" = domovská obrazovka pro rychlý přístup k predikci. Dvě části
+ * (přepínač): **Program** = nadcházející zápasy seskupené podle ligy (klik = Porovnání
+ * s předvyplněnými týmy + predikcí, bez ručního zadávání) a **Výsledky** = jak dopadly
+ * naše nedávné predikce (skóre + ✓/✗). Seznamy jsou jen navigace – nic se nepočítá živě.
  */
 export function ZapasyApp({
   days,
+  results,
   user,
 }: {
   days: FixtureDay[];
+  results: SettledMatch[];
   user: SessionUser | null;
 }) {
+  const [view, setView] = useState<View>("program");
   const [dayIdx, setDayIdx] = useState(0);
   const active = days[dayIdx] ?? days[0];
 
@@ -37,32 +42,90 @@ export function ZapasyApp({
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Zápasy</h1>
       <p className="mt-1 text-sm text-muted">
-        Vyber zápas a rovnou se otevře porovnání týmů s predikcí.
+        {view === "program"
+          ? "Vyber zápas a rovnou se otevře porovnání týmů s predikcí."
+          : "Jak dopadly naše nedávné predikce – skóre a zda jsme trefili výsledek."}
       </p>
 
-      <DayTabs days={days} active={dayIdx} onSelect={setDayIdx} />
+      <ViewTabs view={view} onSelect={setView} resultCount={results.length} />
 
-      {active && active.fixtures.length > 0 ? (
-        <LeagueGroups fixtures={active.fixtures} />
+      {view === "program" ? (
+        <>
+          <DayTabs days={days} active={dayIdx} onSelect={setDayIdx} />
+          {active && active.fixtures.length > 0 ? (
+            <LeagueGroups fixtures={active.fixtures} />
+          ) : (
+            <Empty>
+              Na tento den nemáme naplánované zápasy ve sledovaných ligách. Mimo sezónu
+              (léto) top ligy nehrají – zkus jiný den nebo se vrať během sezóny.
+            </Empty>
+          )}
+        </>
+      ) : results.length > 0 ? (
+        <ResultsList results={results} />
       ) : (
         <Empty>
-          Na tento den nemáme naplánované zápasy ve sledovaných ligách. Mimo sezónu
-          (léto) top ligy nehrají – zkus druhý den nebo se vrať během sezóny.
+          Zatím nemáme vyhodnocené predikce. Výsledky se naplní, jakmile se odehrají
+          zápasy z našich sledovaných lig.
         </Empty>
       )}
     </main>
   );
 }
 
-const DAY_LABELS = ["Dnes", "Zítra"];
+function ViewTabs({
+  view,
+  onSelect,
+  resultCount,
+}: {
+  view: View;
+  onSelect: (v: View) => void;
+  resultCount: number;
+}) {
+  const tabs: { value: View; label: string }[] = [
+    { value: "program", label: "Program" },
+    {
+      value: "results",
+      label: resultCount > 0 ? `Výsledky (${resultCount})` : "Výsledky",
+    },
+  ];
+  return (
+    <div className="mt-4 inline-flex w-full rounded-full border border-border bg-surface p-0.5">
+      {tabs.map((t) => {
+        const activeTab = t.value === view;
+        return (
+          <button
+            key={t.value}
+            type="button"
+            onClick={() => onSelect(t.value)}
+            className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+              activeTab
+                ? "bg-foreground text-background"
+                : "text-muted hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
+// idx 0 → „Dnes", 1 → „Zítra", dál krátký den v týdnu + datum (So 28. 6.).
 function dayLabel(date: string, idx: number): string {
-  const base = DAY_LABELS[idx] ?? "";
-  const d = new Date(`${date}T00:00:00`).toLocaleDateString("cs-CZ", {
+  if (idx === 0) return "Dnes";
+  if (idx === 1) return "Zítra";
+  return new Date(`${date}T00:00:00`).toLocaleDateString("cs-CZ", {
+    weekday: "short",
     day: "numeric",
     month: "numeric",
   });
-  return base ? `${base} · ${d}` : d;
+}
+
+function isWeekend(date: string): boolean {
+  const day = new Date(`${date}T00:00:00`).getDay();
+  return day === 0 || day === 6;
 }
 
 function DayTabs({
@@ -74,17 +137,20 @@ function DayTabs({
   active: number;
   onSelect: (i: number) => void;
 }) {
+  // Horizontálně scrollovatelný pásek (mobile-first) – týden dní se nevejde do řady.
   return (
-    <div className="mt-4 flex gap-2">
+    <div className="mt-4 -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {days.map((d, i) => (
         <button
           key={d.date}
           type="button"
           onClick={() => onSelect(i)}
-          className={`flex-1 rounded-full border px-3 py-1.5 text-sm font-medium transition ${
+          className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-medium transition ${
             i === active
               ? "border-foreground bg-foreground text-background"
-              : "border-border bg-surface text-muted hover:text-foreground"
+              : `border-border bg-surface hover:text-foreground ${
+                  isWeekend(d.date) ? "text-foreground/80" : "text-muted"
+                }`
           }`}
         >
           {dayLabel(d.date, i)}
@@ -148,9 +214,8 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
   });
   // Klikatelné, když známe „ligu" obou stran pro deep-link (klub vždy; reprezentace
   // jen když se dohledala konfederace každého týmu). Jinak neklikací karta.
-  const { compareMode, homeCompareLeagueId, awayCompareLeagueId } = fixture;
-  const clickable = homeCompareLeagueId != null && awayCompareLeagueId != null;
-  const href = `/porovnani?mode=${compareMode}&homeLeague=${homeCompareLeagueId}&awayLeague=${awayCompareLeagueId}&home=${fixture.home.id}&away=${fixture.away.id}`;
+  const href = buildCompareHref(fixture);
+  const clickable = href != null;
   const cardClass =
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (
@@ -172,7 +237,82 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
   );
   return (
     <li>
-      {clickable ? (
+      {href != null ? (
+        <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
+          {inner}
+        </Link>
+      ) : (
+        <div className={cardClass}>{inner}</div>
+      )}
+    </li>
+  );
+}
+
+function ResultsList({ results }: { results: SettledMatch[] }) {
+  const hits = results.filter((r) => r.outcomeHit).length;
+  return (
+    <div className="mt-4">
+      <p className="px-1 text-xs text-muted">
+        Výsledek 1X2 trefen u{" "}
+        <span className="font-semibold text-foreground">
+          {hits} z {results.length}
+        </span>{" "}
+        nedávných zápasů.
+      </p>
+      <ul className="mt-2 space-y-2">
+        {results.map((r) => (
+          <ResultRow key={r.fixtureId} result={r} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const SIDE_LABELS: Record<SettledMatch["predictedSide"], string> = {
+  home: "Domácí",
+  draw: "Remíza",
+  away: "Hosté",
+};
+
+function ResultRow({ result }: { result: SettledMatch }) {
+  const date = new Date(result.kickoff).toLocaleDateString("cs-CZ", {
+    day: "numeric",
+    month: "numeric",
+  });
+  const href = buildCompareHref(result);
+  const tip = `Tip: ${SIDE_LABELS[result.predictedSide]} · ${Math.round(
+    result.predictedProb * 100
+  )} %`;
+  const cardClass =
+    "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
+  const inner = (
+    <>
+      <div className="flex items-center gap-2">
+        <span className="w-9 shrink-0 text-[11px] leading-tight text-muted">{date}</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
+          <TeamLogo src={result.home.logoUrl} alt={result.home.name} size={20} />
+          <span className="min-w-0 truncate font-medium text-home">{result.home.name}</span>
+          <span className="shrink-0 font-bold tabular-nums text-foreground">
+            {result.homeGoals}:{result.awayGoals}
+          </span>
+          <span className="min-w-0 truncate font-medium text-away">{result.away.name}</span>
+          <TeamLogo src={result.away.logoUrl} alt={result.away.name} size={20} />
+        </div>
+        <span
+          className={`shrink-0 text-sm font-bold ${
+            result.outcomeHit ? "text-positive" : "text-negative"
+          }`}
+          aria-label={result.outcomeHit ? "Predikce vyšla" : "Predikce nevyšla"}
+        >
+          {result.outcomeHit ? "✓" : "✗"}
+        </span>
+      </div>
+      <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">{tip}</div>
+    </>
+  );
+  return (
+    <li>
+      {href != null ? (
         <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
           {inner}
         </Link>
