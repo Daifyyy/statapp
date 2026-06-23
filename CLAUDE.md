@@ -89,10 +89,19 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
   (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
   `lib/data/mock/fixtures.ts` (funguje bez DB/API).
+- **Deep-link target (klub i reprezentace):** `UpcomingFixture.compareMode` +
+  `home/awayCompareLeagueId`. Klub → CLUB mód, „liga" = `leagueId` u obou. Reprezentace →
+  **NATIONAL mód, kde „ligou" každého týmu je jeho konfederace** – tu `getFixturesByDates`
+  dotáhne reverzní mapou `teamId→konfederace` z cachovaných reprezentačních seznamů
+  (`buildNationalConfedMap`, lazy jen když jsou v rozpisu reprezentační zápasy). Cross-konfederační
+  zápas (MS: Portugalsko UEFA vs Uzbekistán AFC) → `homeLeague=<konfA>&awayLeague=<konfB>`.
+  Tím klik **znovupoužije existující `/api/compare`+`CompareApp`+gating beze změny**
+  (`getCompareTeam`→`buildNationalTeam` přes konfederaci = venue-neutrální, shodné s predikční
+  pipeline). Když se konfederace týmu nedohledá (`null`), řádek je neklikací.
 - **UI `ZapasyApp.tsx`** (client, mobile-first jako `PickRow`): přepínač **Dnes/Zítra** (lokální
-  state nad už načtenými daty, žádný další fetch), v rámci dne **skupiny podle ligy**.
-  Reprezentační zápasy (`national`, `isNationalTournamentLeague`) jsou **neklikací karty**
-  (cross-konfederační deep-link by nesedl – stejně jako v `PicksApp`).
+  state nad už načtenými daty, žádný další fetch), v rámci dne **skupiny podle ligy**. Řádek je
+  klikací, když známe „ligu" obou stran pro deep-link (klub vždy; reprezentace po dohledání
+  konfederací).
 - **Zpětná kompatibilita:** starý sdílený odkaz `/?home=&away=` v `app/page.tsx`
   **přesměruje** na `/porovnani?…` (zachová sdílení i OG kartu). Nav „Zápasy" (📅) + přesměrování
   „Porovnání" na `/porovnani` je napříč `CompareApp`/`PicksApp`/`TransfersApp`.

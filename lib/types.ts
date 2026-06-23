@@ -167,7 +167,9 @@ export interface League {
 /**
  * Lehký záznam nadcházejícího zápasu pro záložku „Zápasy" (seznam = navigace,
  * predikce se počítá až klikem přes deep-link do Porovnání). `national` = reprezentační
- * soutěž → řádek je neklikací (cross-konfederační deep-link by nesedl).
+ * soutěž → klik míří do NATIONAL módu, kde „ligou" týmu je jeho **konfederace**
+ * (`home/awayCompareLeagueId`); klubový zápas → CLUB mód s `leagueId` u obou.
+ * Když u reprezentačního zápasu konfederaci nedohledáme (`null`), řádek je neklikací.
  */
 export interface UpcomingFixture {
   fixtureId: number;
@@ -178,6 +180,11 @@ export interface UpcomingFixture {
   home: { id: number; name: string; logoUrl: string };
   away: { id: number; name: string; logoUrl: string };
   national: boolean;
+  /** Mód cílového Porovnání (klub vs. reprezentace). */
+  compareMode: EntityType;
+  /** „Liga" pro deep-link: klub → `leagueId`, reprezentace → konfederace týmu (či null). */
+  homeCompareLeagueId: number | null;
+  awayCompareLeagueId: number | null;
 }
 
 /** Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". */

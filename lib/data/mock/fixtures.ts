@@ -50,6 +50,9 @@ export function mockFixturesByDates(dates: string[]): FixtureDay[] {
           home: { id: p.home.id, name: p.home.name, logoUrl: p.home.logoUrl },
           away: { id: p.away.id, name: p.away.name, logoUrl: p.away.logoUrl },
           national: false,
+          compareMode: "CLUB" as const,
+          homeCompareLeagueId: p.leagueId,
+          awayCompareLeagueId: p.leagueId,
         };
       })
       .sort((a, b) => a.kickoff.localeCompare(b.kickoff));

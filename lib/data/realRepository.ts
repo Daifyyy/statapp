@@ -172,11 +172,32 @@ export async function getTeamInjuries(
 }
 
 /**
+ * Reverzní mapa `teamId → konfederace` z cachovaných reprezentačních seznamů. Slouží
+ * k deep-linku reprezentačních zápasů do NATIONAL módu Porovnání (tým z libovolné
+ * konfederace, např. na MS). Lazy – staví se jen když jsou v rozpisu reprezentační zápasy.
+ */
+async function buildNationalConfedMap(): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  await Promise.all(
+    NATIONAL_LEAGUES.map(async (l) => {
+      try {
+        const teams = await getTeamsByLeague(l.id); // cachované (natteams)
+        for (const t of teams) if (!map.has(t.id)) map.set(t.id, l.id);
+      } catch {
+        // výpadek jedné konfederace nezhasne ostatní (méně klikacích řádků)
+      }
+    })
+  );
+  return map;
+}
+
+/**
  * Nadcházející zápasy našich lig pro zadané dny (`YYYY-MM-DD`). 1 volání `/fixtures?date=`
  * na den (přes TTL cache) → levné. Výpadek jednoho dne nezhasne ostatní (vrátí prázdno).
+ * Reprezentační zápasy obohatí o konfederaci každého týmu (deep-link do NATIONAL módu).
  */
 export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]> {
-  return Promise.all(
+  const days = await Promise.all(
     dates.map(async (date) => {
       try {
         const raw = await cachedJson(`fixdate:${date}`, FIX_TTL, () =>
@@ -188,6 +209,19 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
       }
     })
   );
+
+  // Konfederace dotahuj jen když jsou v rozpisu reprezentační zápasy (jinak 0 volání navíc).
+  const hasNational = days.some((d) => d.fixtures.some((f) => f.national));
+  if (!hasNational) return days;
+  const confed = await buildNationalConfedMap();
+  for (const day of days) {
+    for (const f of day.fixtures) {
+      if (!f.national) continue;
+      f.homeCompareLeagueId = confed.get(f.home.id) ?? null;
+      f.awayCompareLeagueId = confed.get(f.away.id) ?? null;
+    }
+  }
+  return days;
 }
 
 // ---- Sestavení reprezentace ----

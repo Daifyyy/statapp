@@ -146,7 +146,11 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
     hour: "2-digit",
     minute: "2-digit",
   });
-  const href = `/porovnani?mode=CLUB&homeLeague=${fixture.leagueId}&awayLeague=${fixture.leagueId}&home=${fixture.home.id}&away=${fixture.away.id}`;
+  // Klikatelné, když známe „ligu" obou stran pro deep-link (klub vždy; reprezentace
+  // jen když se dohledala konfederace každého týmu). Jinak neklikací karta.
+  const { compareMode, homeCompareLeagueId, awayCompareLeagueId } = fixture;
+  const clickable = homeCompareLeagueId != null && awayCompareLeagueId != null;
+  const href = `/porovnani?mode=${compareMode}&homeLeague=${homeCompareLeagueId}&awayLeague=${awayCompareLeagueId}&home=${fixture.home.id}&away=${fixture.away.id}`;
   const cardClass =
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (
@@ -159,7 +163,7 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
         <TeamLogo src={fixture.away.logoUrl} alt={fixture.away.name} size={20} />
         <span className="min-w-0 truncate font-medium text-away">{fixture.away.name}</span>
       </div>
-      {!fixture.national && (
+      {clickable && (
         <span className="shrink-0 text-muted" aria-hidden>
           ›
         </span>
@@ -168,12 +172,12 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
   );
   return (
     <li>
-      {fixture.national ? (
-        <div className={cardClass}>{inner}</div>
-      ) : (
+      {clickable ? (
         <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
           {inner}
         </Link>
+      ) : (
+        <div className={cardClass}>{inner}</div>
       )}
     </li>
   );

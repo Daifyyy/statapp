@@ -59,4 +59,22 @@ describe("normalizeUpcomingFixtures", () => {
     expect(out.find((f) => f.leagueId === 39)?.national).toBe(false);
     expect(out.find((f) => f.leagueId === 1)?.national).toBe(true);
   });
+
+  it("klubový zápas má CLUB mód s leagueId u obou stran (deep-link ready)", () => {
+    const out = normalizeUpcomingFixtures([
+      fx(1, 39, "NS", "2026-06-23T18:00:00+00:00"),
+    ]);
+    expect(out[0].compareMode).toBe("CLUB");
+    expect(out[0].homeCompareLeagueId).toBe(39);
+    expect(out[0].awayCompareLeagueId).toBe(39);
+  });
+
+  it("reprezentační zápas má NATIONAL mód a konfederace null (dotahuje repo)", () => {
+    const out = normalizeUpcomingFixtures([
+      fx(1, 1, "NS", "2026-06-23T18:00:00+00:00"),
+    ]);
+    expect(out[0].compareMode).toBe("NATIONAL");
+    expect(out[0].homeCompareLeagueId).toBeNull();
+    expect(out[0].awayCompareLeagueId).toBeNull();
+  });
 });
