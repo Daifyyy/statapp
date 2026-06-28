@@ -11,6 +11,10 @@ import type {
   BenchmarkTrackRecord,
   TrackRecord,
 } from "@/lib/picks/trackRecord";
+import type {
+  ReliabilityCurve,
+  ReliabilityReport,
+} from "@/lib/picks/reliability";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -86,6 +90,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [track, setTrack] = useState<TrackRecord | null>(null);
   const [benchmark, setBenchmark] = useState<BenchmarkTrackRecord | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
+  const [reliability, setReliability] = useState<ReliabilityReport | null>(null);
 
   const retry = useCallback(() => {
     void loadPicks(market, venue, minProb, minEdge, minReadiness, () => true, {
@@ -121,6 +126,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         if (d.trackRecord) setTrack(d.trackRecord);
         setBenchmark(d.benchmark ?? null);
         setBacktest(d.backtest ?? null);
+        setReliability(d.reliability ?? null);
       })
       .catch(() => {});
     return () => {
@@ -157,6 +163,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
       )}
       {track && <TrackRecordPanel track={track} />}
       {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
+      {reliability && <ReliabilityPanel reliability={reliability} />}
 
       <RuleControls
         market={market}
@@ -423,6 +430,112 @@ function BenchmarkPanel({ benchmark }: { benchmark: BenchmarkTrackRecord }) {
         </p>
       )}
     </section>
+  );
+}
+
+const RELIABILITY_LABELS: Record<ReliabilityCurve["market"], string> = {
+  "1x2": "Výsledek (1X2)",
+  over25: "Přes 2.5 gólu",
+  btts: "Oba skórují",
+};
+
+/**
+ * Kalibrace modelu: když řekneme „X %", padne to opravdu v ~X %? Per trh rozbinované
+ * predikce vs. skutečnost + ECE (čím níž, tím líp). FREE – buduje důvěru v čísla.
+ * Vykreslí se až jsou nějaké odehrané predikce (mimo sezónu prázdno → null).
+ */
+function ReliabilityPanel({ reliability }: { reliability: ReliabilityReport }) {
+  const curves = [reliability.outcome, reliability.over25, reliability.btts];
+  if (curves.every((c) => c.n === 0)) return null;
+  return (
+    <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+        Kalibrace modelu
+      </p>
+      <p className="mt-1 text-[11px] text-muted">
+        Když řekneme „X %“, padne to opravdu v ~X %? Predikováno vs. skutečnost.
+      </p>
+      <div className="mt-3 space-y-4">
+        {curves.map((c) => (
+          <ReliabilityCurveView key={c.market} curve={c} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function calibrationVerdict(ece: number): { text: string; cls: string } {
+  if (ece < 0.05) return { text: "✅ dobře kalibrováno", cls: "text-positive" };
+  if (ece < 0.1) return { text: "mírná odchylka", cls: "text-muted" };
+  return { text: "⚠ kalibrace odchýlená", cls: "text-warning" };
+}
+
+function ReliabilityCurveView({ curve }: { curve: ReliabilityCurve }) {
+  const populated = curve.bins.filter((b) => b.count > 0);
+  if (populated.length === 0) return null;
+  const small = curve.n > 0 && curve.n < 30;
+  const verdict = curve.ece == null ? null : calibrationVerdict(curve.ece);
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-foreground">
+          {RELIABILITY_LABELS[curve.market]}
+        </span>
+        <span className="text-[11px] text-muted">
+          {curve.ece != null && verdict && (
+            <>
+              ECE <span className="tabular-nums">{curve.ece.toFixed(3)}</span> ·{" "}
+              <span className={verdict.cls}>{verdict.text}</span> ·{" "}
+            </>
+          )}
+          n {curve.n}
+        </span>
+      </div>
+      <div className="mt-2 space-y-1">
+        {populated.map((b) => (
+          <ReliabilityBinRow key={b.lower} bin={b} />
+        ))}
+      </div>
+      {small && (
+        <p className="mt-1.5 text-[11px] text-warning">
+          Malý vzorek – kalibrace je zatím orientační.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ReliabilityBinRow({
+  bin,
+}: {
+  bin: ReliabilityCurve["bins"][number];
+}) {
+  const observed = bin.observed ?? 0;
+  const predicted = bin.avgPredicted ?? 0;
+  const off = Math.abs(observed - predicted);
+  // Barva sloupce dle odchylky pozorováno vs. predikováno (čím blíž diagonále, tím líp).
+  const barCls = off < 0.1 ? "bg-positive/70" : off < 0.2 ? "bg-warning/70" : "bg-negative/70";
+  const p = (x: number) => Math.round(x * 100);
+  return (
+    <div className="flex items-center gap-2 text-[11px]">
+      <span className="w-16 shrink-0 tabular-nums text-muted">
+        {p(bin.lower)}–{p(bin.upper)} %
+      </span>
+      <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-border/50">
+        {/* Sloupec = pozorovaná četnost; svislá značka = průměrná predikce (ideál = překryv). */}
+        <div className={`bar-fill h-full ${barCls}`} style={{ width: `${observed * 100}%` }} />
+        <div
+          className="absolute top-0 h-full w-0.5 bg-foreground/70"
+          style={{ left: `${predicted * 100}%` }}
+          title={`Predikováno ${p(predicted)} %`}
+        />
+      </div>
+      <span className="w-24 shrink-0 text-right tabular-nums text-foreground">
+        {p(observed)} %{" "}
+        <span className="text-muted">/ {p(predicted)} %</span>
+      </span>
+      <span className="w-7 shrink-0 text-right tabular-nums text-muted">{bin.count}</span>
+    </div>
   );
 }
 

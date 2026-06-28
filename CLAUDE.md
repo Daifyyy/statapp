@@ -221,9 +221,12 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (**FREE** – agregátní/historické metriky nic konkrétního neprozrazují; `lib/picks/trackRecord.ts`:
   `computeTrackRecord` = globální track-record + `computeBenchmarkTrackRecord` = side-by-side
   náš model vs. API-Football na společné podmnožině (viz benchmark níže) + `backtestRule` =
-  backtest navoleného pravidla nad historií = úspěšnost „kdybys takhle sázel"). UI `PicksApp.tsx`
-  (panely `TrackRecordPanel` / `BenchmarkPanel` / `StrategyPanel` + `RuleControls` se renderují
-  **vždy = FREE**; zamčený `ProLock` je jen na místě seznamu konkrétních nadcházejících tipů).
+  backtest navoleného pravidla nad historií = úspěšnost „kdybys takhle sázel" +
+  **`computeReliability`** (`lib/picks/reliability.ts`) = kalibrační křivka: predikce rozbinované
+  dle pravděpodobnosti vs. skutečnost per trh (1X2 pooled one-vs-rest = 3 body/zápas, Over 2.5,
+  BTTS) + ECE (Expected Calibration Error, nižší = lepší). UI `PicksApp.tsx`
+  (panely `TrackRecordPanel` / `BenchmarkPanel` / `ReliabilityPanel` / `StrategyPanel` + `RuleControls`
+  se renderují **vždy = FREE**; zamčený `ProLock` je jen na místě seznamu konkrétních nadcházejících tipů).
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
   úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`). Počítá **jen

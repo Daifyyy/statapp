@@ -5,6 +5,7 @@ import {
   computeBenchmarkTrackRecord,
   computeTrackRecord,
 } from "@/lib/picks/trackRecord";
+import { computeReliability } from "@/lib/picks/reliability";
 import { ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
       trackRecord: computeTrackRecord(rows),
       benchmark: computeBenchmarkTrackRecord(rows),
       backtest: backtestRule(rows, parsed.data),
+      reliability: computeReliability(rows),
     });
   } catch (e) {
     logError("api/picks/stats", e);
