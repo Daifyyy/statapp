@@ -8,11 +8,12 @@ import { ProLock } from "./ProLock";
 import type { SessionUser } from "./sessionUser";
 
 /**
- * Režim záložky. "money" = aktuální (ceny z Transfermarkt datasetu, peněžní bilance).
- * "category" = předchozí řešení (počty po typech přestupů z API-Footballu) – ponecháno
- * jako mrtvý kód pro případný návrat (přepnout sem a změnit zdroj dat). Viz CLAUDE.md.
+ * Režim záložky. "category" = aktuální (počty příchodů/odchodů po typech z API-Footballu;
+ * zdroj je aktuálnější, ale nemá ceny). "money" = předchozí řešení (peněžní bilance z
+ * Transfermarkt datasetu) – ponecháno jako mrtvý kód pro případný návrat (přepnout sem
+ * a vrátit zdroj dat = cron import-transfers + MODE). Viz CLAUDE.md.
  */
-const MODE: "money" | "category" = "money";
+const MODE: "money" | "category" = "category";
 
 interface LeagueLite {
   id: number;
@@ -339,6 +340,10 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
         ]}
       />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>
+      <p className="mt-1 text-sm text-muted">
+        Příchody a odchody klubů top-5 lig za aktuální přestupové období podle typu přestupu
+        (trvalý / hostování / volný hráč).
+      </p>
       <LeagueChips leagues={leagues} selected={selected} onToggle={toggleLeague} />
       <div className="mt-3 inline-flex rounded-full border border-border bg-surface p-0.5 text-sm">
         <Pill active={!showAll} onClick={() => setShowAll(false)}>
@@ -351,6 +356,9 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
       {locked && (
         <div className="mt-4">
           <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+          <p className="mt-2 text-center text-[11px] text-muted">
+            Přehled počtů je zdarma; detail (kteří hráči) je součástí PRO.
+          </p>
         </div>
       )}
       {loading && !balances ? (

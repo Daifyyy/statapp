@@ -14,6 +14,7 @@
     "limits": "node --env-file=.env --import tsx scripts/limits.ts",
     "calibrate": "node --env-file=.env --import tsx scripts/calibrate.ts",
     "import-transfers": "node --env-file=.env --import tsx scripts/importTransfers.ts",
+    "refresh-transfers": "node --env-file=.env --import tsx scripts/refreshTransfers.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

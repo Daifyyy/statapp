@@ -48,7 +48,9 @@ export async function upsertTransfer(row: TransferUpsert): Promise<void> {
   });
 }
 
-/** Plně nahradí obsah tabulky `Transfer` (TM dataset je jediný zdroj) – wipe + bulk insert. */
+/** Plně nahradí obsah tabulky `Transfer` (wipe + bulk insert). Používá ji jen TM import
+ * (`transfersDataset.ts`, dead code); aktivní API-Football cesta jede přes
+ * `upsertTransfer` + `pruneTransfersBefore` (inkrementálně). */
 export async function replaceTransfers(rows: TransferUpsert[]): Promise<number> {
   await prisma.transfer.deleteMany({});
   if (rows.length === 0) return 0;
@@ -151,8 +153,9 @@ export type BalanceInput = Pick<
 
 /**
  * Agregace bilance per klub z řádků (perspektiva klubu: každý řádek patří `clubId`).
- * in = příchod (výdaj `feeEur`), out = odchod (příjem). net = earn − spend.
- * Kategorie (`classifyTransfer`) se počítají dál, ale UI je nepoužívá (dead code).
+ * in = příchod, out = odchod; **kategorie** (`classifyTransfer`, in/outByCategory) pohání
+ * aktivní category view. Peněžní pole (`spendEur`/`earnEur`/`netEur` z `feeEur`) se počítají
+ * dál, ale jsou **dead code** – API-Football ceny nemá (žije jen pro TM money view).
  * Čistá funkce. Řadí dle čisté investice (netEur vzestupně = největší investor první).
  */
 export function computeBalances(rows: BalanceInput[]): ClubTransferBalance[] {
