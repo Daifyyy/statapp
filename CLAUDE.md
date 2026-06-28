@@ -241,6 +241,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   predikcí, jinak je výsledek orientační. `DC_RHO` je zatím publikovaný default −0.13
   (Dixon–Coles 1997), nekalibrovaný na vlastních datech – čeká na dost settlnutých predikcí
   (první dataset se sbírá z MS 2026; settle dělá cron `settle-results`).
+  **Zostření favoritů** (`LAMBDA_SHARPEN` v `predict.ts`, `sharpenLambdas`): reliability křivka
+  ukázala, že 1X2 pravděpodobnosti jsou málo rozprostřené (model podsebevědomý na favoritech).
+  `sharpenLambdas` zostří **jen rozdíl** λ (D = λ_home−λ_away) se zachováním součtu → narovná 1X2,
+  Over 2.5 nechá být, mřížka zůstane konzistentní. `LAMBDA_SHARPEN=1.0` = **přesný no-op** (infra
+  připravená, zatím nepoužitá). `calibrate` má grid search přes `s` (1X2 log-loss). **Pozor:**
+  na malém vzorku optimum přestřeluje (44 zápasů → s≈2.05, plochá křivka = overfit) → měnit až
+  na ~150–300 settlnutých, pak bump `MODEL_VERSION`. Stejná logika jako `DC_RHO`.
 - **Interní benchmark vs. API-Football** (jen offline měření, **nikdy ve FREE/PRO API**,
   **nesahá na `compareTeams`**): paralelní sloupce `bench*` na řádku `FixturePrediction`
   (predikce API-Footballu 1X2). `fetchPrediction` (`apiFootball.ts`) parsne `percent`

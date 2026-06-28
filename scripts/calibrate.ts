@@ -6,7 +6,7 @@
 // 2) Reportuje úspěšnost (1X2), Brier skóre a log-loss uložených predikcí.
 import { getSettledPredictions } from "../lib/data/predictionStore.ts";
 import { MODEL_VERSION } from "../lib/data/predictions.ts";
-import { drawTau, poissonVector } from "../lib/stats/predict.ts";
+import { drawTau, poissonVector, sharpenLambdas } from "../lib/stats/predict.ts";
 import {
   computeTrackRecord,
   scoreProbs,
@@ -41,6 +41,51 @@ function logLikelihood(rows: PredictionRow[], rho: number): number {
 
 // 1X2 výběr pravděpodobností a skórování sdílí lib/picks/trackRecord.ts (ourProbs,
 // benchProbs, scoreProbs) → jeden zdroj pravdy s API track-recordem.
+
+/**
+ * 1X2 multiclass log-loss + Brier při zostření λ parametrem `s` (ρ = produkční DC_RHO
+ * přes default `drawTau`). Zostření drží součet λ → měří dopad jen na 1X2. `s = 1`
+ * reprodukuje současný model. Hledáme `s`, které minimalizuje log-loss (oprava
+ * „podsebevědomosti na favoritech" z reliability křivky).
+ */
+function outcomeScoreAtSharpen(
+  rows: PredictionRow[],
+  s: number
+): { logloss: number; brier: number; n: number } {
+  let ll = 0;
+  let brier = 0;
+  let n = 0;
+  for (const r of rows) {
+    if (!r.available || r.homeGoals == null || r.awayGoals == null) continue;
+    const [lh, la] = sharpenLambdas(r.lambdaHome, r.lambdaAway, s);
+    const ph = poissonVector(lh);
+    const pa = poissonVector(la);
+    let home = 0;
+    let draw = 0;
+    let away = 0;
+    let total = 0;
+    for (let i = 0; i <= MAX_GOALS; i++)
+      for (let j = 0; j <= MAX_GOALS; j++) {
+        const p = ph[i] * pa[j] * drawTau(i, j, lh, la);
+        total += p;
+        if (i > j) home += p;
+        else if (i === j) draw += p;
+        else away += p;
+      }
+    const norm = total || 1;
+    home /= norm;
+    draw /= norm;
+    away /= norm;
+    const oH = r.homeGoals > r.awayGoals ? 1 : 0;
+    const oA = r.homeGoals < r.awayGoals ? 1 : 0;
+    const oD = r.homeGoals === r.awayGoals ? 1 : 0;
+    brier += (home - oH) ** 2 + (draw - oD) ** 2 + (away - oA) ** 2;
+    const pObs = oH ? home : oA ? away : draw;
+    ll += -Math.log(Math.max(pObs, 1e-9));
+    n++;
+  }
+  return n ? { logloss: ll / n, brier: brier / n, n } : { logloss: 0, brier: 0, n: 0 };
+}
 
 async function main() {
   const rows = await getSettledPredictions(MODEL_VERSION);
@@ -94,6 +139,43 @@ async function main() {
   }
   console.log(`Doporučené ρ (max věrohodnost): ${best.rho}  (LL=${best.ll.toFixed(2)})`);
   console.log("Dolaď konstantu DC_RHO v lib/stats/predict.ts a bumpni MODEL_VERSION.");
+
+  // Zostření λ (LAMBDA_SHARPEN): grid search minimalizující 1X2 log-loss. Drží součet λ
+  // → opravuje jen 1X2 (favorité), Over 2.5 nechá být. s=1 = současný model (baseline).
+  console.log("\n=== Zostření λ (LAMBDA_SHARPEN, oprava favoritů) ===");
+  const baseScore = outcomeScoreAtSharpen(rows, 1);
+  const S_MAX = 3.0; // horní mez gridu; argmin na hranici = podezření na overfit (viz níže)
+  let bestS = { s: 1, logloss: baseScore.logloss };
+  for (let s = 1.0; s <= S_MAX + 0.001; s += 0.05) {
+    const sr = Math.round(s * 100) / 100;
+    const sc = outcomeScoreAtSharpen(rows, sr);
+    if (sc.logloss < bestS.logloss) bestS = { s: sr, logloss: sc.logloss };
+  }
+  const bestScore = outcomeScoreAtSharpen(rows, bestS.s);
+  const fmt = (x: number) => x.toFixed(4);
+  console.log(
+    `Baseline   s=1.00 → log-loss ${fmt(baseScore.logloss)} | Brier ${fmt(baseScore.brier)} (n=${baseScore.n})`
+  );
+  console.log(
+    `Doporučené s=${bestS.s.toFixed(2)} → log-loss ${fmt(bestScore.logloss)} | Brier ${fmt(bestScore.brier)}`
+  );
+  if (bestS.s === 1) {
+    console.log("→ Zostření nepomáhá (s=1 je optimum) – nech LAMBDA_SHARPEN=1.0.");
+  } else {
+    const gain = baseScore.logloss - bestScore.logloss;
+    console.log(`→ Zlepšení log-loss o ${fmt(gain)} (Brier ${fmt(baseScore.brier)} → ${fmt(bestScore.brier)}).`);
+    if (bestS.s >= S_MAX) {
+      console.log(
+        `⚠ Optimum na hranici gridu (s=${S_MAX.toFixed(1)}) → skoro jistě overfit na malém vzorku. ` +
+          `NEPOUŽÍVAT teď; potvrď až na ~150–300 zápasech, kde optimum sedne dovnitř gridu.`
+      );
+    } else {
+      console.log(
+        "Pozor: na malém vzorku může být v šumu – nastav LAMBDA_SHARPEN v predict.ts a bumpni " +
+          "MODEL_VERSION jen když je vzorek dost velký (~150–300)."
+      );
+    }
+  }
 }
 
 main()

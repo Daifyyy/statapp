@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Metric, MetricValue, TeamComparison, Venue } from "@/lib/types";
-import { predictMatch, drawTau, poissonVector } from "./predict";
+import { predictMatch, drawTau, poissonVector, sharpenLambdas } from "./predict";
 
 /** Postaví minimální TeamComparison s danými hodnotami metrik (stejné pro všechny venue). */
 function team(
@@ -139,6 +139,48 @@ describe("predictMatch", () => {
     const p = predictMatch(home, away);
     expect(p.available).toBe(true);
     expect(p.lambdaHome).toBeGreaterThan(0);
+  });
+});
+
+describe("sharpenLambdas", () => {
+  it("s = 1 je přesný no-op", () => {
+    expect(sharpenLambdas(1.8, 1.0, 1)).toEqual([1.8, 1.0]);
+  });
+
+  it("zachovává součet λ (celkové góly)", () => {
+    const [lh, la] = sharpenLambdas(1.8, 1.0, 1.5);
+    expect(lh + la).toBeCloseTo(2.8); // 1.8 + 1.0
+  });
+
+  it("s > 1 zostří rozdíl: favorit nahoru, slabší dolů", () => {
+    const [lh, la] = sharpenLambdas(1.8, 1.0, 1.5);
+    // D = (1.8−1.0)×1.5 = 1.2 → lh = (2.8+1.2)/2 = 2.0, la = (2.8−1.2)/2 = 0.8
+    expect(lh).toBeCloseTo(2.0);
+    expect(la).toBeCloseTo(0.8);
+    expect(lh).toBeGreaterThan(1.8);
+    expect(la).toBeLessThan(1.0);
+  });
+
+  it("symetrický zápas zůstane symetrický (nulový rozdíl)", () => {
+    expect(sharpenLambdas(1.4, 1.4, 2)).toEqual([1.4, 1.4]);
+  });
+
+  it("clampuje do [MIN, MAX] při extrémním zostření", () => {
+    const [lh, la] = sharpenLambdas(2.5, 0.5, 5);
+    expect(lh).toBeLessThanOrEqual(5);
+    expect(la).toBeGreaterThanOrEqual(0.2);
+  });
+});
+
+describe("predictMatch – LAMBDA_SHARPEN no-op (default)", () => {
+  it("default (s=1) → predikce stojí na nezměněných λ z expectedGoals", () => {
+    // Domácí silnější: λ se nesmí defaultně zostřit (no-op), reportované λ = vstupní průměr.
+    const home = team({ GOALS_FOR: 2.2, GOALS_AGAINST: 1.0 });
+    const away = team({ GOALS_FOR: 0.9, GOALS_AGAINST: 1.8 });
+    const p = predictMatch(home, away);
+    // λ_home = mean(2.2, 1.8) = 2.0; λ_away = mean(0.9, 1.0) = 0.95 (žádné zostření).
+    expect(p.lambdaHome).toBeCloseTo(2.0);
+    expect(p.lambdaAway).toBeCloseTo(0.95);
   });
 });
 

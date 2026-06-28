@@ -16,6 +16,35 @@ const TOP_SCORES = 5; // kolik nejpravděpodobnějších přesných skóre vydat
 const DC_RHO = -0.13;
 
 /**
+ * Zostření rozdílu λ (oprava „podsebevědomosti na favoritech"). Reliability ukazuje, že
+ * 1X2 pravděpodobnosti jsou málo rozprostřené (tlačí ke středu) – rozdíl λ favorita
+ * a outsidera je moc malý. `s > 1` zostří **jen rozdíl** D = λ_home − λ_away, zatímco
+ * **součet** S = λ_home + λ_away (= celkové góly) drží → narovná 1X2, ale Over 2.5 nechá být
+ * a celá mřížka zůstane konzistentní. `s = 1` je přesný no-op (zatím nekalibrováno; až bude
+ * ~150–300 settlnutých, fitni přes `npm run calibrate` a bumpni MODEL_VERSION). Viz `sharpenLambdas`.
+ */
+const LAMBDA_SHARPEN = 1.0;
+
+/**
+ * Zostří nerovnováhu očekávaných gólů parametrem `s` se zachováním součtu (celkových
+ * gólů). `s = 1` vrací λ beze změny (no-op). Výsledek je clampnutý na [MIN, MAX].
+ * Exportováno pro `calibrate.ts` (grid search) a testy.
+ */
+export function sharpenLambdas(
+  lambdaHome: number,
+  lambdaAway: number,
+  s: number = LAMBDA_SHARPEN
+): [number, number] {
+  if (s === 1) return [lambdaHome, lambdaAway];
+  const sum = lambdaHome + lambdaAway;
+  const diff = (lambdaHome - lambdaAway) * s;
+  return [
+    clamp((sum + diff) / 2, MIN_LAMBDA, MAX_LAMBDA),
+    clamp((sum - diff) / 2, MIN_LAMBDA, MAX_LAMBDA),
+  ];
+}
+
+/**
  * Predikce zápasu z očekávaných gólů obou týmů (Poisson s Dixon–Coles korekcí
  * nízkých skóre). Domácí útok × hostující obrana (a naopak), venue-specific
  * s fallbackem na TOTAL. Vše z výstupu `compareTeams` – žádná nová data, čistá funkce.
@@ -46,8 +75,11 @@ export function predictMatch(
     };
   }
 
-  const ph = poissonVector(lambdaHome);
-  const pa = poissonVector(lambdaAway);
+  // Zostření nerovnováhy λ (no-op při LAMBDA_SHARPEN=1) – mřížka i reportované
+  // očekávané skóre pak vychází ze zostřených λ, aby seděly s pravděpodobnostmi.
+  const [lh, la] = sharpenLambdas(lambdaHome, lambdaAway);
+  const ph = poissonVector(lh);
+  const pa = poissonVector(la);
 
   // Jediná smyčka přes mřížku skóre: na nízká skóre se aplikuje Dixon–Coles
   // korekce a všechny agregáty (V/R/P, Over 2.5, BTTS) se počítají z téže
@@ -61,7 +93,7 @@ export function predictMatch(
   const scores: ScoreProbability[] = [];
   for (let i = 0; i <= MAX_GOALS; i++) {
     for (let j = 0; j <= MAX_GOALS; j++) {
-      const p = ph[i] * pa[j] * drawTau(i, j, lambdaHome, lambdaAway);
+      const p = ph[i] * pa[j] * drawTau(i, j, lh, la);
       total += p;
       if (i > j) homeWin += p;
       else if (i === j) draw += p;
@@ -91,8 +123,8 @@ export function predictMatch(
 
   return {
     available: true,
-    lambdaHome,
-    lambdaAway,
+    lambdaHome: lh,
+    lambdaAway: la,
     homeWin,
     draw,
     awayWin,
