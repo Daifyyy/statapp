@@ -83,6 +83,7 @@ describe("toFreeResult", () => {
       over25: 0.5,
       topScores: [],
       lowConfidence: false,
+      readiness: { sample: 10, score: 1, level: "ok" },
     },
     insightReport: { verdict: "x", keySignals: [], home: [], away: [] },
   };

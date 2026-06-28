@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick, PickMarket } from "@/lib/types";
 import { PICK_PRESETS } from "@/lib/picks/rules";
+import { PREDICTION_READY_SAMPLE } from "@/lib/stats/readiness";
 import type {
   BacktestResult,
   BacktestSample,
@@ -37,6 +38,7 @@ async function loadPicks(
   venue: Venue,
   minProb: number,
   minEdge: number | undefined,
+  minReadiness: number | undefined,
   isActive: () => boolean,
   { setLoading, setError, setLocked, setPicks }: PicksSetters
 ): Promise<void> {
@@ -45,6 +47,7 @@ async function loadPicks(
   try {
     const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
     if (minEdge != null) q.set("minEdge", String(minEdge));
+    if (minReadiness != null) q.set("minReadiness", String(minReadiness));
     const r = await fetch(`/api/picks?${q.toString()}`);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error ?? "Chyba tipů");
@@ -71,6 +74,10 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   // Vypnutý → kurzy se ignorují (chování jako dnes, čistě pravděpodobnostní práh).
   const [valueOnly, setValueOnly] = useState(false);
   const minEdge = valueOnly ? 0 : undefined;
+  // Skrýt tipy s málo daty (default ON) – ochrana na startu sezóny, kdy je vzorek tenký.
+  // Gatuje jen seznam nadcházejících tipů, ne historický backtest (ten běží nad vším).
+  const [hideUnready, setHideUnready] = useState(true);
+  const minReadiness = hideUnready ? PREDICTION_READY_SAMPLE : undefined;
 
   const [picks, setPicks] = useState<MatchPick[] | null>(null);
   const [locked, setLocked] = useState(false);
@@ -81,17 +88,17 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
 
   const retry = useCallback(() => {
-    void loadPicks(market, venue, minProb, minEdge, () => true, {
+    void loadPicks(market, venue, minProb, minEdge, minReadiness, () => true, {
       setLoading,
       setError,
       setLocked,
       setPicks,
     });
-  }, [market, venue, minProb, minEdge]);
+  }, [market, venue, minProb, minEdge, minReadiness]);
 
   useEffect(() => {
     let active = true;
-    void loadPicks(market, venue, minProb, minEdge, () => active, {
+    void loadPicks(market, venue, minProb, minEdge, minReadiness, () => active, {
       setLoading,
       setError,
       setLocked,
@@ -100,7 +107,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
     return () => {
       active = false;
     };
-  }, [market, venue, minProb, minEdge]);
+  }, [market, venue, minProb, minEdge, minReadiness]);
 
   // Track-record (globální) + backtest strategie dle navolených parametrů.
   useEffect(() => {
@@ -156,10 +163,12 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         venue={venue}
         minProb={minProb}
         valueOnly={valueOnly}
+        hideUnready={hideUnready}
         onMarket={setMarket}
         onVenue={setVenue}
         onMinProb={setMinProb}
         onValueOnly={setValueOnly}
+        onHideUnready={setHideUnready}
         onPreset={applyPreset}
       />
 
@@ -422,20 +431,24 @@ function RuleControls({
   venue,
   minProb,
   valueOnly,
+  hideUnready,
   onMarket,
   onVenue,
   onMinProb,
   onValueOnly,
+  onHideUnready,
   onPreset,
 }: {
   market: PickMarket;
   venue: Venue;
   minProb: number;
   valueOnly: boolean;
+  hideUnready: boolean;
   onMarket: (m: PickMarket) => void;
   onVenue: (v: Venue) => void;
   onMinProb: (p: number) => void;
   onValueOnly: (v: boolean) => void;
+  onHideUnready: (v: boolean) => void;
   onPreset: (rule: { market: PickMarket; venue: Venue; minProb: number }) => void;
 }) {
   return (
@@ -508,19 +521,33 @@ function RuleControls({
         </label>
       </div>
 
-      {/* Value filtr: ponechá jen tipy, kde má model výhodu nad kurzem sázkovky
-          (edge > 0). Kurzy se plní jen klubovým ligám blízko výkopu → mimo to prázdno. */}
-      <label className="mt-3 flex items-center gap-2 border-t border-border pt-3">
-        <input
-          type="checkbox"
-          checked={valueOnly}
-          onChange={(e) => onValueOnly(e.target.checked)}
-          className="h-4 w-4 rounded border-border"
-        />
-        <span className="text-sm font-medium text-foreground">
-          Jen value tipy <span className="font-normal text-muted">(kurz výhodný, edge &gt; 0)</span>
-        </span>
-      </label>
+      <div className="mt-3 space-y-2 border-t border-border pt-3">
+        {/* Value filtr: ponechá jen tipy, kde má model výhodu nad kurzem sázkovky
+            (edge > 0). Kurzy se plní jen klubovým ligám blízko výkopu → mimo to prázdno. */}
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={valueOnly}
+            onChange={(e) => onValueOnly(e.target.checked)}
+            className="h-4 w-4 rounded border-border"
+          />
+          <span className="text-sm font-medium text-foreground">
+            Jen value tipy <span className="font-normal text-muted">(kurz výhodný, edge &gt; 0)</span>
+          </span>
+        </label>
+        {/* Readiness gate: skryje tipy s tenkým vzorkem (start sezóny). Default ON. */}
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={hideUnready}
+            onChange={(e) => onHideUnready(e.target.checked)}
+            className="h-4 w-4 rounded border-border"
+          />
+          <span className="text-sm font-medium text-foreground">
+            Skrýt málo dat <span className="font-normal text-muted">(jen predikce s dost zápasy)</span>
+          </span>
+        </label>
+      </div>
     </section>
   );
 }
@@ -557,8 +584,13 @@ function PickRow({ pick }: { pick: MatchPick }) {
           </span>
         </div>
       <div className="mt-1 flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-[11px] uppercase tracking-wide text-muted">
-          {pick.explanation}
+        <span className="flex min-w-0 items-center gap-1.5">
+          {pick.prediction.readiness.level !== "ok" && (
+            <ReadinessTag readiness={pick.prediction.readiness} />
+          )}
+          <span className="min-w-0 truncate text-[11px] uppercase tracking-wide text-muted">
+            {pick.explanation}
+          </span>
         </span>
         {pick.value && <ValueBadge value={pick.value} />}
       </div>
@@ -577,6 +609,25 @@ function PickRow({ pick }: { pick: MatchPick }) {
         <div className={cardClass}>{inner}</div>
       )}
     </li>
+  );
+}
+
+/** Odznak nízké připravenosti tipu (málo odehraných zápasů za predikcí). */
+function ReadinessTag({
+  readiness,
+}: {
+  readiness: { sample: number; level: string };
+}) {
+  const low = readiness.level === "low";
+  return (
+    <span
+      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+        low ? "bg-warning/15 text-warning" : "bg-background text-muted"
+      }`}
+      title={`Predikce stojí jen na ${readiness.sample} zápasech – ber orientačně`}
+    >
+      {low ? "⚠ málo dat" : "ℹ vzorek"} {readiness.sample}
+    </span>
   );
 }
 

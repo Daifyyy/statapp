@@ -51,6 +51,10 @@ export function MatchPrediction({
         </span>
       </div>
 
+      {prediction.readiness.level !== "ok" && (
+        <ReadinessNote readiness={prediction.readiness} />
+      )}
+
       {/* Tříbarevný pravděpodobnostní bar V / R / P */}
       <div className="flex items-center justify-between text-sm font-bold tabular-nums">
         <span className="text-home">{pct(homeWin)} %</span>
@@ -94,6 +98,31 @@ export function MatchPrediction({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Upozornění na nízkou připravenost predikce (málo odehraných zápasů za λ). Na startu
+ * sezóny je vzorek tenký → predikce stojí hlavně na minulé sezóně. „low" = silné varování,
+ * „medium" = mírnější. Číslo `sample` je efektivní vzorek nejslabšího vstupu.
+ */
+function ReadinessNote({
+  readiness,
+}: {
+  readiness: { sample: number; level: string };
+}) {
+  const low = readiness.level === "low";
+  return (
+    <div
+      className={`mt-2 rounded-lg px-3 py-2 text-[11px] ${
+        low ? "bg-warning/10 text-warning" : "bg-background text-muted"
+      }`}
+    >
+      {low ? "⚠ Málo dat" : "ℹ Omezený vzorek"} – predikce stojí jen na{" "}
+      <strong className="tabular-nums">{readiness.sample}</strong>{" "}
+      {readiness.sample === 1 ? "zápase" : "zápasech"} (na startu sezóny zatím rozhoduje
+      minulá sezóna). Ber orientačně.
+    </div>
   );
 }
 

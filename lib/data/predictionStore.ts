@@ -48,6 +48,7 @@ function toRow(p: FixturePrediction): PredictionRow {
     bttsYes: p.bttsYes,
     over25: p.over25,
     lowConfidence: p.lowConfidence,
+    readinessSample: p.readinessSample,
     modelVersion: p.modelVersion,
     status: p.status,
     homeGoals: p.homeGoals,
@@ -86,6 +87,7 @@ export async function upsertPrediction(row: PredictionUpsert): Promise<void> {
     bttsYes: row.bttsYes,
     over25: row.over25,
     lowConfidence: row.lowConfidence,
+    readinessSample: row.readinessSample,
     modelVersion: row.modelVersion,
     predictedAt: new Date(),
   };

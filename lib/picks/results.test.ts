@@ -41,6 +41,7 @@ function row(
     oddsAway: null,
     oddsOver25: null,
     oddsBtts: null,
+    readinessSample: 10,
     ...over,
   };
 }

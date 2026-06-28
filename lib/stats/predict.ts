@@ -1,5 +1,6 @@
 import type { MatchPrediction, ScoreProbability, TeamComparison } from "@/lib/types";
 import { lowConfidenceOf, valueOrTotal } from "./metricLookup";
+import { computeReadiness } from "./readiness";
 
 const MAX_GOALS = 10; // mřížka Poissonu (0..10 pro každý tým)
 const MIN_LAMBDA = 0.2;
@@ -25,6 +26,7 @@ export function predictMatch(
 ): MatchPrediction {
   const lambdaHome = expectedGoals(home, away, true);
   const lambdaAway = expectedGoals(away, home, false);
+  const readiness = computeReadiness(home, away);
 
   // Bez gólových i xG dat na některé straně nelze predikovat – nevydávej
   // falešnou 50/50, ale označ predikci jako nedostupnou (UI ji nahradí hláškou).
@@ -40,6 +42,7 @@ export function predictMatch(
       over25: 0,
       topScores: [],
       lowConfidence: true,
+      readiness,
     };
   }
 
@@ -97,6 +100,7 @@ export function predictMatch(
     over25,
     topScores,
     lowConfidence,
+    readiness,
   };
 }
 

@@ -142,6 +142,9 @@ model FixturePrediction {
   bttsYes       Float
   over25        Float
   lowConfidence Boolean
+  /// Připravenost predikce: efektivní vzorek nejslabšího vstupu λ (gate na tipy +
+  /// odznak „málo dat" na startu sezóny). 0 = neznámo / řádek z doby před readiness.
+  readinessSample Float   @default(0)
   /// Verze modelu (bump při změně DC_RHO apod.) – kalibrace/track-record per verzi.
   modelVersion  Int       @default(1)
   predictedAt   DateTime  @default(now())

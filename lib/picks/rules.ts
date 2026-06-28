@@ -8,6 +8,7 @@ import type {
 } from "@/lib/types";
 import { isNationalTournamentLeague } from "@/lib/data/catalog";
 import { rowValue } from "./value";
+import { readinessOf } from "@/lib/stats/readiness";
 
 /**
  * Pravidla výběru zápasů do predikční záložky. Čisté funkce nad uloženými
@@ -21,6 +22,9 @@ export const ruleSchema = z.object({
   minProb: z.coerce.number().min(0).max(1).default(0.65),
   // Volitelný práh edge (value betting). Vynechán → kurzy se ignorují (chování jako dnes).
   minEdge: z.coerce.number().optional(),
+  // Volitelný práh připravenosti (efektivní vzorek λ). Vynechán → readiness se nehlídá.
+  // Slouží jako gate „nevydat tip pod N zápasů" (ochrana na startu sezóny).
+  minReadiness: z.coerce.number().optional(),
 });
 
 /** Přednastavená pravidla (rychlá volba v UI). */
@@ -67,6 +71,8 @@ export function evaluateRule(row: PredictionRow, rule: PickRule): RuleMatch {
 
   let ok = prob >= rule.minProb;
   if (rule.minEdge != null) ok = ok && edge != null && edge >= rule.minEdge;
+  // Readiness gate: pod prahem efektivního vzorku λ tip nevydáme (málo dat).
+  if (rule.minReadiness != null) ok = ok && row.readinessSample >= rule.minReadiness;
 
   return { ok, prob, side, edge };
 }
@@ -84,6 +90,7 @@ function predictionOf(row: PredictionRow): MatchPrediction {
     // Přesná skóre nejsou v uloženém řádku (UI-only obohacení z živé mřížky); pravidla je nepotřebují.
     topScores: [],
     lowConfidence: row.lowConfidence,
+    readiness: readinessOf(row.readinessSample),
   };
 }
 

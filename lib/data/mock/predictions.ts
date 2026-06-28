@@ -45,6 +45,7 @@ function rowFrom(
     bttsYes: p.bttsYes,
     over25: p.over25,
     lowConfidence: p.lowConfidence,
+    readinessSample: p.readiness.sample,
     modelVersion: 0,
     status,
     homeGoals,

@@ -37,6 +37,7 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     oddsAway: null,
     oddsOver25: null,
     oddsBtts: null,
+    readinessSample: 10,
     ...over,
   };
 }

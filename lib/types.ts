@@ -316,6 +316,16 @@ export interface ScoreProbability {
   prob: number; // 0–1
 }
 
+/** Úroveň připravenosti predikce (kolik dat za ní stojí) – pro odznak. */
+export type ReadinessLevel = "low" | "medium" | "ok";
+
+/** Připravenost predikce: efektivní vzorek nejslabšího vstupu λ + skóre 0–1 + úroveň. */
+export interface Readiness {
+  sample: number;
+  score: number;
+  level: ReadinessLevel;
+}
+
 export interface MatchPrediction {
   /** false = chybí gólová i xG data → predikci nelze vydat (UI zobrazí hlášku). */
   available: boolean;
@@ -329,6 +339,8 @@ export interface MatchPrediction {
   /** Nejpravděpodobnější přesná skóre (sestupně), z téže opravené mřížky. Prázdné, když available=false. */
   topScores: ScoreProbability[];
   lowConfidence: boolean; // malý vzorek pod predikcí
+  /** Připravenost predikce (kolik dat za λ stojí) – pro odznak „málo dat" na startu sezóny. */
+  readiness: Readiness;
 }
 
 /** Kategorie signálu (pro ikonu, vyvážení top N a ladění vah). */
@@ -390,6 +402,8 @@ export interface PredictionRow {
   bttsYes: number;
   over25: number;
   lowConfidence: boolean;
+  /** Efektivní vzorek nejslabšího vstupu λ (připravenost predikce); 0 = neznámo/starý řádek. */
+  readinessSample: number;
   modelVersion: number;
   status: string; // "NS" | "FT" | "AET" | "PEN" | …
   homeGoals: number | null;
@@ -424,6 +438,12 @@ export interface PickRule {
    * kurzy ignorují → chování jako dnes (čistě pravděpodobnostní práh `minProb`).
    */
   minEdge?: number;
+  /**
+   * Volitelný minimální efektivní vzorek za predikcí (`readinessSample`). Když je
+   * nastaven, tip projde jen s dost daty (gate „nevydat tip pod N zápasů" na startu
+   * sezóny). Bez něj se připravenost nehlídá.
+   */
+  minReadiness?: number;
 }
 
 /** Jeden vybraný tip = nadcházející zápas, který splnil pravidlo. */
