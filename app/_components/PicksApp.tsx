@@ -477,7 +477,7 @@ function ReliabilityCurveView({ curve }: { curve: ReliabilityCurve }) {
   const verdict = curve.ece == null ? null : calibrationVerdict(curve.ece);
   return (
     <div>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2">
         <span className="text-xs font-semibold text-foreground">
           {RELIABILITY_LABELS[curve.market]}
         </span>
@@ -517,9 +517,9 @@ function ReliabilityBinRow({
   const barCls = off < 0.1 ? "bg-positive/70" : off < 0.2 ? "bg-warning/70" : "bg-negative/70";
   const p = (x: number) => Math.round(x * 100);
   return (
-    <div className="flex items-center gap-2 text-[11px]">
-      <span className="w-16 shrink-0 tabular-nums text-muted">
-        {p(bin.lower)}–{p(bin.upper)} %
+    <div className="flex items-center gap-1.5 text-[11px]">
+      <span className="w-14 shrink-0 tabular-nums text-muted">
+        {p(bin.lower)}–{p(bin.upper)}
       </span>
       <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-border/50">
         {/* Sloupec = pozorovaná četnost; svislá značka = průměrná predikce (ideál = překryv). */}
@@ -530,11 +530,11 @@ function ReliabilityBinRow({
           title={`Predikováno ${p(predicted)} %`}
         />
       </div>
-      <span className="w-24 shrink-0 text-right tabular-nums text-foreground">
-        {p(observed)} %{" "}
-        <span className="text-muted">/ {p(predicted)} %</span>
+      <span className="w-20 shrink-0 text-right tabular-nums text-foreground">
+        {p(observed)}
+        <span className="text-muted"> / {p(predicted)} %</span>
       </span>
-      <span className="w-7 shrink-0 text-right tabular-nums text-muted">{bin.count}</span>
+      <span className="w-6 shrink-0 text-right tabular-nums text-muted">{bin.count}</span>
     </div>
   );
 }
