@@ -7,6 +7,7 @@ import type {
   PredictionRow,
 } from "@/lib/types";
 import { isNationalTournamentLeague } from "@/lib/data/catalog";
+import { rowValue } from "./value";
 
 /**
  * Pravidla výběru zápasů do predikční záložky. Čisté funkce nad uloženými
@@ -18,6 +19,8 @@ export const ruleSchema = z.object({
   market: z.enum(["win", "over25", "btts"]).default("win"),
   venue: z.enum(["home", "away", "any"]).default("home"),
   minProb: z.coerce.number().min(0).max(1).default(0.65),
+  // Volitelný práh edge (value betting). Vynechán → kurzy se ignorují (chování jako dnes).
+  minEdge: z.coerce.number().optional(),
 });
 
 /** Přednastavená pravidla (rychlá volba v UI). */
@@ -32,29 +35,40 @@ export interface RuleMatch {
   ok: boolean;
   prob: number;
   side: "home" | "away" | null;
+  /** Edge nad kurzem sázkovky (prob×kurz−1); null = kurz nedotažen. */
+  edge: number | null;
 }
 
-/** Posoudí, zda predikce splňuje pravidlo, a vrátí relevantní pravděpodobnost. */
-export function evaluateRule(row: PredictionRow, rule: PickRule): RuleMatch {
-  if (!row.available) return { ok: false, prob: 0, side: null };
-
-  if (rule.market === "over25") {
-    return { ok: row.over25 >= rule.minProb, prob: row.over25, side: null };
-  }
-  if (rule.market === "btts") {
-    return { ok: row.bttsYes >= rule.minProb, prob: row.bttsYes, side: null };
-  }
+/** Pravděpodobnost a strana relevantní pro trh pravidla (bez posouzení prahů). */
+function targetOf(
+  row: PredictionRow,
+  rule: PickRule
+): { prob: number; side: "home" | "away" | null } {
+  if (rule.market === "over25") return { prob: row.over25, side: null };
+  if (rule.market === "btts") return { prob: row.bttsYes, side: null };
   // market === "win"
-  if (rule.venue === "home") {
-    return { ok: row.homeWin >= rule.minProb, prob: row.homeWin, side: "home" };
-  }
-  if (rule.venue === "away") {
-    return { ok: row.awayWin >= rule.minProb, prob: row.awayWin, side: "away" };
-  }
+  if (rule.venue === "home") return { prob: row.homeWin, side: "home" };
+  if (rule.venue === "away") return { prob: row.awayWin, side: "away" };
   // venue === "any" → silnější strana
   const side = row.homeWin >= row.awayWin ? "home" : "away";
-  const prob = Math.max(row.homeWin, row.awayWin);
-  return { ok: prob >= rule.minProb, prob, side };
+  return { prob: Math.max(row.homeWin, row.awayWin), side };
+}
+
+/**
+ * Posoudí, zda predikce splňuje pravidlo, a vrátí relevantní pravděpodobnost + edge.
+ * Práh `minProb` platí vždy; je-li navíc nastaven `minEdge`, tip projde jen se známým
+ * kurzem a dostatečnou hranou nad trhem (value betting). Bez `minEdge` se kurz ignoruje.
+ */
+export function evaluateRule(row: PredictionRow, rule: PickRule): RuleMatch {
+  if (!row.available) return { ok: false, prob: 0, side: null, edge: null };
+
+  const { prob, side } = targetOf(row, rule);
+  const edge = rowValue(row, rule.market, side)?.edge ?? null;
+
+  let ok = prob >= rule.minProb;
+  if (rule.minEdge != null) ok = ok && edge != null && edge >= rule.minEdge;
+
+  return { ok, prob, side, edge };
 }
 
 function predictionOf(row: PredictionRow): MatchPrediction {
@@ -112,6 +126,7 @@ export function filterPicks(
       market: rule.market,
       side: m.side,
       prob: m.prob,
+      value: rowValue(row, rule.market, m.side),
       explanation: explain(row, rule.market, m.side, m.prob),
       compareMode: national ? "NATIONAL" : "CLUB",
       homeCompareLeagueId: national ? null : row.leagueId,

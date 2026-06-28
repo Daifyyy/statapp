@@ -19,6 +19,12 @@ export type PredictionUpsert = Omit<
   | "benchHomeWin"
   | "benchDraw"
   | "benchAwayWin"
+  | "oddsBookmaker"
+  | "oddsHome"
+  | "oddsDraw"
+  | "oddsAway"
+  | "oddsOver25"
+  | "oddsBtts"
 > & { kickoff: string };
 
 function toRow(p: FixturePrediction): PredictionRow {
@@ -50,6 +56,12 @@ function toRow(p: FixturePrediction): PredictionRow {
     benchHomeWin: p.benchHomeWin,
     benchDraw: p.benchDraw,
     benchAwayWin: p.benchAwayWin,
+    oddsBookmaker: p.oddsBookmaker,
+    oddsHome: p.oddsHome,
+    oddsDraw: p.oddsDraw,
+    oddsAway: p.oddsAway,
+    oddsOver25: p.oddsOver25,
+    oddsBtts: p.oddsBtts,
   };
 }
 
@@ -112,6 +124,47 @@ export async function saveBenchmark(
       benchDraw: bench.draw,
       benchAwayWin: bench.away,
       benchFetchedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Jsou už uložené kurzy pro tento zápas? Drží pravidlo „fetch 1×/zápas" (kurzy
+ * tahneme jednou blízko výkopu, kdy jsou actionable – viz `runPredictUpcoming`).
+ */
+export async function hasOdds(fixtureId: number): Promise<boolean> {
+  const row = await prisma.fixturePrediction.findUnique({
+    where: { fixtureId },
+    select: { oddsFetchedAt: true },
+  });
+  return row?.oddsFetchedAt != null;
+}
+
+/**
+ * Uloží referenční kurzy (decimal odds) na existující řádek. Samostatný životní
+ * cyklus od naší predikce – `upsertPrediction` je nepřepisuje (jako benchmark).
+ */
+export async function saveOdds(
+  fixtureId: number,
+  odds: {
+    bookmaker: string;
+    home: number | null;
+    draw: number | null;
+    away: number | null;
+    over25: number | null;
+    btts: number | null;
+  }
+): Promise<void> {
+  await prisma.fixturePrediction.update({
+    where: { fixtureId },
+    data: {
+      oddsBookmaker: odds.bookmaker,
+      oddsHome: odds.home,
+      oddsDraw: odds.draw,
+      oddsAway: odds.away,
+      oddsOver25: odds.over25,
+      oddsBtts: odds.btts,
+      oddsFetchedAt: new Date(),
     },
   });
 }

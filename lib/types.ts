@@ -399,6 +399,13 @@ export interface PredictionRow {
   benchHomeWin: number | null;
   benchDraw: number | null;
   benchAwayWin: number | null;
+  // Referenční kurzy sázkovky (decimal odds) pro EV/value tipy; null = nedotaženo.
+  oddsBookmaker: string | null;
+  oddsHome: number | null;
+  oddsDraw: number | null;
+  oddsAway: number | null;
+  oddsOver25: number | null;
+  oddsBtts: number | null;
 }
 
 /** Trh, na který pravidlo cílí. */
@@ -411,6 +418,12 @@ export interface PickRule {
   venue: "home" | "away" | "any";
   /** Minimální pravděpodobnost (0–1). */
   minProb: number;
+  /**
+   * Volitelný minimální edge (EV) = p_model × kurz − 1. Když je nastaven, tip projde
+   * jen se známým kurzem a dostatečnou hranou nad trhem (value betting). Bez něj se
+   * kurzy ignorují → chování jako dnes (čistě pravděpodobnostní práh `minProb`).
+   */
+  minEdge?: number;
 }
 
 /** Jeden vybraný tip = nadcházející zápas, který splnil pravidlo. */
@@ -426,6 +439,12 @@ export interface MatchPick {
   side: "home" | "away" | null;
   /** Pravděpodobnost relevantní pro pravidlo (0–1). */
   prob: number;
+  /**
+   * Hodnotová analýza tipu vůči kurzu sázkovky (kurz, implikovaná pravděpodobnost,
+   * edge = prob×kurz−1). `null`, když kurz nebyl dotažen. Tvar odpovídá `ValueEstimate`
+   * (`lib/picks/value.ts`) – zde inline, aby `types.ts` nezáviselo na `value.ts`.
+   */
+  value: { odds: number; impliedProb: number; edge: number } | null;
   /** Krátké vysvětlení (z uložených hodnot). */
   explanation: string;
   /** Mód cílového Porovnání (klub vs. reprezentace) – pro deep-link prokliku. */

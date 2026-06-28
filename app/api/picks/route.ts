@@ -46,6 +46,7 @@ export async function GET(req: Request) {
     market: sp.get("market") ?? undefined,
     venue: sp.get("venue") ?? undefined,
     minProb: sp.get("minProb") ?? undefined,
+    minEdge: sp.get("minEdge") ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json({ error: "Neplatné pravidlo" }, { status: 400 });

@@ -56,6 +56,13 @@ function rowFrom(
     benchHomeWin: bench?.home ?? null,
     benchDraw: bench?.draw ?? null,
     benchAwayWin: bench?.away ?? null,
+    // Kurzy se reálně plní jen klubovou pipeline; v mocku je nenastavujeme.
+    oddsBookmaker: null,
+    oddsHome: null,
+    oddsDraw: null,
+    oddsAway: null,
+    oddsOver25: null,
+    oddsBtts: null,
   };
 }
 

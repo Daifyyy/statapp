@@ -35,6 +35,12 @@ function row(
     benchHomeWin: null,
     benchDraw: null,
     benchAwayWin: null,
+    oddsBookmaker: null,
+    oddsHome: null,
+    oddsDraw: null,
+    oddsAway: null,
+    oddsOver25: null,
+    oddsBtts: null,
     ...over,
   };
 }

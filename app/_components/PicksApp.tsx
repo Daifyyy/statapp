@@ -36,6 +36,7 @@ async function loadPicks(
   market: PickMarket,
   venue: Venue,
   minProb: number,
+  minEdge: number | undefined,
   isActive: () => boolean,
   { setLoading, setError, setLocked, setPicks }: PicksSetters
 ): Promise<void> {
@@ -43,6 +44,7 @@ async function loadPicks(
   setError(null);
   try {
     const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
+    if (minEdge != null) q.set("minEdge", String(minEdge));
     const r = await fetch(`/api/picks?${q.toString()}`);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error ?? "Chyba tipů");
@@ -65,6 +67,10 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [market, setMarket] = useState<PickMarket>("win");
   const [venue, setVenue] = useState<Venue>("home");
   const [minProb, setMinProb] = useState(0.65);
+  // Value režim: filtruje na tipy s kladnou hranou nad kurzem sázkovky (edge > 0).
+  // Vypnutý → kurzy se ignorují (chování jako dnes, čistě pravděpodobnostní práh).
+  const [valueOnly, setValueOnly] = useState(false);
+  const minEdge = valueOnly ? 0 : undefined;
 
   const [picks, setPicks] = useState<MatchPick[] | null>(null);
   const [locked, setLocked] = useState(false);
@@ -75,17 +81,17 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
 
   const retry = useCallback(() => {
-    void loadPicks(market, venue, minProb, () => true, {
+    void loadPicks(market, venue, minProb, minEdge, () => true, {
       setLoading,
       setError,
       setLocked,
       setPicks,
     });
-  }, [market, venue, minProb]);
+  }, [market, venue, minProb, minEdge]);
 
   useEffect(() => {
     let active = true;
-    void loadPicks(market, venue, minProb, () => active, {
+    void loadPicks(market, venue, minProb, minEdge, () => active, {
       setLoading,
       setError,
       setLocked,
@@ -94,12 +100,13 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
     return () => {
       active = false;
     };
-  }, [market, venue, minProb]);
+  }, [market, venue, minProb, minEdge]);
 
   // Track-record (globální) + backtest strategie dle navolených parametrů.
   useEffect(() => {
     let active = true;
     const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
+    if (minEdge != null) q.set("minEdge", String(minEdge));
     fetch(`/api/picks/stats?${q.toString()}`)
       .then((r) => r.json())
       .then((d) => {
@@ -112,7 +119,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
     return () => {
       active = false;
     };
-  }, [market, venue, minProb]);
+  }, [market, venue, minProb, minEdge]);
 
   function applyPreset(rule: { market: PickMarket; venue: Venue; minProb: number }) {
     setMarket(rule.market);
@@ -148,9 +155,11 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         market={market}
         venue={venue}
         minProb={minProb}
+        valueOnly={valueOnly}
         onMarket={setMarket}
         onVenue={setVenue}
         onMinProb={setMinProb}
+        onValueOnly={setValueOnly}
         onPreset={applyPreset}
       />
 
@@ -412,17 +421,21 @@ function RuleControls({
   market,
   venue,
   minProb,
+  valueOnly,
   onMarket,
   onVenue,
   onMinProb,
+  onValueOnly,
   onPreset,
 }: {
   market: PickMarket;
   venue: Venue;
   minProb: number;
+  valueOnly: boolean;
   onMarket: (m: PickMarket) => void;
   onVenue: (v: Venue) => void;
   onMinProb: (p: number) => void;
+  onValueOnly: (v: boolean) => void;
   onPreset: (rule: { market: PickMarket; venue: Venue; minProb: number }) => void;
 }) {
   return (
@@ -494,6 +507,20 @@ function RuleControls({
           />
         </label>
       </div>
+
+      {/* Value filtr: ponechá jen tipy, kde má model výhodu nad kurzem sázkovky
+          (edge > 0). Kurzy se plní jen klubovým ligám blízko výkopu → mimo to prázdno. */}
+      <label className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+        <input
+          type="checkbox"
+          checked={valueOnly}
+          onChange={(e) => onValueOnly(e.target.checked)}
+          className="h-4 w-4 rounded border-border"
+        />
+        <span className="text-sm font-medium text-foreground">
+          Jen value tipy <span className="font-normal text-muted">(kurz výhodný, edge &gt; 0)</span>
+        </span>
+      </label>
     </section>
   );
 }
@@ -529,8 +556,11 @@ function PickRow({ pick }: { pick: MatchPick }) {
             {Math.round(pick.prob * 100)} %
           </span>
         </div>
-      <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">
-        {pick.explanation}
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[11px] uppercase tracking-wide text-muted">
+          {pick.explanation}
+        </span>
+        {pick.value && <ValueBadge value={pick.value} />}
       </div>
     </>
   );
@@ -547,6 +577,27 @@ function PickRow({ pick }: { pick: MatchPick }) {
         <div className={cardClass}>{inner}</div>
       )}
     </li>
+  );
+}
+
+/** Kurz + edge vůči trhu. Kladný edge zvýrazněn (value), záporný tlumený. */
+function ValueBadge({
+  value,
+}: {
+  value: { odds: number; impliedProb: number; edge: number };
+}) {
+  const pos = value.edge > 0;
+  const edgePct = Math.round(value.edge * 100);
+  return (
+    <span
+      className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+        pos ? "bg-positive/10 text-positive" : "bg-background text-muted"
+      }`}
+      title={`Kurz ${value.odds.toFixed(2)} · trh ${Math.round(value.impliedProb * 100)} % · edge ${edgePct > 0 ? "+" : ""}${edgePct} %`}
+    >
+      {value.odds.toFixed(2)} · {edgePct > 0 ? "+" : ""}
+      {edgePct} %
+    </span>
   );
 }
 

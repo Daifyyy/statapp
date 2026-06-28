@@ -158,6 +158,17 @@ model FixturePrediction {
   benchDraw      Float?
   benchAwayWin   Float?
   benchFetchedAt DateTime?
+  // Kurzy referenční sázkovky (decimal odds) pro EV/value tipy. Stejný životní cyklus
+  // jako benchmark: fetch 1×/zápas, jen klubové ligy, jen blízko výkopu (kurzy jsou
+  // pak actionable). Ukládáme syrové kurzy → implied prob i edge se dopočítají čistou
+  // funkcí (lib/picks/value.ts), takže přepočet při změně modelu nevyžaduje nový fetch.
+  oddsBookmaker String?
+  oddsHome      Float?
+  oddsDraw      Float?
+  oddsAway      Float?
+  oddsOver25    Float?
+  oddsBtts      Float?
+  oddsFetchedAt DateTime?
 
   @@index([leagueId, kickoff])
   @@index([status, kickoff])

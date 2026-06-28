@@ -191,9 +191,22 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`getNationalConfedMap`) a deep-link míří do NATIONAL Porovnání (stejně jako Zápasy);
   `MatchPick` proto nese `compareMode`+`home/awayCompareLeagueId`, klikatelnost řeší
   `buildCompareHref` (tým bez dohledané konfederace → `null` = neklikací).
+- **EV / value tipy vůči kurzům** (`lib/picks/value.ts`, čisté + testy): predikční pipeline
+  dotahuje **referenční kurzy sázkovky** (`fetchOdds` v `apiFootball.ts`, decimal odds 1X2 +
+  Over 2.5 + BTTS od jedné preferované sázkovky) a ukládá je na `FixturePrediction`
+  (`odds*` sloupce, `saveOdds`/`hasOdds`). Životní cyklus jako benchmark: **jen klubové ligy,
+  1×/zápas (guard `hasOdds`), jen do `ODDS_LOOKAHEAD_HOURS=72` před výkopem** (týden staré kurzy
+  nemají pro EV smysl; cron běží denně → každý zápas se chytí těsně před výkopem; rozpočet
+  ~1 volání/zápas). Ukládáme **syrové kurzy** → `impliedProb=1/kurz` i `edge=p_model×kurz−1`
+  se dopočítají čistou funkcí (`valueOf`/`rowValue`), takže přepočet při změně modelu nevyžaduje
+  nový fetch. Kurzy žijí **jen na uložených řádcích** (DB), ne v živém `compareTeams` → `MatchPrediction`
+  je nemá (živé Porovnání zůstává bez odds fetchu). EV se zobrazuje jen v `PicksApp`.
 - **Výběr tipů** (`lib/picks/rules.ts`, čisté + testy): `evaluateRule`/`filterPicks` nad
-  `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb}` (sdílené
-  `ruleSchema`), presety `PICK_PRESETS`. API `app/api/picks` (**nadcházející tipy = PRO** přes
+  `PredictionRow`; pravidlo `PickRule{market: win|over25|btts, venue, minProb, minEdge?}` (sdílené
+  `ruleSchema`), presety `PICK_PRESETS`. **`minEdge`** (volitelný) = value režim: tip projde jen
+  se známým kurzem a edge ≥ prahu (bez něj = chování jako dřív, čistě `minProb`); UI přepínač
+  „Jen value tipy" v `RuleControls` posílá `minEdge=0`, `PickRow` ukazuje kurz + edge (`ValueBadge`).
+  `MatchPick.value` nese `{odds, impliedProb, edge}`. API `app/api/picks` (**nadcházející tipy = PRO** přes
   `getEntitlement`, FREE→`{locked}` → v UI `ProLock` jen místo seznamu tipů), `app/api/picks/stats`
   (**FREE** – agregátní/historické metriky nic konkrétního neprozrazují; `lib/picks/trackRecord.ts`:
   `computeTrackRecord` = globální track-record + `computeBenchmarkTrackRecord` = side-by-side

@@ -200,6 +200,28 @@ const predictionItemSchema = z.object({
 });
 const predictionsSchema = z.array(predictionItemSchema);
 
+// Kurzy sázkovek (/odds). Bereme jen tři trhy: Match Winner (bet 1), Goals
+// Over/Under (bet 5 → „Over 2.5"), Both Teams Score (bet 8 → „Yes"). Tolerantní –
+// chybějící sázkovka/trh/hodnota = null. `odd` jsou řetězce desetinného kurzu („1.90").
+const oddsValueSchema = z.object({
+  value: z.string(),
+  odd: z.string(),
+});
+const oddsBetSchema = z.object({
+  id: z.number(),
+  name: z.string().optional(),
+  values: z.array(oddsValueSchema).default([]),
+});
+const oddsBookmakerSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  bets: z.array(oddsBetSchema).default([]),
+});
+const oddsItemSchema = z.object({
+  bookmakers: z.array(oddsBookmakerSchema).default([]),
+});
+const oddsSchema = z.array(oddsItemSchema);
+
 export type ApiTeam = z.infer<typeof teamItemSchema>;
 export type ApiFixture = z.infer<typeof fixtureItemSchema>;
 export type ApiFixtureStats = z.infer<typeof fixtureStatsSchema>;
@@ -288,6 +310,63 @@ export async function fetchPrediction(
   const sum = home + draw + away;
   if (sum <= 0) return null;
   return { home: home / sum, draw: draw / sum, away: away / sum };
+}
+
+/**
+ * Preferované sázkovky pro referenční kurz (priorita = stabilita + široké pokrytí
+ * top-5 lig). ID dle API-Football: 8 Bet365, 6 Bwin, 11 1xBet, 2 Marathonbet.
+ * Není-li žádná dostupná, vezme se první vrácená.
+ */
+const PREFERRED_BOOKMAKERS = [8, 6, 11, 2];
+
+/** Referenční kurzy jednoho zápasu (decimal odds; null = trh u sázkovky chybí). */
+export interface MatchOdds {
+  bookmaker: string;
+  home: number | null;
+  draw: number | null;
+  away: number | null;
+  over25: number | null;
+  btts: number | null;
+}
+
+/** Desetinný kurz z hodnoty daného labelu (case-insensitive); platný jen > 1. */
+function oddOf(
+  values: { value: string; odd: string }[],
+  label: string
+): number | null {
+  const v = values.find((x) => x.value.toLowerCase() === label.toLowerCase());
+  const n = v ? parseFloat(v.odd) : NaN;
+  return Number.isFinite(n) && n > 1 ? n : null;
+}
+
+/**
+ * Referenční kurzy zápasu (1X2 + Over 2.5 + BTTS) od jedné sázkovky pro výpočet
+ * EV/value tipů. Vybere preferovanou sázkovku (fallback první dostupná). Vrací `null`,
+ * když API kurzy nemá (časté mimo top-5 / daleko před výkopem) nebo je řádek prázdný.
+ * Stejně jako benchmark: mimo `compareTeams`, fetch 1×/zápas, jen klubové ligy.
+ */
+export async function fetchOdds(fixture: number): Promise<MatchOdds | null> {
+  const res = await apiGet("/odds", { fixture }, oddsSchema);
+  const books = res[0]?.bookmakers ?? [];
+  if (books.length === 0) return null;
+  const book =
+    PREFERRED_BOOKMAKERS.map((id) => books.find((b) => b.id === id)).find(
+      (b): b is (typeof books)[number] => b != null
+    ) ?? books[0];
+  const betValues = (betId: number) =>
+    book.bets.find((b) => b.id === betId)?.values ?? [];
+  const mw = betValues(1);
+  const out: MatchOdds = {
+    bookmaker: book.name,
+    home: oddOf(mw, "Home"),
+    draw: oddOf(mw, "Draw"),
+    away: oddOf(mw, "Away"),
+    over25: oddOf(betValues(5), "Over 2.5"),
+    btts: oddOf(betValues(8), "Yes"),
+  };
+  // Bez jediného použitelného kurzu nemá smysl řádek ukládat.
+  if (out.home == null && out.over25 == null && out.btts == null) return null;
+  return out;
 }
 
 /** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */

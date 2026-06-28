@@ -13,6 +13,7 @@ import {
   fetchLeagueUpcomingFixtures,
   fetchFixturesByIds,
   fetchPrediction,
+  fetchOdds,
   FINISHED_STATUSES,
 } from "./apiFootball";
 import {
@@ -21,6 +22,8 @@ import {
   applyResult,
   hasBenchmark,
   saveBenchmark,
+  hasOdds,
+  saveOdds,
 } from "./predictionStore";
 
 /**
@@ -47,6 +50,13 @@ export const ALL_PREDICTION_LEAGUES = [
 
 /** Kolik nejbližších zápasů ligy predikovat (pokryje kolo + rezervu). */
 const UPCOMING_PER_LEAGUE = 15;
+
+/**
+ * Kurzy tahneme jen pro zápasy do tohoto okna před výkopem. Týden staré kurzy nemají
+ * pro EV smysl (trh se hýbe); 72 h je kompromis „už actionable, pořád 1× za život
+ * zápasu" – cron běží denně, takže okno každý zápas zachytí těsně před výkopem.
+ */
+const ODDS_LOOKAHEAD_HOURS = 72;
 
 /**
  * Spočítá a uloží predikce nadcházejících zápasů. `leagueIds` umožní ruční/dávkový
@@ -124,6 +134,22 @@ export async function runPredictUpcoming(
             }
           } catch {
             // benchmark je best-effort
+          }
+
+          // Referenční kurzy pro EV/value tipy. Jen klubové ligy, jen blízko výkopu
+          // (kurzy jsou pak actionable), 1×/zápas (guard hasOdds). Best-effort jako benchmark.
+          try {
+            const hoursToKickoff =
+              (new Date(f.fixture.date).getTime() - Date.now()) / 3_600_000;
+            if (
+              hoursToKickoff <= ODDS_LOOKAHEAD_HOURS &&
+              !(await hasOdds(f.fixture.id))
+            ) {
+              const odds = await fetchOdds(f.fixture.id);
+              if (odds) await saveOdds(f.fixture.id, odds);
+            }
+          } catch {
+            // kurzy jsou best-effort
           }
         }
       } catch {
