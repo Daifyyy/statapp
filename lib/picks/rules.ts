@@ -109,6 +109,37 @@ function explain(
 }
 
 /**
+ * Sestaví `MatchPick` pro daný trh/stranu z řádku (deep-link, value, vysvětlení).
+ * Jeden zdroj pravdy pro `filterPicks` i digest (`lib/picks/digest.ts`).
+ * Klub → CLUB mód, „liga" = `leagueId` u obou (deep-link rovnou klikací). Reprezentační
+ * turnaj → NATIONAL mód, konfederace doplní route (`getNationalConfedMap`; zde null).
+ */
+export function buildPick(
+  row: PredictionRow,
+  market: PickMarket,
+  side: "home" | "away" | null,
+  prob: number
+): MatchPick {
+  const national = isNationalTournamentLeague(row.leagueId);
+  return {
+    fixtureId: row.fixtureId,
+    kickoff: row.kickoff,
+    leagueId: row.leagueId,
+    home: { id: row.homeTeamId, name: row.homeName, logoUrl: row.homeLogo },
+    away: { id: row.awayTeamId, name: row.awayName, logoUrl: row.awayLogo },
+    prediction: predictionOf(row),
+    market,
+    side,
+    prob,
+    value: rowValue(row, market, side),
+    explanation: explain(row, market, side, prob),
+    compareMode: national ? "NATIONAL" : "CLUB",
+    homeCompareLeagueId: national ? null : row.leagueId,
+    awayCompareLeagueId: national ? null : row.leagueId,
+  };
+}
+
+/**
  * Vybere a seřadí tipy splňující pravidlo: nejdříve hrané zápasy první,
  * při stejném dni nejvyšší pravděpodobnost první.
  */
@@ -120,25 +151,7 @@ export function filterPicks(
   for (const row of rows) {
     const m = evaluateRule(row, rule);
     if (!m.ok) continue;
-    // Klub → CLUB mód, „liga" = `leagueId` u obou (deep-link rovnou klikací).
-    // Reprezentační turnaj → NATIONAL mód, konfederace doplní `/api/picks` (zde null).
-    const national = isNationalTournamentLeague(row.leagueId);
-    picks.push({
-      fixtureId: row.fixtureId,
-      kickoff: row.kickoff,
-      leagueId: row.leagueId,
-      home: { id: row.homeTeamId, name: row.homeName, logoUrl: row.homeLogo },
-      away: { id: row.awayTeamId, name: row.awayName, logoUrl: row.awayLogo },
-      prediction: predictionOf(row),
-      market: rule.market,
-      side: m.side,
-      prob: m.prob,
-      value: rowValue(row, rule.market, m.side),
-      explanation: explain(row, rule.market, m.side, m.prob),
-      compareMode: national ? "NATIONAL" : "CLUB",
-      homeCompareLeagueId: national ? null : row.leagueId,
-      awayCompareLeagueId: national ? null : row.leagueId,
-    });
+    picks.push(buildPick(row, rule.market, m.side, m.prob));
   }
   return picks.sort((a, b) => {
     const dayCmp = a.kickoff.slice(0, 10).localeCompare(b.kickoff.slice(0, 10));
