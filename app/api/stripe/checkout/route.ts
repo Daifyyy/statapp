@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/authUser";
-import { stripe, isStripeConfigured, appBaseUrl } from "@/lib/stripe";
+import { getStripe, isStripeConfigured, appBaseUrl } from "@/lib/stripe";
 import { allowRequest, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
 
@@ -28,7 +28,7 @@ export async function POST() {
     // Najdi/vytvoř Stripe customer a ulož ho na uživatele (mapování pro webhook).
     let customerId = dbUser?.stripeCustomerId ?? null;
     if (!customerId) {
-      const customer = await stripe.customers.create({
+      const customer = await getStripe().customers.create({
         email: dbUser?.email ?? undefined,
         metadata: { userId: user.id },
       });
@@ -40,7 +40,7 @@ export async function POST() {
     }
 
     const base = appBaseUrl();
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe().checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
       line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],

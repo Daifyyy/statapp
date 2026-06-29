@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { prisma } from "@/lib/db";
-import { stripe } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 import { logError } from "@/lib/logError";
 
 // Stripe webhook – JEDINÝ zdroj přepnutí User.tier dle stavu předplatného.
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
   const body = await req.text();
   let event: Stripe.Event;
   try {
-    event = await stripe.webhooks.constructEventAsync(body, sig, secret);
+    event = await getStripe().webhooks.constructEventAsync(body, sig, secret);
   } catch (e) {
     logError("api/stripe.webhook.verify", e);
     return NextResponse.json({ error: "Neplatný podpis" }, { status: 400 });
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         if (session.subscription) {
-          const sub = await stripe.subscriptions.retrieve(
+          const sub = await getStripe().subscriptions.retrieve(
             typeof session.subscription === "string"
               ? session.subscription
               : session.subscription.id
