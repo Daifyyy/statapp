@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { track } from "@vercel/analytics";
 import type { SessionUser } from "./sessionUser";
@@ -27,6 +28,25 @@ export function ProLock({
   onUnlockTrial: () => void;
   unlocking: boolean;
 }) {
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+
+  async function startCheckout() {
+    track("upgrade_click");
+    setCheckoutLoading(true);
+    try {
+      const res = await fetch("/api/stripe/checkout", { method: "POST" });
+      const data = (await res.json().catch(() => null)) as { url?: string } | null;
+      if (data?.url) {
+        window.location.href = data.url;
+        return; // přesměrování na Stripe
+      }
+    } catch {
+      /* spadne do hlášky níže */
+    }
+    setCheckoutLoading(false);
+    window.alert("Platbu se teď nepodařilo zahájit. Zkus to prosím později.");
+  }
+
   return (
     <section className="relative overflow-hidden rounded-2xl border border-border bg-surface p-5 text-center shadow-sm">
       <span className="inline-flex items-center gap-1 rounded-full bg-positive/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-positive">
@@ -81,11 +101,16 @@ export function ProLock({
           </>
         ) : (
           <>
-            <span className="inline-flex cursor-default items-center gap-1.5 rounded-full bg-background px-4 py-2 text-sm font-semibold text-muted">
-              ⏳ Plná PRO verze připravujeme
-            </span>
+            <button
+              type="button"
+              onClick={startCheckout}
+              disabled={checkoutLoading}
+              className="rounded-full bg-positive px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
+            >
+              {checkoutLoading ? "Přesměrovávám…" : "Upgradovat na PRO"}
+            </button>
             <p className="mt-2 text-xs text-muted">
-              Trial jsi už využil. Placená PRO verze dorazí brzy.
+              Trial jsi využil. Odemkni všechny PRO funkce předplatným.
             </p>
           </>
         )}

@@ -71,6 +71,16 @@ export function AccountMenu({ user }: { user: SessionUser | null }) {
           >
             📲 Nainstalovat aplikaci
           </MenuItem>
+          {isPro && (
+            <MenuItem
+              onClick={() => {
+                setOpen(false);
+                void manageSubscription();
+              }}
+            >
+              💳 Spravovat předplatné
+            </MenuItem>
+          )}
           <MenuItem
             onClick={() => {
               setOpen(false);
@@ -91,6 +101,17 @@ export function AccountMenu({ user }: { user: SessionUser | null }) {
       )}
     </div>
   );
+}
+
+/** Otevře Stripe billing portal (správa/zrušení předplatného). */
+async function manageSubscription() {
+  const res = await fetch("/api/stripe/portal", { method: "POST" });
+  const data = (await res.json().catch(() => null)) as { url?: string } | null;
+  if (data?.url) {
+    window.location.href = data.url;
+  } else {
+    window.alert("Správu předplatného se teď nepodařilo otevřít.");
+  }
 }
 
 /** GDPR: po potvrzení smaže účet a odhlásí. */

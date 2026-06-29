@@ -76,6 +76,12 @@ model User {
   tier          Tier      @default(FREE)
   proTrialUsed  Boolean   @default(false)
   createdAt     DateTime  @default(now())
+  // Stripe předplatné. `tier` zůstává jediným spínačem PRO – tahle pole jsou jen
+  // mapování na Stripe (webhook hledá uživatele dle `stripeCustomerId`) + období
+  // pro UI. Allowlist PRO_EMAILS je dál nadřazený (řeší session callback v auth.ts).
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?
+  proUntil             DateTime?
 
   accounts         Account[]
   sessions         Session[]
