@@ -6,11 +6,22 @@ import Stripe from "stripe";
 
 const globalForStripe = globalThis as unknown as { stripe?: Stripe };
 
-export const stripe =
-  globalForStripe.stripe ??
-  new Stripe(process.env.STRIPE_SECRET_KEY ?? "", { typescript: true });
+function getStripe(): Stripe {
+  if (globalForStripe.stripe) return globalForStripe.stripe;
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
+  const instance = new Stripe(key, { typescript: true });
+  if (process.env.NODE_ENV !== "production") globalForStripe.stripe = instance;
+  return instance;
+}
 
-if (process.env.NODE_ENV !== "production") globalForStripe.stripe = stripe;
+// Proxy zajišťuje lazy inicializaci – instance vznikne až při prvním volání,
+// ne při importu modulu (jinak build padá bez STRIPE_SECRET_KEY).
+export const stripe = new Proxy({} as Stripe, {
+  get(_target, prop) {
+    return (getStripe() as unknown as Record<string | symbol, unknown>)[prop];
+  },
+});
 
 /** Je Stripe nakonfigurovaný? Bez něj placený upgrade není dostupný (běží jen trial). */
 export function isStripeConfigured(): boolean {
