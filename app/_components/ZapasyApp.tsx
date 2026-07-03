@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import type { FixtureDay, SettledMatch, UpcomingFixture } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
 import type { SessionUser } from "./sessionUser";
 
@@ -224,9 +225,11 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
         <TeamLogo src={fixture.home.logoUrl} alt={fixture.home.name} size={20} />
         <span className="min-w-0 truncate font-medium text-home">{fixture.home.name}</span>
+        <RankBadge rank={fixture.homeRank} />
         <span className="shrink-0 text-muted">–</span>
         <TeamLogo src={fixture.away.logoUrl} alt={fixture.away.name} size={20} />
         <span className="min-w-0 truncate font-medium text-away">{fixture.away.name}</span>
+        <RankBadge rank={fixture.awayRank} />
       </div>
       {clickable && (
         <span className="shrink-0 text-muted" aria-hidden>

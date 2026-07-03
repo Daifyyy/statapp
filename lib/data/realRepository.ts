@@ -1,4 +1,13 @@
-import type { FixtureDay, Injury, League, MatchStat, Metric, Team } from "@/lib/types";
+import type {
+  FixtureDay,
+  Injury,
+  League,
+  MatchStat,
+  Metric,
+  Scorer,
+  Standing,
+  Team,
+} from "@/lib/types";
 import {
   fetchFixtureStatistics,
   fetchFixturesByDate,
@@ -6,10 +15,13 @@ import {
   fetchLeagueTeams,
   fetchTeamFixtures,
   fetchTeamInjuries,
+  fetchLeagueStandings,
+  fetchLeagueTopScorers,
   FINISHED_STATUSES,
   STAT_TYPE_MAP,
   type ApiFixture,
   type ApiFixtureStats,
+  type ApiStandingRow,
 } from "./apiFootball";
 import { normalizeUpcomingFixtures } from "./fixtures";
 import {
@@ -19,6 +31,8 @@ import {
   type MatchContext,
 } from "./cache";
 import { selectCurrentInjuries } from "./injuries";
+import { pickTeamStanding } from "./standings";
+import { pickTeamScorers } from "./scorers";
 import {
   CLUB_LEAGUES,
   CURRENT_SEASON,
@@ -32,6 +46,8 @@ import {
 
 const LIST_TTL = 60 * 60 * 24; // 24 h pro seznamy (dokončené sezóny jsou stabilní)
 const INJ_TTL = 60 * 60 * 6; // 6 h pro zranění (soupiska se mění průběžně)
+const STANDINGS_TTL = 60 * 60 * 6; // 6 h pro tabulku (mění se jen po odehraném kole)
+const SCORERS_TTL = 60 * 60 * 12; // 12 h pro střelce (žebříček se hýbe pomalu)
 const FIX_TTL = 60 * 60; // 1 h pro denní rozpis (časy/zápasy se mohou měnit)
 const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
@@ -61,6 +77,11 @@ export async function warmCatalog(): Promise<number> {
       // pokračuj i při výpadku jedné ligy
     }
   }
+  // Ligové tabulky klubových lig (levné, ~18 volání) → rank v seznamech Zápasy/Tipy
+  // je pak instantní (jinak by je líně tahal cold homepage load).
+  await Promise.all(
+    CLUB_LEAGUES.map((l) => cachedLeagueStandings(l.id).catch(() => undefined))
+  );
   return warmed;
 }
 
@@ -169,6 +190,85 @@ export async function getTeamInjuries(
   } catch {
     return [];
   }
+}
+
+/**
+ * Postavení týmu v ligové tabulce (FREE kontext, mimo compareTeams i predikci).
+ * Reprezentace tabulku spolehlivě nemají → `null` (UI sekci skryje). Cache je **per
+ * liga** (`standings:<liga>:<sezóna>`) → jedno volání pokryje oba týmy stejné ligy.
+ * Při nedostupnosti (jiná soutěž, výpadek) vrací `null`, ne chybu.
+ */
+export async function getLeagueStanding(
+  teamId: number,
+  leagueId: number
+): Promise<Standing | null> {
+  if (isNationalLeague(leagueId)) return null;
+  try {
+    return pickTeamStanding(await cachedLeagueStandings(leagueId), teamId);
+  } catch {
+    return null;
+  }
+}
+
+/** Syrová ligová tabulka přes per-liga TTL cache (`standings:<liga>:<sezóna>`). */
+function cachedLeagueStandings(leagueId: number): Promise<ApiStandingRow[]> {
+  return cachedJson(
+    `standings:${leagueId}:${CURRENT_SEASON}`,
+    STANDINGS_TTL,
+    () => fetchLeagueStandings(leagueId, CURRENT_SEASON)
+  );
+}
+
+/**
+ * Nejlepší střelci ligy patřící k danému týmu (FREE kontext v Porovnání). Žebříček se
+ * tahá **per liga přes sdílenou cache** → jedno (cachované) volání pokryje oba týmy.
+ * Reprezentace přeskočí (jiná soutěžní struktura); při nedostupnosti vrací `[]`, ne chybu.
+ */
+export async function getTeamTopScorers(
+  teamId: number,
+  leagueId: number
+): Promise<Scorer[]> {
+  if (isNationalLeague(leagueId)) return [];
+  try {
+    const raw = await cachedJson(
+      `topscorers:${leagueId}:${CURRENT_SEASON}`,
+      SCORERS_TTL,
+      () => fetchLeagueTopScorers(leagueId, CURRENT_SEASON)
+    );
+    return pickTeamScorers(raw, teamId);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Mapa `teamId → pozice` pro dané týmy (FREE kontext do seznamů Zápasy/Tipy). Reprezentace
+ * přeskočí (nemají tabulku). Standings se tahá **per liga přes sdílenou cache** → jedno
+ * (cachované) volání na distinktní klubovou ligu, ne per zápas. Výpadek ligy ji jen vynechá.
+ */
+export async function getRanks(
+  teams: { id: number; leagueId: number; national: boolean }[]
+): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  const leagueIds = [
+    ...new Set(teams.filter((t) => !t.national).map((t) => t.leagueId)),
+  ].filter((id) => !isNationalLeague(id));
+  const byLeague = new Map<number, ApiStandingRow[]>();
+  await Promise.all(
+    leagueIds.map(async (id) => {
+      try {
+        byLeague.set(id, await cachedLeagueStandings(id));
+      } catch {
+        // výpadek jedné ligy nezhasne ostatní
+      }
+    })
+  );
+  for (const t of teams) {
+    if (t.national) continue;
+    const row = byLeague.get(t.leagueId)?.find((r) => r.team.id === t.id);
+    if (row) map.set(t.id, row.rank);
+  }
+  return map;
 }
 
 /**

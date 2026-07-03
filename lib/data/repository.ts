@@ -3,8 +3,11 @@ import type {
   FixtureDay,
   Injury,
   League,
+  MatchPick,
   PredictionRow,
+  Scorer,
   SettledMatch,
+  Standing,
   Team,
   Transfer,
 } from "@/lib/types";
@@ -71,8 +74,73 @@ export async function getCompareTeam(
 
 /** Nadcházející zápasy našich lig na zadané dny (real = API+cache, mock = generátor). */
 export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]> {
-  if (useReal) return real.getFixturesByDates(dates);
-  return mockFixturesByDates(dates);
+  const days = useReal
+    ? await real.getFixturesByDates(dates)
+    : mockFixturesByDates(dates);
+  await enrichFixtureRanks(days);
+  return days;
+}
+
+/** Doplní klubovým zápasům pozici obou týmů v tabulce (FREE kontext; reprezentace přeskočí). */
+async function enrichFixtureRanks(days: FixtureDay[]): Promise<void> {
+  const teams = days.flatMap((d) =>
+    d.fixtures
+      .filter((f) => !f.national)
+      .flatMap((f) => [
+        { id: f.home.id, leagueId: f.leagueId, national: false },
+        { id: f.away.id, leagueId: f.leagueId, national: false },
+      ])
+  );
+  if (teams.length === 0) return;
+  const ranks = await getRanks(teams);
+  for (const d of days) {
+    for (const f of d.fixtures) {
+      if (f.national) continue;
+      f.homeRank = ranks.get(f.home.id) ?? null;
+      f.awayRank = ranks.get(f.away.id) ?? null;
+    }
+  }
+}
+
+/**
+ * Mapa `teamId → pozice v tabulce` pro dané týmy (real = API+cache per liga; mock =
+ * deterministický řádek). Reprezentace se přeskočí (nemají tabulku).
+ */
+export async function getRanks(
+  teams: { id: number; leagueId: number; national: boolean }[]
+): Promise<Map<number, number>> {
+  if (useReal) return real.getRanks(teams);
+  const map = new Map<number, number>();
+  for (const t of teams) {
+    if (t.national) continue;
+    const s = mockStanding(t.id);
+    if (s) map.set(t.id, s.rank);
+  }
+  return map;
+}
+
+/**
+ * Doplní klubovým tipům pozici obou týmů v tabulce (FREE kontext do `PickRow`).
+ * Reprezentační tipy nechá být (nemají tabulku). Sdílí `/api/picks` i `/api/digest`.
+ */
+export async function stampPickRanks(picks: MatchPick[]): Promise<MatchPick[]> {
+  const teams = picks
+    .filter((p) => p.compareMode === "CLUB")
+    .flatMap((p) => [
+      { id: p.home.id, leagueId: p.leagueId, national: false },
+      { id: p.away.id, leagueId: p.leagueId, national: false },
+    ]);
+  if (teams.length === 0) return picks;
+  const ranks = await getRanks(teams);
+  return picks.map((p) =>
+    p.compareMode === "CLUB"
+      ? {
+          ...p,
+          homeRank: ranks.get(p.home.id) ?? null,
+          awayRank: ranks.get(p.away.id) ?? null,
+        }
+      : p
+  );
 }
 
 /** Nadcházející predikce pro záložku (real = DB store, mock = generátor). */
@@ -135,6 +203,74 @@ export async function getTransferBalances(
 ): Promise<ClubTransferBalance[]> {
   if (useReal) return getClubBalances(leagueIds);
   return mockClubBalances(leagueIds);
+}
+
+/**
+ * Postavení týmu v ligové tabulce (FREE kontext). Real = API+cache (per liga);
+ * mock = deterministický řádek dle teamId, ať jde UI zkoušet bez DB/API.
+ * Reprezentace tabulku nemají → null (UI sekci skryje).
+ */
+export async function getStanding(
+  teamId: number,
+  leagueId: number
+): Promise<Standing | null> {
+  if (useReal) return real.getLeagueStanding(teamId, leagueId);
+  return mockStanding(teamId);
+}
+
+function mockStanding(teamId: number): Standing | null {
+  const team = allMockTeams().find((t) => t.id === teamId);
+  if (!team || team.entityType === "NATIONAL") return null;
+  const rank = (teamId % 18) + 1;
+  const wins = 20 - rank;
+  const losses = rank - 1;
+  const draws = 6;
+  const played = wins + draws + losses;
+  const gf = 40 - rank;
+  const ga = 10 + rank;
+  const half = (n: number) => Math.round(n / 2);
+  return {
+    rank,
+    points: wins * 3 + draws,
+    goalsDiff: gf - ga,
+    form: ["W", "W", "D", "L", "W"].slice(0, 5).join(""),
+    all: { played, win: wins, draw: draws, lose: losses, goalsFor: gf, goalsAgainst: ga },
+    home: {
+      played: half(played),
+      win: half(wins),
+      draw: half(draws),
+      lose: half(losses),
+      goalsFor: half(gf),
+      goalsAgainst: half(ga),
+    },
+    away: {
+      played: played - half(played),
+      win: wins - half(wins),
+      draw: draws - half(draws),
+      lose: losses - half(losses),
+      goalsFor: gf - half(gf),
+      goalsAgainst: ga - half(ga),
+    },
+  };
+}
+
+/**
+ * Nejlepší střelci ligy patřící k týmu (FREE kontext). Real = API+cache per liga;
+ * mock = deterministických 0–2 hráčů dle teamId. Reprezentace → prázdné.
+ */
+export async function getTopScorers(
+  teamId: number,
+  leagueId: number
+): Promise<Scorer[]> {
+  if (useReal) return real.getTeamTopScorers(teamId, leagueId);
+  const team = allMockTeams().find((t) => t.id === teamId);
+  if (!team || team.entityType === "NATIONAL") return [];
+  const count = teamId % 3; // 0–2 střelci
+  return Array.from({ length: count }, (_, i) => ({
+    playerId: teamId * 1000 + i,
+    name: `Střelec #${i + 1}`,
+    goals: 15 - i * 4 - (teamId % 3),
+  }));
 }
 
 const MOCK_INJURY_REASONS = [

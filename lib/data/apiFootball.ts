@@ -155,6 +155,61 @@ const injuryItemSchema = z.object({
 });
 const injuriesSchema = z.array(injuryItemSchema);
 
+// /standings vrací per liga+sezóna vnořené pole tabulek (běžně 1, u skupin víc).
+// Bereme jen pole, která zobrazujeme: pozice, body, rozdíl skóre, forma + rozpad
+// celkově/doma/venku. Tolerantní – chybějící část = ošetří se čistá funkce.
+const standingSplitSchema = z.object({
+  played: z.number().nullable().optional(),
+  win: z.number().nullable().optional(),
+  draw: z.number().nullable().optional(),
+  lose: z.number().nullable().optional(),
+  goals: z
+    .object({
+      for: z.number().nullable().optional(),
+      against: z.number().nullable().optional(),
+    })
+    .partial()
+    .optional(),
+});
+const standingRowSchema = z.object({
+  rank: z.number(),
+  team: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
+  points: z.number().nullable().optional(),
+  goalsDiff: z.number().nullable().optional(),
+  form: z.string().nullable().optional(),
+  all: standingSplitSchema.optional(),
+  home: standingSplitSchema.optional(),
+  away: standingSplitSchema.optional(),
+});
+export type ApiStandingRow = z.infer<typeof standingRowSchema>;
+
+// /players/topscorers vrací seřazený žebříček střelců ligy; `statistics[0]` je aktuální
+// klub + góly. Tolerantní – bereme jen jméno, klub a počet gólů.
+const topScorerSchema = z.object({
+  player: z.object({ id: z.number(), name: z.string() }),
+  statistics: z
+    .array(
+      z.object({
+        team: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
+        goals: z
+          .object({ total: z.number().nullable().optional() })
+          .partial()
+          .optional(),
+      })
+    )
+    .default([]),
+});
+export type ApiTopScorer = z.infer<typeof topScorerSchema>;
+const topScorersSchema = z.array(topScorerSchema);
+const standingsSchema = z.array(
+  z.object({
+    league: z.object({
+      // standings = pole tabulek (skupiny) po řádcích; sloučíme je při zpracování.
+      standings: z.array(z.array(standingRowSchema)).default([]),
+    }),
+  })
+);
+
 // /transfers vrací per hráče pole jeho přestupů (teams.in = kam přišel, out = odkud).
 // `type` je volný text (částka „€ 20M" / „Loan" / „Free" / „N/A" / null) – nespolehlivý.
 const transferTeamSchema = z.object({
@@ -372,6 +427,35 @@ export async function fetchOdds(fixture: number): Promise<MatchOdds | null> {
 /** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */
 export function fetchTeamInjuries(team: number, season: number) {
   return apiGet("/injuries", { team, season }, injuriesSchema);
+}
+
+/**
+ * Ligová tabulka (`/standings?league&season`). Vrací syrové řádky napříč skupinami;
+ * výběr řádku týmu + normalizaci dělá čistá funkce (`pickTeamStanding` ve `standings.ts`).
+ * Reprezentační soutěže tabulku spolehlivě nemají → voláme jen pro kluby.
+ */
+export async function fetchLeagueStandings(
+  league: number,
+  season: number
+): Promise<ApiStandingRow[]> {
+  const res = await apiGet("/standings", { league, season }, standingsSchema);
+  // Sloučí případné skupiny (běžná liga = jedna tabulka) do jednoho pole.
+  return res.flatMap((l) => l.league.standings.flat());
+}
+
+/**
+ * Žebříček střelců ligy (`/players/topscorers?league&season`). Výběr hráčů daného týmu
+ * dělá čistá funkce (`pickTeamScorers` ve `scorers.ts`). Jen klubové ligy.
+ */
+export function fetchLeagueTopScorers(
+  league: number,
+  season: number
+): Promise<ApiTopScorer[]> {
+  return apiGet(
+    "/players/topscorers",
+    { league, season },
+    topScorersSchema
+  );
 }
 
 /**

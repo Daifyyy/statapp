@@ -185,6 +185,9 @@ export interface UpcomingFixture {
   /** „Liga" pro deep-link: klub → `leagueId`, reprezentace → konfederace týmu (či null). */
   homeCompareLeagueId: number | null;
   awayCompareLeagueId: number | null;
+  /** Pozice v ligové tabulce (FREE kontext; jen kluby, doplněno server-side). */
+  homeRank?: number | null;
+  awayRank?: number | null;
 }
 
 /** Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". */
@@ -228,6 +231,41 @@ export interface Injury {
   playerId: number;
   name: string;
   reason: string;
+}
+
+/**
+ * Hráč ze špičky střelců ligy patřící k danému týmu (FREE kontext v Porovnání – „kdo
+ * z tohoto týmu střílí góly v lize"). Líně načítané mimo compareTeams; jen kluby.
+ */
+export interface Scorer {
+  playerId: number;
+  name: string;
+  goals: number;
+}
+
+/** Bilance jedné části tabulky (celkově / doma / venku). */
+export interface StandingSplit {
+  played: number;
+  win: number;
+  draw: number;
+  lose: number;
+  goalsFor: number;
+  goalsAgainst: number;
+}
+
+/**
+ * Postavení týmu v ligové tabulce (samostatná, líně načítaná statistika – FREE kontext,
+ * mimo compareTeams i predikci). Jen kluby; reprezentace tabulku nemají (→ null).
+ */
+export interface Standing {
+  rank: number;
+  points: number;
+  goalsDiff: number;
+  /** Krátká forma z tabulky, např. „WWDLW" (nejnovější vpravo) nebo `null`, když chybí. */
+  form: string | null;
+  all: StandingSplit;
+  home: StandingSplit;
+  away: StandingSplit;
 }
 
 /**
@@ -475,6 +513,9 @@ export interface MatchPick {
    */
   homeCompareLeagueId: number | null;
   awayCompareLeagueId: number | null;
+  /** Pozice v ligové tabulce (FREE kontext; jen klubové tipy, doplněno server-side). */
+  homeRank?: number | null;
+  awayRank?: number | null;
 }
 
 /**

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   getUpcomingPredictions,
   getNationalConfedMap,
+  stampPickRanks,
 } from "@/lib/data/repository";
 import { getCurrentUser } from "@/lib/authUser";
 import { getEntitlement } from "@/lib/entitlements";
@@ -55,7 +56,9 @@ export async function GET(req: Request) {
 
   try {
     const rows = await getUpcomingPredictions();
-    const picks = await enrichNationalLeagues(filterPicks(rows, parsed.data));
+    const picks = await stampPickRanks(
+      await enrichNationalLeagues(filterPicks(rows, parsed.data))
+    );
     return NextResponse.json({ picks, total: rows.length });
   } catch (e) {
     logError("api/picks", e);

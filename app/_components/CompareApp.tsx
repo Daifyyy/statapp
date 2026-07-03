@@ -7,6 +7,8 @@ import type {
   Injury,
   League,
   Metric,
+  Scorer,
+  Standing,
   Venue,
 } from "@/lib/types";
 import { METRIC_LABELS, METRIC_HINTS, LOWER_IS_BETTER } from "@/lib/types";
@@ -17,6 +19,8 @@ import { KeySignals } from "./KeySignals";
 import { FormSummary } from "./FormSummary";
 import { InsightChips } from "./InsightChips";
 import { InjuryList } from "./InjuryList";
+import { StandingContext } from "./StandingContext";
+import { ScorerList } from "./ScorerList";
 import { TeamLogo } from "./TeamLogo";
 import { TeamCombobox } from "./TeamCombobox";
 import { AppHeader } from "./AppHeader";
@@ -115,6 +119,52 @@ function useInjuries(
   return injuries;
 }
 
+/** Líně dotáhne postavení týmu v ligové tabulce (FREE kontext, mimo porovnání). */
+function useStanding(
+  teamId: number | null,
+  leagueId: number | null,
+  enabled: boolean
+): Standing | null {
+  const [standing, setStanding] = useState<Standing | null>(null);
+  useEffect(() => {
+    if (!enabled || teamId == null || leagueId == null) return;
+    let active = true;
+    fetch(`/api/standings?team=${teamId}&league=${leagueId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (active) setStanding(d.standing ?? null);
+      })
+      .catch(() => active && setStanding(null));
+    return () => {
+      active = false;
+    };
+  }, [teamId, leagueId, enabled]);
+  return standing;
+}
+
+/** Líně dotáhne nejlepší střelce týmu ze žebříčku ligy (FREE kontext, mimo porovnání). */
+function useScorers(
+  teamId: number | null,
+  leagueId: number | null,
+  enabled: boolean
+): Scorer[] {
+  const [scorers, setScorers] = useState<Scorer[]>([]);
+  useEffect(() => {
+    if (!enabled || teamId == null || leagueId == null) return;
+    let active = true;
+    fetch(`/api/scorers?team=${teamId}&league=${leagueId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (active) setScorers(d.scorers ?? []);
+      })
+      .catch(() => active && setScorers([]));
+    return () => {
+      active = false;
+    };
+  }, [teamId, leagueId, enabled]);
+  return scorers;
+}
+
 // Mimo tělo efektu → žádné synchronní setState v efektu (React 19 pravidlo).
 // `unlock` = žádost o 1× trial PRO (server případně spotřebuje trial a vrátí plný výsledek).
 async function runCompare(
@@ -185,6 +235,14 @@ export function CompareApp({
   // Zranění se tahají líně, až je výsledek na obrazovce (mimo kritickou cestu).
   const homeInjuries = useInjuries(homeId, homeLeagueId, result != null);
   const awayInjuries = useInjuries(awayId, awayLeagueId, result != null);
+
+  // Ligová tabulka (FREE kontext) – líně, až je výsledek na obrazovce.
+  const homeStanding = useStanding(homeId, homeLeagueId, result != null);
+  const awayStanding = useStanding(awayId, awayLeagueId, result != null);
+
+  // Nejlepší střelci ligy (FREE kontext) – líně, jako tabulka.
+  const homeScorers = useScorers(homeId, homeLeagueId, result != null);
+  const awayScorers = useScorers(awayId, awayLeagueId, result != null);
 
   const modeLeagues = useMemo(
     () =>
@@ -470,6 +528,10 @@ export function CompareApp({
         onRetry={refreshCurrent}
         homeInjuries={homeInjuries}
         awayInjuries={awayInjuries}
+        homeStanding={homeStanding}
+        awayStanding={awayStanding}
+        homeScorers={homeScorers}
+        awayScorers={awayScorers}
         user={user}
         trialAvailable={trialAvailable}
         unlocking={unlocking}
@@ -489,6 +551,10 @@ function ResultPanel({
   onRetry,
   homeInjuries,
   awayInjuries,
+  homeStanding,
+  awayStanding,
+  homeScorers,
+  awayScorers,
   user,
   trialAvailable,
   unlocking,
@@ -502,6 +568,10 @@ function ResultPanel({
   onRetry: () => void;
   homeInjuries: Injury[];
   awayInjuries: Injury[];
+  homeStanding: Standing | null;
+  awayStanding: Standing | null;
+  homeScorers: Scorer[];
+  awayScorers: Scorer[];
   user: SessionUser | null;
   trialAvailable: boolean;
   unlocking: boolean;
@@ -584,6 +654,27 @@ function ResultPanel({
       )}
 
       <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
+
+      <StandingContext home={homeStanding} away={awayStanding} venue={venue} />
+
+      {(homeScorers.length > 0 || awayScorers.length > 0) && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {homeScorers.length > 0 && (
+            <ScorerList
+              title={result.home.team.name}
+              accent="home"
+              scorers={homeScorers}
+            />
+          )}
+          {awayScorers.length > 0 && (
+            <ScorerList
+              title={result.away.team.name}
+              accent="away"
+              scorers={awayScorers}
+            />
+          )}
+        </div>
+      )}
 
       <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
         <div className="mb-4 flex items-center justify-between gap-2">

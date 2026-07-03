@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { MatchPick } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
+import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
 
 /**
@@ -31,9 +32,11 @@ export function PickRow({ pick }: { pick: MatchPick }) {
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
           <TeamLogo src={pick.home.logoUrl} alt={pick.home.name} size={20} />
           <span className="min-w-0 truncate font-medium text-home">{pick.home.name}</span>
+          <RankBadge rank={pick.homeRank} />
           <span className="shrink-0 text-muted">–</span>
           <TeamLogo src={pick.away.logoUrl} alt={pick.away.name} size={20} />
           <span className="min-w-0 truncate font-medium text-away">{pick.away.name}</span>
+          <RankBadge rank={pick.awayRank} />
         </div>
         <span className="shrink-0 text-sm font-bold tabular-nums text-foreground">
           {Math.round(pick.prob * 100)} %
