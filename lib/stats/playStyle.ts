@@ -23,8 +23,10 @@ const possessionScore: ScoreFn = (values, venue) => {
 // Kombinační hra = střely z vápna / (vápno + mimo) → 10 = vše z vápna
 const buildupScore: ScoreFn = (values, venue) => {
   const inside = valueOrTotal(values, "SHOTS_INSIDE_BOX", venue);
-  const outside = valueOrTotal(values, "SHOTS_OUTSIDE_BOX", venue);
-  if (inside === null || outside === null) return null;
+  if (inside === null) return null;
+  // SHOTS_OUTSIDE_BOX občas chybí v API při dostupném SHOTS_INSIDE_BOX — fallback na 0
+  // (= tým střílí výhradně z vápna → maximální kombinační skóre)
+  const outside = valueOrTotal(values, "SHOTS_OUTSIDE_BOX", venue) ?? 0;
   const total = inside + outside;
   return total > 0 ? (inside / total) * 10 : null;
 };

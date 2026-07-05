@@ -535,6 +535,7 @@ export function CompareApp({
       )}
 
       <ResultPanel
+        key={`${homeId ?? 0}-${awayId ?? 0}`}
         result={result}
         venue={venue}
         loading={loading}
@@ -597,6 +598,24 @@ function ResultPanel({
   unlocking: boolean;
   onUnlockTrial: () => void;
 }) {
+  const [viewMode, setViewMode] = useState<ViewMode>("raw");
+  const entityMode: EntityType =
+    result?.source === "NATIONAL" || result?.source === "NATIONAL_FB" ? "NATIONAL" : "CLUB";
+  const categoryScores = useMemo(
+    () =>
+      result
+        ? computeCategoryScores(result.home.values, result.away.values, venue, entityMode)
+        : [],
+    [result, venue, entityMode]
+  );
+  const styleDimensions = useMemo(
+    () =>
+      result
+        ? computePlayStyle(result.home.values, result.away.values, venue, entityMode)
+        : [],
+    [result, venue, entityMode]
+  );
+
   if (error) {
     return (
       <Empty>
@@ -621,8 +640,6 @@ function ResultPanel({
   }
   if (!result) return null;
 
-  const [viewMode, setViewMode] = useState<ViewMode>("raw");
-
   const valueFor = (teamSide: "home" | "away", metric: Metric) =>
     result[teamSide].values.find(
       (v) => v.metric === metric && v.venue === venue
@@ -630,19 +647,6 @@ function ResultPanel({
 
   const summaryFor = (teamSide: "home" | "away") =>
     result[teamSide].summary.find((s) => s.venue === venue) ?? null;
-
-  const entityMode: EntityType =
-    result.source === "NATIONAL" || result.source === "NATIONAL_FB" ? "NATIONAL" : "CLUB";
-
-  const categoryScores = useMemo(
-    () => computeCategoryScores(result.home.values, result.away.values, venue, entityMode),
-    [result, venue, entityMode]
-  );
-
-  const styleDimensions = useMemo(
-    () => computePlayStyle(result.home.values, result.away.values, venue, entityMode),
-    [result, venue, entityMode]
-  );
 
   return (
     <div

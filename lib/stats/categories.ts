@@ -29,7 +29,8 @@ const CATEGORY_DEFS: CategoryDef[] = [
     label: "Obrana",
     metrics: [
       { metric: "GOALS_AGAINST", weight: 3 },
-      { metric: "SAVES", weight: 2 },
+      // SAVES záměrně vynecháno: zákroky měří vytížení brankáře, ne defenzivní kvalitu.
+      // Tým s 22 zákroky (3 góly) by skóroval výše než tým s 4 zákroky (1 gól), což je paradox.
     ],
   },
   {

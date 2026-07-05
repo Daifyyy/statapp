@@ -319,7 +319,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   čistá funkce `computeCategoryScores(homeValues, awayValues, venue, mode)` → 5 `CategoryScore` objektů
   (Útok / Obrana / Hra s míčem / Tvorba šancí / Disciplína), každý 0–10 pro oba týmy.
   Normalizace je **relativní** (ne absolutní): `ratio = home / (home + away)` → `score = ratio × 10`.
-  Metriky s `LOWER_IS_BETTER` invertovány. Oba null → metrika se přeskočí; jen jeden null → oba 5 (neutrální).
+  Metriky s `LOWER_IS_BETTER` invertovány. Jeden nebo oba null → metrika se přeskočí (nezkresluje váhy).
   `available: false` pro národní týmy kde chybí klíčové metriky (`METRICS_BY_ENTITY`).
 - **Styl hry** (`lib/stats/playStyle.ts`, `app/_components/PlayStyleChart.tsx`):
   čistá funkce `computePlayStyle(homeValues, awayValues, venue, mode)` → 4 `PlayStyleDimension` (Kontrola

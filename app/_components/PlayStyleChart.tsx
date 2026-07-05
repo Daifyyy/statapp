@@ -53,9 +53,11 @@ export function PlayStyleChart({
         ))}
       </div>
 
-      {hasUnavailable && mode === "NATIONAL" && (
+      {hasUnavailable && (
         <p className="mt-3 text-[10px] text-muted">
-          * Omezená data pro reprezentace (POSSESSION, střely z vápna).
+          {mode === "NATIONAL"
+            ? "* Omezená data pro reprezentace (POSSESSION, střely z vápna)."
+            : "* Data pro tuto dimenzi nejsou k dispozici."}
         </p>
       )}
     </section>
