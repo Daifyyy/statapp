@@ -1,4 +1,4 @@
-import type { Standing, StandingSplit } from "@/lib/types";
+import type { LeagueGoalsAvg, Standing, StandingSplit } from "@/lib/types";
 import type { ApiStandingRow } from "./apiFootball";
 
 /**
@@ -21,6 +21,16 @@ export function pickTeamStanding(
     all: split(row.all),
     home: split(row.home),
     away: split(row.away),
+  };
+}
+
+/** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */
+export function computeLeagueGoalsAvg(standings: ApiStandingRow[]): LeagueGoalsAvg | null {
+  const totalPlayed = standings.reduce((s, r) => s + (r.all?.played ?? 0), 0);
+  if (!totalPlayed) return null;
+  return {
+    goalsFor: standings.reduce((s, r) => s + (r.all?.goals?.for ?? 0), 0) / totalPlayed,
+    goalsAgainst: standings.reduce((s, r) => s + (r.all?.goals?.against ?? 0), 0) / totalPlayed,
   };
 }
 

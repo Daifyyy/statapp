@@ -2,6 +2,7 @@ import type {
   FixtureDay,
   Injury,
   League,
+  LeagueGoalsAvg,
   MatchStat,
   Metric,
   Scorer,
@@ -31,7 +32,7 @@ import {
   type MatchContext,
 } from "./cache";
 import { selectCurrentInjuries } from "./injuries";
-import { pickTeamStanding } from "./standings";
+import { computeLeagueGoalsAvg, pickTeamStanding } from "./standings";
 import { pickTeamScorers } from "./scorers";
 import {
   CLUB_LEAGUES,
@@ -201,12 +202,16 @@ export async function getTeamInjuries(
 export async function getLeagueStanding(
   teamId: number,
   leagueId: number
-): Promise<Standing | null> {
-  if (isNationalLeague(leagueId)) return null;
+): Promise<{ standing: Standing | null; leagueAvg: LeagueGoalsAvg | null }> {
+  if (isNationalLeague(leagueId)) return { standing: null, leagueAvg: null };
   try {
-    return pickTeamStanding(await cachedLeagueStandings(leagueId), teamId);
+    const raw = await cachedLeagueStandings(leagueId);
+    return {
+      standing: pickTeamStanding(raw, teamId),
+      leagueAvg: computeLeagueGoalsAvg(raw),
+    };
   } catch {
-    return null;
+    return { standing: null, leagueAvg: null };
   }
 }
 

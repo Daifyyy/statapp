@@ -6,6 +6,7 @@ import type {
   EntityType,
   Injury,
   League,
+  LeagueGoalsAvg,
   Metric,
   Scorer,
   Standing,
@@ -21,7 +22,12 @@ import { InsightChips } from "./InsightChips";
 import { InjuryList } from "./InjuryList";
 import { StandingContext } from "./StandingContext";
 import { ScorerList } from "./ScorerList";
+import { CategoryScores } from "./CategoryScores";
+import { PlayStyleChart } from "./PlayStyleChart";
+import { computeCategoryScores } from "@/lib/stats/categories";
+import { computePlayStyle } from "@/lib/stats/playStyle";
 import { TeamLogo } from "./TeamLogo";
+import { TeamHeading } from "./TeamHeading";
 import { TeamCombobox } from "./TeamCombobox";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -119,27 +125,36 @@ function useInjuries(
   return injuries;
 }
 
-/** Líně dotáhne postavení týmu v ligové tabulce (FREE kontext, mimo porovnání). */
+/** Líně dotáhne postavení týmu v ligové tabulce a ligový průměr gólů (FREE kontext). */
 function useStanding(
   teamId: number | null,
   leagueId: number | null,
   enabled: boolean
-): Standing | null {
+): { standing: Standing | null; leagueAvg: LeagueGoalsAvg | null } {
   const [standing, setStanding] = useState<Standing | null>(null);
+  const [leagueAvg, setLeagueAvg] = useState<LeagueGoalsAvg | null>(null);
   useEffect(() => {
     if (!enabled || teamId == null || leagueId == null) return;
     let active = true;
     fetch(`/api/standings?team=${teamId}&league=${leagueId}`)
       .then((r) => r.json())
       .then((d) => {
-        if (active) setStanding(d.standing ?? null);
+        if (active) {
+          setStanding(d.standing ?? null);
+          setLeagueAvg(d.leagueAvg ?? null);
+        }
       })
-      .catch(() => active && setStanding(null));
+      .catch(() => {
+        if (active) {
+          setStanding(null);
+          setLeagueAvg(null);
+        }
+      });
     return () => {
       active = false;
     };
   }, [teamId, leagueId, enabled]);
-  return standing;
+  return { standing, leagueAvg };
 }
 
 /** Líně dotáhne nejlepší střelce týmu ze žebříčku ligy (FREE kontext, mimo porovnání). */
@@ -237,8 +252,8 @@ export function CompareApp({
   const awayInjuries = useInjuries(awayId, awayLeagueId, result != null);
 
   // Ligová tabulka (FREE kontext) – líně, až je výsledek na obrazovce.
-  const homeStanding = useStanding(homeId, homeLeagueId, result != null);
-  const awayStanding = useStanding(awayId, awayLeagueId, result != null);
+  const { standing: homeStanding, leagueAvg: homeLeagueAvg } = useStanding(homeId, homeLeagueId, result != null);
+  const { standing: awayStanding } = useStanding(awayId, awayLeagueId, result != null);
 
   // Nejlepší střelci ligy (FREE kontext) – líně, jako tabulka.
   const homeScorers = useScorers(homeId, homeLeagueId, result != null);
@@ -532,6 +547,7 @@ export function CompareApp({
         awayStanding={awayStanding}
         homeScorers={homeScorers}
         awayScorers={awayScorers}
+        homeLeagueAvg={homeLeagueAvg}
         user={user}
         trialAvailable={trialAvailable}
         unlocking={unlocking}
@@ -541,6 +557,8 @@ export function CompareApp({
   );
 }
 
+
+type ViewMode = "raw" | "category" | "style";
 
 function ResultPanel({
   result,
@@ -555,6 +573,7 @@ function ResultPanel({
   awayStanding,
   homeScorers,
   awayScorers,
+  homeLeagueAvg,
   user,
   trialAvailable,
   unlocking,
@@ -572,6 +591,7 @@ function ResultPanel({
   awayStanding: Standing | null;
   homeScorers: Scorer[];
   awayScorers: Scorer[];
+  homeLeagueAvg: LeagueGoalsAvg | null;
   user: SessionUser | null;
   trialAvailable: boolean;
   unlocking: boolean;
@@ -601,6 +621,8 @@ function ResultPanel({
   }
   if (!result) return null;
 
+  const [viewMode, setViewMode] = useState<ViewMode>("raw");
+
   const valueFor = (teamSide: "home" | "away", metric: Metric) =>
     result[teamSide].values.find(
       (v) => v.metric === metric && v.venue === venue
@@ -608,6 +630,19 @@ function ResultPanel({
 
   const summaryFor = (teamSide: "home" | "away") =>
     result[teamSide].summary.find((s) => s.venue === venue) ?? null;
+
+  const entityMode: EntityType =
+    result.source === "NATIONAL" || result.source === "NATIONAL_FB" ? "NATIONAL" : "CLUB";
+
+  const categoryScores = useMemo(
+    () => computeCategoryScores(result.home.values, result.away.values, venue, entityMode),
+    [result, venue, entityMode]
+  );
+
+  const styleDimensions = useMemo(
+    () => computePlayStyle(result.home.values, result.away.values, venue, entityMode),
+    [result, venue, entityMode]
+  );
 
   return (
     <div
@@ -676,37 +711,73 @@ function ResultPanel({
         </div>
       )}
 
-      <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <TeamHeading
-            name={result.home.team.name}
-            logo={result.home.team.logoUrl}
-            accent="home"
-          />
-          <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-            {VENUE_LABELS[venue]}
-          </span>
-          <TeamHeading
-            name={result.away.team.name}
-            logo={result.away.team.logoUrl}
-            accent="away"
-            alignRight
-          />
-        </div>
+      <div>
+        <Segmented
+          options={[
+            { value: "raw" as ViewMode, label: "Raw statistiky" },
+            { value: "category" as ViewMode, label: "Kategorie" },
+            { value: "style" as ViewMode, label: "Styl hry" },
+          ]}
+          value={viewMode}
+          onChange={setViewMode}
+          ariaLabel="Pohled na statistiky"
+        />
+      </div>
 
-        <div className="divide-y divide-border">
-          {result.metrics.map((metric) => (
-            <MetricRow
-              key={metric}
-              label={METRIC_LABELS[metric]}
-              hint={METRIC_HINTS[metric]}
-              home={valueFor("home", metric)}
-              away={valueFor("away", metric)}
-              lowerIsBetter={LOWER_IS_BETTER.has(metric)}
+      {viewMode === "raw" && (
+        <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <TeamHeading
+              name={result.home.team.name}
+              logo={result.home.team.logoUrl}
+              accent="home"
             />
-          ))}
-        </div>
-      </section>
+            <span className="shrink-0 rounded-full bg-background px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+              {VENUE_LABELS[venue]}
+            </span>
+            <TeamHeading
+              name={result.away.team.name}
+              logo={result.away.team.logoUrl}
+              accent="away"
+              alignRight
+            />
+          </div>
+          <div className="divide-y divide-border">
+            {result.metrics.map((metric) => (
+              <MetricRow
+                key={metric}
+                label={METRIC_LABELS[metric]}
+                hint={METRIC_HINTS[metric]}
+                home={valueFor("home", metric)}
+                away={valueFor("away", metric)}
+                lowerIsBetter={LOWER_IS_BETTER.has(metric)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {viewMode === "category" && (
+        <CategoryScores
+          scores={categoryScores}
+          homeName={result.home.team.name}
+          awayName={result.away.team.name}
+          homeLogo={result.home.team.logoUrl}
+          awayLogo={result.away.team.logoUrl}
+          leagueAvg={homeLeagueAvg}
+        />
+      )}
+
+      {viewMode === "style" && (
+        <PlayStyleChart
+          dimensions={styleDimensions}
+          homeName={result.home.team.name}
+          awayName={result.away.team.name}
+          homeLogo={result.home.team.logoUrl}
+          awayLogo={result.away.team.logoUrl}
+          mode={entityMode}
+        />
+      )}
 
       {!result.locked && result.insightReport && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -804,39 +875,6 @@ function TeamSelect({
           </p>
         )}
       </div>
-    </div>
-  );
-}
-
-function TeamHeading({
-  name,
-  logo,
-  accent,
-  alignRight,
-}: {
-  name: string;
-  logo: string;
-  accent: "home" | "away";
-  alignRight?: boolean;
-}) {
-  const color = accent === "home" ? "text-home" : "text-away";
-  return (
-    <div
-      className={`flex min-w-0 flex-1 items-center gap-2 sm:flex-col sm:gap-1.5 ${
-        alignRight ? "flex-row-reverse text-right sm:text-center" : "sm:text-center"
-      }`}
-    >
-      <span className="shrink-0">
-        <span className="sm:hidden">
-          <TeamLogo src={logo} alt={name} size={32} />
-        </span>
-        <span className="hidden sm:inline">
-          <TeamLogo src={logo} alt={name} size={48} />
-        </span>
-      </span>
-      <span className={`truncate text-sm font-semibold sm:text-base ${color}`}>
-        {name}
-      </span>
     </div>
   );
 }

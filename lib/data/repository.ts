@@ -3,6 +3,7 @@ import type {
   FixtureDay,
   Injury,
   League,
+  LeagueGoalsAvg,
   MatchPick,
   PredictionRow,
   Scorer,
@@ -213,9 +214,13 @@ export async function getTransferBalances(
 export async function getStanding(
   teamId: number,
   leagueId: number
-): Promise<Standing | null> {
+): Promise<{ standing: Standing | null; leagueAvg: LeagueGoalsAvg | null }> {
   if (useReal) return real.getLeagueStanding(teamId, leagueId);
-  return mockStanding(teamId);
+  return { standing: mockStanding(teamId), leagueAvg: mockLeagueGoalsAvg() };
+}
+
+function mockLeagueGoalsAvg(): LeagueGoalsAvg {
+  return { goalsFor: 1.35, goalsAgainst: 1.35 };
 }
 
 function mockStanding(teamId: number): Standing | null {

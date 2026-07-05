@@ -542,6 +542,37 @@ export interface SettledMatch {
   awayCompareLeagueId: number | null;
 }
 
+export type CategoryKey =
+  | "attack"
+  | "defense"
+  | "ball_control"
+  | "chance_creation"
+  | "discipline";
+
+export interface CategoryScore {
+  key: CategoryKey;
+  label: string;
+  homeScore: number;
+  awayScore: number;
+  lowConfidence: boolean;
+  available: boolean;
+}
+
+export interface PlayStyleDimension {
+  key: "possession" | "buildup" | "pressing" | "efficiency";
+  label: string;
+  leftLabel: string;
+  rightLabel: string;
+  homeScore: number;
+  awayScore: number;
+  available: boolean;
+}
+
+export interface LeagueGoalsAvg {
+  goalsFor: number;
+  goalsAgainst: number;
+}
+
 export interface CompareResult {
   source: DataSource;
   /** Lidsky čitelné upozornění k zdroji dat (badge), pokud je relevantní. */

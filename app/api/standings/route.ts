@@ -18,9 +18,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Chybí tým nebo liga" }, { status: 400 });
   }
   try {
-    const standing = await getStanding(teamId, leagueId);
-    return NextResponse.json({ standing });
+    const { standing, leagueAvg } = await getStanding(teamId, leagueId);
+    return NextResponse.json({ standing, leagueAvg });
   } catch {
-    return NextResponse.json({ standing: null });
+    return NextResponse.json({ standing: null, leagueAvg: null });
   }
 }

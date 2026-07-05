@@ -311,6 +311,35 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `BenchmarkPanel` se vykreslí i v mocku.
 - Vědomá výjimka ze scope „jen statistiky" (nové tabulky/modul). H2H se NEdělá.
 
+## Záložka Porovnání — kategorie, styl hry, ligový benchmark (FREE)
+- **Přepínač pohledu** (`viewMode` state v `CompareApp.tsx`): 3 režimy — **Raw statistiky** (původní
+  19 metrických řádků) / **Kategorie** / **Styl hry**. Přepínač `Segmented` nad metrikami,
+  stav lokální per výsledek (reset při novém porovnání). **FREE**, žádné gating.
+- **Kategoriové skóre** (`lib/stats/categories.ts`, `app/_components/CategoryScores.tsx`):
+  čistá funkce `computeCategoryScores(homeValues, awayValues, venue, mode)` → 5 `CategoryScore` objektů
+  (Útok / Obrana / Hra s míčem / Tvorba šancí / Disciplína), každý 0–10 pro oba týmy.
+  Normalizace je **relativní** (ne absolutní): `ratio = home / (home + away)` → `score = ratio × 10`.
+  Metriky s `LOWER_IS_BETTER` invertovány. Oba null → metrika se přeskočí; jen jeden null → oba 5 (neutrální).
+  `available: false` pro národní týmy kde chybí klíčové metriky (`METRICS_BY_ENTITY`).
+- **Styl hry** (`lib/stats/playStyle.ts`, `app/_components/PlayStyleChart.tsx`):
+  čistá funkce `computePlayStyle(homeValues, awayValues, venue, mode)` → 4 `PlayStyleDimension` (Kontrola
+  míče / Styl útoku / Pressing / Efektivita střel). Škálování je **absolutní** (fixní rozsahy), ne
+  relativní vůči soupeři → říká „tenhle tým hraje kombinačně" nezávisle na soupeři.
+  Formule: Kontrola míče = `clamp((POSSESSION−30)/40, 0,1)×10`; Styl útoku = `SHOTS_INSIDE/(inside+outside)×10`;
+  Pressing = `clamp((FOULS−8)/12, 0,1)×10`; Efektivita = `SHOTS_ON_TARGET/SHOTS×10`.
+  Dimenze Kontrola míče + Styl útoku: `available: false` pro národní týmy (chybí POSSESSION/SHOTS_INSIDE_BOX).
+- **Ligový benchmark** (`lib/data/standings.ts`, `computeLeagueGoalsAvg`): průměrné góly
+  vstřelené/obdržené **na tým za zápas** z celé ligy (z již cachovaného `ApiStandingRow[]`).
+  Denominátor = `∑ played` (součet zápasů všech týmů) = správná měřítko pro porovnání s
+  metrikou jednoho týmu (goals-per-team-game, ne per-unique-match). Zobrazeno jako text
+  `⌀ liga X.XX gólů/zápas` pod kategoriemi Útok/Obrana. **0 nových API volání** — reuse
+  `cachedLeagueStandings()`. `getStanding`/`getLeagueStanding` vrací `{ standing, leagueAvg }`.
+  Benchmark z **domácí ligy** (cross-ligová porovnání: referenční bod je domácí prostředí).
+- **Sdílená komponenta** `app/_components/TeamHeading.tsx`: extrahovaný `TeamHeading`
+  (logo + jméno, mobilní/desktopová velikost), importovaný z `CategoryScores`, `PlayStyleChart`
+  i `CompareApp` — žádné duplicity.
+- **Nové typy** (`lib/types.ts`): `CategoryKey`, `CategoryScore`, `PlayStyleDimension`, `LeagueGoalsAvg`.
+
 ## Záložka Přestupy (category-first, zdroj = API-Football)
 - **Princip:** přestupy top-5 lig se stahují **dávkově na pozadí** do tabulky `Transfer`;
   záložka `/transfers` i bilance **jen ČTOU z DB**. Zdroj je **API-Football** (`/transfers`) –
