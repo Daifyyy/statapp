@@ -88,28 +88,21 @@ export function computeCategoryScores(
       const hv = valueOrTotal(homeValues, metric, venue);
       const av = valueOrTotal(awayValues, metric, venue);
 
-      if (hv === null && av === null) continue;
+      if (hv === null || av === null) continue;
       dataCount++;
 
       const lowerBetter = LOWER_IS_BETTER.has(metric);
+      const sum = hv + av;
       let hs: number;
       let as_: number;
 
-      if (hv !== null && av !== null) {
-        const sum = hv + av;
-        if (sum === 0) {
-          hs = 5;
-          as_ = 5;
-        } else {
-          // "vyšší je lepší" → víc gólů = vyšší skóre; lowerIsBetter = prohodíme
-          const homeShare = lowerBetter ? av / sum : hv / sum;
-          hs = homeShare * 10;
-          as_ = (1 - homeShare) * 10;
-        }
-      } else {
-        // Jeden tým nemá data → neutrální
+      if (sum === 0) {
         hs = 5;
         as_ = 5;
+      } else {
+        const homeShare = lowerBetter ? av / sum : hv / sum;
+        hs = homeShare * 10;
+        as_ = (1 - homeShare) * 10;
       }
 
       weightedHome += hs * weight;

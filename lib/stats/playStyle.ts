@@ -115,7 +115,7 @@ export function computePlayStyle(
 
     const hs = dim.score(homeValues, venue);
     const as_ = dim.score(awayValues, venue);
-    const available = hs !== null || as_ !== null;
+    const available = hs !== null && as_ !== null;
 
     return {
       key: dim.key,
