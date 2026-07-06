@@ -417,20 +417,31 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Kariéra + role:** UI ukazuje **profil trenéra** + „RoleNote" (koho vedeš, prestiž, očekávání, dosah
   reputace, **sezónní cíl**). Konec sezóny → hodnocení (`seasonHeadline`/`seasonTone`) + změna reputace
   (vč. bonusu za splněný cíl); pak **Pokračovat s klubem** (drift) nebo **Změnit tým** = job market
-  (`isHireable`). **Start kariéry** je gated: nový profil má `STARTING_REPUTATION` (~30) → první výběr
-  klubu jde jen po `isHireable` (ne rovnou top klub). „Nová kariéra" = plný reset.
+  (`isHireable`). **Start kariéry** je gated: nová kariéra startuje na `STARTING_REPUTATION` (~30) →
+  první výběr klubu jde jen po `isHireable` (ne rovnou top klub).
+- **Trvalý manažerský profil (síň slávy)** (`lib/game/profile.ts` + `lib/game/achievements.ts`,
+  čisté + testy): profil (`ManagerProfile{allTime:AllTimeRecords, achievements}`) **přežívá „Novou
+  kariéru"** (meta-progrese) — reset ukončí jen aktuální běh (`current:null`, `history:[]`, reputace),
+  profil zůstane. `foldSeason` inkrementálně skládá trvalé rekordy (tituly, nejlepší umístění, max
+  bodů/gólů, nejvyšší reputace, lig trénováno, neporažené sezóny) po každé dohrané sezóně
+  (`finishAndAdvance`). **Achievementy** (~16, `ACHIEVEMENTS` + `evaluateAchievements`/`newlyEarned`,
+  bronze/silver/gold) se vyhodnocují na konci sezóny nad `allTime`+poslední sezónou+reputací a ukládají
+  trvale. Reputace zůstává **per-kariéra** (žádné lifetime skóre).
 - **Perzistence = profil (DB), přihlášení povinné.** Tabulka `GameSave` (`userId @id`, `state Json`).
-  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `plan`/`morale`/… + size cap
-  512 KB + rate-limit; ukládá **původní** objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/
-  league?id=`. `SaveState` = `{version, manager:{reputation}, current:SeasonState, history[]}`;
-  `SAVE_VERSION` bump = zahodit nekompatibilní save (aktuálně **4**).
-- **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; bez save → gated výběr ligy→klubu;
-  jinak sezóna (predikce + **scouting karta** + **ukazatel morálky** + analýza + **výběr plánu** +
-  **event karta** s volbou, popup výsledku `MatchResultToast` po kole, tabulka, forma, cíl) a **Kariéra**.
-  Ligová tabulka **zvýrazňuje pohárové/sestupové zóny** (barevný levý okraj + legenda, přes
-  `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL=positive, sestup=negative). Historie kariéry
-  ukazuje u každé sezóny **reputační zisk/ztrátu** (`reputationDeltas` = přehrání od `STARTING_REPUTATION`).
-  Reálná loga přes `TeamLogo`. Stránka `app/hra/`, nav 🎮, `/hra` v sitemap.
+  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `profile`/`plan`/`morale`/… +
+  `current` nullable + size cap 512 KB + rate-limit; ukládá **původní** objekt)/`DELETE`.
+  `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version, profile:ManagerProfile,
+  manager:{reputation}, current:SeasonState|null, history[]}`; `SAVE_VERSION` bump = zahodit
+  nekompatibilní save (aktuálně **5**). „Nová kariéra" už nemaže profil (jen `current:null`).
+- **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; **bez aktivní kariéry → `ManagerHub`**
+  (profil + „Začni kariéru" → gated výběr ligy→klubu); s kariérou → sezóna (predikce + **scouting** +
+  **morálka** + analýza + **plán** + **event karta**, popup `MatchResultToast`, tabulka, forma, cíl) +
+  taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab): hlavička + kariérní rekordy +
+  **klub vs reprezentace** (reprezentace = placeholder „🔜 připravujeme", Phase 4) + `AchievementsGrid`
+  (odemčené barevně dle tier, zamčené šedé). `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno").
+  Ligová tabulka **zvýrazňuje pohárové/sestupové zóny** (barevný okraj + legenda, přes `evaluateSeason`/
+  `EUROPE_LABEL`: LM=home, EL=away, KL=positive, sestup=negative). Historie kariéry ukazuje u sezóny
+  **reputační zisk/ztrátu** (`reputationDeltas`). Reálná loga přes `TeamLogo`. `app/hra/`, nav 🎮, sitemap.
 - **Možná rozšíření (TODO):** Phase 3 (refaktor SaveState + klubový pohár/Liga mistrů) a Phase 4
   (reprezentační pohár Euro/MS) z roadmapy; dále rozpočet.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.

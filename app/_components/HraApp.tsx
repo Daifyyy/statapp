@@ -35,16 +35,24 @@ import { PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
 import { getEvent, applyEventChoice } from "@/lib/game/events";
 import { teamSeasonStats } from "@/lib/game/analysis";
 import type { ScoutReport } from "@/lib/game/scouting";
+import { emptyProfile, startCareer, foldSeason } from "@/lib/game/profile";
+import { ACHIEVEMENTS, newlyEarned } from "@/lib/game/achievements";
+import type { AchievementTier } from "@/lib/game/achievements";
 import { SAVE_VERSION } from "@/lib/game/types";
 import { STARTING_REPUTATION } from "@/lib/game/balance";
+import { leagueName as leagueNameFor } from "@/lib/game/leagues";
 import type {
+  EarnedAchievement,
   GameTeam,
   LeagueInfo,
+  ManagerProfile,
   Plan,
   SaveState,
   SeasonState,
   SeasonSummary,
 } from "@/lib/game/types";
+
+type GameView = "season" | "history" | "profile";
 
 const NAV = [
   { href: "/", label: "Zápasy", emoji: "📅" },
@@ -82,7 +90,7 @@ function repTier(r: number): string {
 export function HraApp({ user }: { user: SessionUser | null }) {
   const [loading, setLoading] = useState(Boolean(user));
   const [save, setSave] = useState<SaveState | null>(null);
-  const [view, setView] = useState<"season" | "history">("season");
+  const [view, setView] = useState<GameView>("season");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
@@ -110,30 +118,32 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     };
   }, [user]);
 
-  const persist = useCallback((next: SaveState) => {
-    setSave(next);
-    saveEndpoint(next);
-  }, []);
-
   const startGame = useCallback(
     (leagueId: number, leagueName: string, teams: GameTeam[], teamId: number) => {
       const seed = randomSeed();
       const current = newSeason(seed, teamId, { teams, leagueId, leagueName });
-      // Nový profil startuje na pevné reputaci → výběr klubu je gated (ne rovnou top klub).
-      persist({
-        version: SAVE_VERSION,
-        manager: { reputation: STARTING_REPUTATION },
-        current,
-        history: [],
+      setSave((prev) => {
+        // Trvalý profil se zachová napříč kariérami; nová kariéra jen navýší počítadlo.
+        const profile = startCareer(prev?.profile ?? emptyProfile());
+        const next: SaveState = {
+          version: SAVE_VERSION,
+          profile,
+          // Nová kariéra startuje na pevné reputaci → výběr klubu je gated (ne top klub).
+          manager: { reputation: STARTING_REPUTATION },
+          current,
+          history: [],
+        };
+        saveEndpoint(next);
+        return next;
       });
       setView("season");
     },
-    [persist]
+    []
   );
 
   const mutateSeason = useCallback((fn: (s: SeasonState) => SeasonState) => {
     setSave((prev) => {
-      if (!prev) return prev;
+      if (!prev || !prev.current) return prev;
       const next = { ...prev, current: fn(prev.current) };
       saveEndpoint(next);
       return next;
@@ -143,7 +153,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   const onPlayRound = useCallback(() => {
     setBusy(true);
     setSave((prev) => {
-      if (!prev || isSeasonOver(prev.current)) return prev;
+      if (!prev || !prev.current || isSeasonOver(prev.current)) return prev;
       const after = playRound(prev.current);
       const next = { ...prev, current: after };
       saveEndpoint(next);
@@ -181,17 +191,32 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     [mutateSeason]
   );
 
-  // Uzavře sezónu (souhrn + reputace), pak sestaví další (pokračovat / změnit tým).
+  // Uzavře sezónu (souhrn + reputace + fold do trvalého profilu + achievementy),
+  // pak sestaví další (pokračovat / změnit tým).
   const finishAndAdvance = useCallback(
-    (buildNext: (prev: SaveState) => SeasonState) => {
+    (buildNext: (prev: SaveState, current: SeasonState) => SeasonState) => {
       setSave((prev) => {
-        if (!prev) return prev;
+        if (!prev || !prev.current) return prev;
         const summary = summarizeSeason(prev.current);
         const reputation = updateReputation(prev.manager.reputation, summary);
+        const folded = foldSeason(prev.profile, summary, reputation);
+        const earned = newlyEarned(
+          prev.profile.achievements.map((a) => a.id),
+          { allTime: folded.allTime, last: summary, reputation }
+        );
+        const nowIso = new Date().toISOString();
+        const profile: ManagerProfile = {
+          ...folded,
+          achievements: [
+            ...folded.achievements,
+            ...earned.map((a) => ({ id: a.id, season: summary.season, date: nowIso })),
+          ],
+        };
         const next: SaveState = {
           ...prev,
+          profile,
           manager: { reputation },
-          current: buildNext(prev),
+          current: buildNext(prev, prev.current),
           history: [...prev.history, summary],
         };
         saveEndpoint(next);
@@ -203,28 +228,41 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   );
 
   const onContinue = useCallback(
-    () => finishAndAdvance((prev) => startNextSeason(prev.current)),
+    () => finishAndAdvance((_prev, current) => startNextSeason(current)),
     [finishAndAdvance]
   );
 
   const onSwitch = useCallback(
     (leagueId: number, leagueName: string, teams: GameTeam[], teamId: number) =>
-      finishAndAdvance((prev) =>
+      finishAndAdvance((_prev, current) =>
         newSeason(randomSeed(), teamId, {
           teams,
           leagueId,
           leagueName,
-          season: prev.current.season + 1,
+          season: current.season + 1,
         })
       ),
     [finishAndAdvance]
   );
 
   const onReset = useCallback(() => {
-    if (!confirm("Opravdu začít znovu? Aktuální hra i historie kariéry se smažou."))
+    if (
+      !confirm(
+        "Ukončit aktuální kariéru? Rozehraná sezóna a její historie se smažou, ale síň slávy (rekordy + achievementy) zůstane."
+      )
+    )
       return;
-    fetch("/api/game", { method: "DELETE" }).catch(() => {});
-    setSave(null);
+    setSave((prev) => {
+      if (!prev) return prev;
+      const next: SaveState = {
+        ...prev,
+        manager: { reputation: STARTING_REPUTATION },
+        current: null,
+        history: [],
+      };
+      saveEndpoint(next);
+      return next;
+    });
     setView("season");
   }, []);
 
@@ -247,8 +285,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         <SignInGate />
       ) : loading ? (
         <LoadingRows />
-      ) : !save ? (
-        <NewGameFlow onStart={startGame} onError={setError} />
+      ) : !save?.current ? (
+        <ManagerHub
+          save={save}
+          managerName={user.name ?? null}
+          onStart={startGame}
+          onError={setError}
+        />
       ) : (
         <GameView
           save={save}
@@ -540,8 +583,8 @@ function GameView({
 }: {
   save: SaveState;
   managerName: string | null;
-  view: "season" | "history";
-  setView: (v: "season" | "history") => void;
+  view: GameView;
+  setView: (v: GameView) => void;
   busy: boolean;
   onPlayRound: () => void;
   onSimulateToEnd: () => void;
@@ -558,6 +601,7 @@ function GameView({
   onError: (e: string | null) => void;
 }) {
   const s = save.current;
+  if (!s) return null; // GameView se renderuje jen s aktivní kariérou
   const you = teamById(s.teams, s.yourTeamId);
   const done = isSeasonOver(s);
 
@@ -575,12 +619,15 @@ function GameView({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Segment active={view === "season"} onClick={() => setView("season")}>
             Sezóna
           </Segment>
           <Segment active={view === "history"} onClick={() => setView("history")}>
             Kariéra
+          </Segment>
+          <Segment active={view === "profile"} onClick={() => setView("profile")}>
+            Profil
           </Segment>
           <button
             type="button"
@@ -598,7 +645,14 @@ function GameView({
         <RoleNote save={save} />
       )}
 
-      {view === "history" ? (
+      {view === "profile" ? (
+        <ProfilePanel
+          profile={save.profile}
+          reputation={save.manager.reputation}
+          managerName={managerName}
+          activeCareer
+        />
+      ) : view === "history" ? (
         <HistoryView save={save} />
       ) : done ? (
         <SeasonDone
@@ -731,6 +785,7 @@ function ProfileStat({
 /** Krátké přiblížení role: koho vedeš, prestiž klubu, očekávání a dosah reputace. */
 function RoleNote({ save }: { save: SaveState }) {
   const s = save.current;
+  if (!s) return null;
   const you = teamById(s.teams, s.yourTeamId);
   const prestige = teamPrestige(you, s.leagueId, s.teams);
   const exp = expectedRank(you, s.teams);
@@ -1209,13 +1264,20 @@ function SeasonDone({
   ) => void;
   onError: (e: string | null) => void;
 }) {
+  const [jobs, setJobs] = useState(false);
   const s = save.current;
+  if (!s) return null;
   const summary = summarizeSeason(s);
   const projectedRep = updateReputation(save.manager.reputation, summary);
   const repDelta = projectedRep - Math.round(save.manager.reputation);
   const champ = teamById(s.teams, summary.championId);
   const tone = seasonTone(summary);
-  const [jobs, setJobs] = useState(false);
+  // Náhled nově odemčených achievementů (shodné s tím, co uloží finishAndAdvance).
+  const folded = foldSeason(save.profile, summary, projectedRep);
+  const earned = newlyEarned(
+    save.profile.achievements.map((a) => a.id),
+    { allTime: folded.allTime, last: summary, reputation: projectedRep }
+  );
 
   if (jobs) {
     return (
@@ -1262,6 +1324,23 @@ function SeasonDone({
           </strong>{" "}
           → {projectedRep}
         </p>
+        {earned.length > 0 && (
+          <div className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3">
+            <div className="text-xs font-semibold text-warning">🏅 Odemčeno</div>
+            <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+              {earned.map((a) => (
+                <span
+                  key={a.id}
+                  className="flex items-center gap-1 rounded-full border border-warning/40 bg-surface px-2 py-1 text-[11px] font-medium text-foreground"
+                  title={a.desc}
+                >
+                  <span aria-hidden>{a.icon}</span>
+                  {a.title}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="mt-4 flex flex-wrap justify-center gap-2">
           <button
             type="button"
@@ -1553,6 +1632,210 @@ function StatTile({
         {value}
       </div>
       <div className="text-[10px] text-muted">{label}</div>
+    </div>
+  );
+}
+
+// ───────────────────────── manažerský profil / hub ─────────────────────────
+
+/** Vstupní rozcestník bez aktivní kariéry: profil + start nové kariéry. */
+function ManagerHub({
+  save,
+  managerName,
+  onStart,
+  onError,
+}: {
+  save: SaveState | null;
+  managerName: string | null;
+  onStart: (
+    leagueId: number,
+    leagueName: string,
+    teams: GameTeam[],
+    teamId: number
+  ) => void;
+  onError: (e: string | null) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const profile = save?.profile ?? emptyProfile();
+
+  if (picking) {
+    return (
+      <div className="mt-5">
+        <button
+          type="button"
+          onClick={() => setPicking(false)}
+          className="text-xs text-muted hover:text-foreground"
+        >
+          ← Zpět na profil
+        </button>
+        <NewGameFlow onStart={onStart} onError={onError} />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <ProfilePanel
+        profile={profile}
+        reputation={null}
+        managerName={managerName}
+        activeCareer={false}
+      />
+      <button
+        type="button"
+        onClick={() => setPicking(true)}
+        className="mt-4 w-full rounded-full bg-positive px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+      >
+        🎮 {profile.allTime.careers > 0 ? "Začni novou kariéru" : "Začni svou kariéru"}
+      </button>
+    </div>
+  );
+}
+
+/** Manažerský profil: hlavička + kariérní rekordy + klub/repre + achievementy. */
+function ProfilePanel({
+  profile,
+  reputation,
+  managerName,
+  activeCareer,
+}: {
+  profile: ManagerProfile;
+  reputation: number | null;
+  managerName: string | null;
+  activeCareer: boolean;
+}) {
+  const a = profile.allTime;
+  const rep = reputation != null ? Math.round(reputation) : null;
+  return (
+    <div className="mt-3 space-y-4">
+      {/* Hlavička */}
+      <div className="rounded-xl border border-border bg-surface px-3 py-3 shadow-sm">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold text-foreground">
+              👔 {managerName || "Trenér"}
+            </div>
+            <div className="text-xs text-muted">
+              {activeCareer && rep != null
+                ? `${repTier(rep)} · reputace ${rep}/100`
+                : "Bez aktivní kariéry"}
+            </div>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-lg font-bold tabular-nums text-warning">{a.titles}</div>
+            <div className="text-[10px] text-muted">titulů celkem</div>
+          </div>
+        </div>
+        {activeCareer && rep != null && (
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-muted">Reputace</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
+              <div
+                className="bar-fill h-full rounded-full bg-positive"
+                style={{ width: `${rep}%` }}
+              />
+            </div>
+            <span className="tabular-nums font-semibold text-foreground">{rep}/100</span>
+          </div>
+        )}
+      </div>
+
+      {/* Kariérní rekordy */}
+      <div>
+        <h3 className="text-xs font-semibold text-foreground">Kariérní rekordy</h3>
+        <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+          <StatTile label="Kariér" value={a.careers} />
+          <StatTile label="Sezón" value={a.seasons} />
+          <StatTile label="Titulů" value={a.titles} accent={a.titles > 0} />
+          <StatTile label="Evr. účastí" value={a.europeanQualifs} />
+          <StatTile label="Sestupy" value={a.relegations} />
+          <StatTile label="Nejlepší" value={a.bestRank ? `${a.bestRank}.` : "—"} />
+          <StatTile label="Max bodů" value={a.bestSeasonPoints || "—"} />
+          <StatTile label="Max gólů" value={a.mostGoalsSeason || "—"} />
+          <StatTile label="Max reputace" value={a.bestReputation || "—"} />
+          <StatTile label="Neporažen" value={a.invincibleSeasons} />
+        </div>
+      </div>
+
+      {/* Klubová vs reprezentační scéna */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+          <div className="text-xs font-semibold text-foreground">🏟️ Klubová scéna</div>
+          <p className="mt-1 text-[11px] text-muted">
+            {a.seasons > 0
+              ? `${a.titles} titulů · ${a.europeanQualifs}× Evropa · ${a.relegations} sestupů`
+              : "Zatím žádná odehraná sezóna."}
+          </p>
+          {a.leaguesCoached.length > 0 && (
+            <p className="mt-1 text-[11px] text-muted">
+              Ligy: {a.leaguesCoached.map((id) => leagueNameFor(id)).join(", ")}
+            </p>
+          )}
+        </div>
+        <div className="rounded-xl border border-dashed border-border bg-surface/50 p-3">
+          <div className="text-xs font-semibold text-muted">🌐 Reprezentační scéna</div>
+          <p className="mt-1 text-[11px] text-muted">
+            🔜 Připravujeme — kariéra u reprezentace (Euro &amp; MS) a mezinárodní poháry.
+          </p>
+        </div>
+      </div>
+
+      {/* Achievementy */}
+      <AchievementsGrid earned={profile.achievements} />
+    </div>
+  );
+}
+
+function tierClass(tier: AchievementTier): string {
+  return tier === "gold"
+    ? "border-warning/50 bg-warning/10"
+    : tier === "silver"
+      ? "border-border bg-surface"
+      : "border-away/40 bg-away/10"; // bronze
+}
+
+/** Mřížka achievementů: odemčené barevně dle tier, zamčené šedé s popisem. */
+function AchievementsGrid({ earned }: { earned: EarnedAchievement[] }) {
+  const owned = new Set(earned.map((e) => e.id));
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold text-foreground">Achievementy</h3>
+        <span className="text-[11px] text-muted">
+          {owned.size}/{ACHIEVEMENTS.length}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {ACHIEVEMENTS.map((ach) => {
+          const has = owned.has(ach.id);
+          return (
+            <div
+              key={ach.id}
+              title={ach.desc}
+              className={
+                "rounded-xl border p-2.5 " +
+                (has
+                  ? tierClass(ach.tier)
+                  : "border-dashed border-border bg-surface/40 opacity-70")
+              }
+            >
+              <div className="flex items-center gap-1.5">
+                <span className={"text-lg " + (has ? "" : "grayscale")} aria-hidden>
+                  {has ? ach.icon : "🔒"}
+                </span>
+                <span
+                  className={
+                    "text-xs font-semibold " + (has ? "text-foreground" : "text-muted")
+                  }
+                >
+                  {ach.title}
+                </span>
+              </div>
+              <p className="mt-1 text-[10px] leading-tight text-muted">{ach.desc}</p>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

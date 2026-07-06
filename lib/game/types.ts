@@ -155,20 +155,66 @@ export interface SeasonState {
   pendingEvent: PendingEvent | null;
 }
 
-/** Kariérní profil trenéra (napříč sezónami). */
+/** Kariérní profil trenéra (napříč sezónami). Per-kariéra (reset při „Nové kariéře"). */
 export interface Manager {
   /** Reputace 0–100 – řídí, které týmy si tě „najmou" (job market). */
   reputation: number;
 }
 
+/** Odemčený achievement (trvale v profilu). */
+export interface EarnedAchievement {
+  id: string;
+  /** Sezóna kariéry, ve které padl. */
+  season: number;
+  /** ISO datum odemčení (jen pro zobrazení). */
+  date: string;
+}
+
+/**
+ * Trvalé kariérní rekordy – inkrementálně foldované po každé dohrané sezóně napříč
+ * VŠEMI kariérami (přežijí „Novou kariéru"). Vstup pro rekordy i achievementy.
+ */
+export interface AllTimeRecords {
+  careers: number;
+  seasons: number;
+  titles: number;
+  europeanQualifs: number;
+  uclQualifs: number;
+  relegations: number;
+  totalWin: number;
+  totalDraw: number;
+  totalLoss: number;
+  totalGoalsFor: number;
+  totalGoalsAgainst: number;
+  cleanSheets: number;
+  /** Nejlepší (nejnižší) umístění v jakékoli sezóně; 0 = zatím žádné. */
+  bestRank: number;
+  bestSeasonPoints: number;
+  mostGoalsSeason: number;
+  bestReputation: number;
+  /** Distinct id lig, které jsi kdy trénoval. */
+  leaguesCoached: number[];
+  /** Počet sezón bez jediné prohry. */
+  invincibleSeasons: number;
+}
+
+/** Trvalý manažerský profil – síň slávy. Přežívá „Novou kariéru". */
+export interface ManagerProfile {
+  allTime: AllTimeRecords;
+  achievements: EarnedAchievement[];
+}
+
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {
   version: number;
+  /** Trvalý profil (rekordy + achievementy) – přežije reset kariéry. */
+  profile: ManagerProfile;
   manager: Manager;
-  current: SeasonState;
+  /** Aktuální sezóna, nebo null = bez aktivní kariéry (po resetu / nový uživatel). */
+  current: SeasonState | null;
   history: SeasonSummary[];
 }
 

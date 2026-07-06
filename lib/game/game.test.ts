@@ -20,7 +20,9 @@ import { resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
 import { mulberry32 } from "./rng";
-import type { GameTeam, MatchResult, SeasonState } from "./types";
+import { emptyProfile, foldSeason, coachedAllTop5, TOP5_LEAGUE_IDS } from "./profile";
+import { newlyEarned, evaluateAchievements, ACHIEVEMENTS } from "./achievements";
+import type { GameTeam, MatchResult, SeasonState, SeasonSummary } from "./types";
 
 describe("generateLeague", () => {
   it("dá 20 týmů s validními ratingy a je deterministická", () => {
@@ -507,5 +509,102 @@ describe("objective v souhrnu", () => {
     const met = updateReputation(50, { ...summary, objectiveMet: true });
     const missed = updateReputation(50, { ...summary, objectiveMet: false });
     expect(met).toBeGreaterThan(missed);
+  });
+});
+
+// ───────────────────────── trvalý profil + achievementy ─────────────────────────
+
+function mkSummary(over: Partial<SeasonSummary>): SeasonSummary {
+  return {
+    season: 1,
+    leagueId: 39,
+    leagueName: "PL",
+    yourTeamId: 1,
+    yourName: "A",
+    yourRank: 5,
+    expectedRank: 5,
+    yourPoints: 60,
+    win: 18,
+    draw: 6,
+    loss: 14,
+    goalsFor: 55,
+    goalsAgainst: 45,
+    cleanSheets: 8,
+    champion: false,
+    europe: "NONE",
+    relegated: false,
+    championId: 2,
+    championName: "B",
+    objectiveMet: false,
+    ...over,
+  };
+}
+
+describe("profile – trvalé rekordy", () => {
+  it("foldSeason přičte sezónu do rekordů (min rank, max body/góly, union lig)", () => {
+    let p = emptyProfile();
+    p = foldSeason(p, mkSummary({ leagueId: 39, yourRank: 3, yourPoints: 70, goalsFor: 62, champion: false, europe: "UCL" }), 55);
+    p = foldSeason(p, mkSummary({ leagueId: 140, yourRank: 1, yourPoints: 88, goalsFor: 80, champion: true, europe: "UCL", loss: 0 }), 70);
+    const a = p.allTime;
+    expect(a.seasons).toBe(2);
+    expect(a.titles).toBe(1);
+    expect(a.uclQualifs).toBe(2);
+    expect(a.europeanQualifs).toBe(2);
+    expect(a.bestRank).toBe(1); // min
+    expect(a.bestSeasonPoints).toBe(88); // max
+    expect(a.mostGoalsSeason).toBe(80); // max
+    expect(a.bestReputation).toBe(70); // max
+    expect([...a.leaguesCoached].sort((x, y) => x - y)).toEqual([39, 140]);
+    expect(a.invincibleSeasons).toBe(1); // druhá sezóna bez prohry
+  });
+
+  it("startCareer navýší počítadlo kariér", () => {
+    const p = emptyProfile();
+    expect(p.allTime.careers).toBe(0);
+  });
+
+  it("coachedAllTop5 až po pokrytí všech Top-5 lig", () => {
+    let p = emptyProfile();
+    expect(coachedAllTop5(p.allTime)).toBe(false);
+    for (const id of TOP5_LEAGUE_IDS) p = foldSeason(p, mkSummary({ leagueId: id }), 40);
+    expect(coachedAllTop5(p.allTime)).toBe(true);
+  });
+});
+
+describe("achievements", () => {
+  it("first_title/first_win se odemknou u titulové sezóny, ne dřív", () => {
+    let p = emptyProfile();
+    // Před titulem: fold prohrané-ish sezóny bez výher? mkSummary má win=18 → first_win padne.
+    const noWin = foldSeason(emptyProfile(), mkSummary({ win: 0, draw: 5, loss: 33 }), 30);
+    const before = newlyEarned([], { allTime: noWin.allTime, last: mkSummary({ win: 0, draw: 5, loss: 33, champion: false }), reputation: 30 }).map((x) => x.id);
+    expect(before).not.toContain("first_title");
+
+    p = foldSeason(p, mkSummary({ champion: true, yourRank: 1 }), 60);
+    const earned = newlyEarned([], { allTime: p.allTime, last: mkSummary({ champion: true, yourRank: 1 }), reputation: 60 }).map((x) => x.id);
+    expect(earned).toContain("first_title");
+    expect(earned).toContain("first_win");
+  });
+
+  it("newlyEarned vynechá už držené a je deterministické", () => {
+    const p = foldSeason(emptyProfile(), mkSummary({ champion: true }), 60);
+    const ctx = { allTime: p.allTime, last: mkSummary({ champion: true }), reputation: 60 };
+    const all = evaluateAchievements(ctx);
+    expect(all).toContain("first_title");
+    const fresh = newlyEarned(["first_title"], ctx).map((x) => x.id);
+    expect(fresh).not.toContain("first_title");
+    // determinismus
+    expect(evaluateAchievements(ctx)).toEqual(all);
+  });
+
+  it("invincible padne jen když sezóna bez prohry", () => {
+    const inv = { allTime: emptyProfile().allTime, last: mkSummary({ loss: 0 }), reputation: 40 };
+    const notInv = { allTime: emptyProfile().allTime, last: mkSummary({ loss: 3 }), reputation: 40 };
+    expect(evaluateAchievements(inv)).toContain("invincible");
+    expect(evaluateAchievements(notInv)).not.toContain("invincible");
+  });
+
+  it("registr má unikátní id", () => {
+    const ids = ACHIEVEMENTS.map((a) => a.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

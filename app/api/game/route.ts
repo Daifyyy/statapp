@@ -45,8 +45,16 @@ const seasonSchema = z
 
 const saveSchema = z.object({
   version: z.literal(SAVE_VERSION),
+  // Trvalý profil (rekordy + achievementy) – loose, ukládáme původní objekt (passthrough).
+  profile: z
+    .object({
+      allTime: z.object({}).passthrough(),
+      achievements: z.array(z.object({}).passthrough()).max(200),
+    })
+    .passthrough(),
   manager: z.object({ reputation: z.number() }).passthrough(),
-  current: seasonSchema,
+  // null = bez aktivní kariéry (po resetu / nový uživatel).
+  current: seasonSchema.nullable(),
   history: z.array(z.object({}).passthrough()).max(1000),
 });
 
