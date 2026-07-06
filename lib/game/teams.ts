@@ -9,11 +9,47 @@ import {
   DEFENSE_WORST,
   HOME_BOOST_MAX,
   HOME_BOOST_MIN,
+  SPREAD,
 } from "./balance";
 import type { GameTeam } from "./types";
 
 /** Počet týmů v lize (38 kol). */
 export const LEAGUE_SIZE = 20;
+
+// Meze po roztažení rozptylu – širší než generační rozsah, ať SPREAD nekomprimuje
+// špičku zpět (λ je stejně stropované MAX_LAMBDA).
+const SPREAD_ATTACK_MIN = 0.4;
+const SPREAD_ATTACK_MAX = 3.4;
+const SPREAD_DEFENSE_MIN = 0.4;
+const SPREAD_DEFENSE_MAX = 3.2;
+
+/**
+ * Roztáhne rozptyl sil ligy kolem jejího průměru (`rating' = mean + (rating−mean)·SPREAD`).
+ * Mistr silnější, dno slabší → realistická dominance favorita. Čistá funkce; volá se na
+ * konci každého trychtýře ratingů (generateLeague/standingsToTeams i po driftTeams).
+ */
+export function amplifySpread(teams: GameTeam[]): GameTeam[] {
+  if (teams.length === 0) return teams;
+  const meanAtk = teams.reduce((s, t) => s + t.attack, 0) / teams.length;
+  const meanDef = teams.reduce((s, t) => s + t.defense, 0) / teams.length;
+  return teams.map((t) => ({
+    ...t,
+    attack: round2(
+      clamp(
+        meanAtk + (t.attack - meanAtk) * SPREAD,
+        SPREAD_ATTACK_MIN,
+        SPREAD_ATTACK_MAX
+      )
+    ),
+    defense: round2(
+      clamp(
+        meanDef + (t.defense - meanDef) * SPREAD,
+        SPREAD_DEFENSE_MIN,
+        SPREAD_DEFENSE_MAX
+      )
+    ),
+  }));
+}
 
 /** Kosmetika 20 klubů (jméno, kód pro odznak, barva). Pořadí ≠ síla (ta se losuje). */
 const TEAM_META: { name: string; short: string; color: string }[] = [
@@ -62,7 +98,7 @@ export function generateLeague(seed: number): GameTeam[] {
     rand
   );
 
-  return TEAM_META.map((meta, idx) => {
+  const base = TEAM_META.map((meta, idx) => {
     const slot = order[idx]; // 0 (top) .. 19 (bottom)
     const t = slot / (LEAGUE_SIZE - 1); // 0=top, 1=dno
     const jitter = (rand() - 0.5) * 0.2; // ±0.1 šum, ať nejsou týmy stejné tier klony
@@ -87,6 +123,7 @@ export function generateLeague(seed: number): GameTeam[] {
       homeBoost: round2(homeBoost),
     };
   });
+  return amplifySpread(base);
 }
 
 /** Rychlé vyhledání týmu podle id. */
@@ -173,7 +210,7 @@ export function standingsToTeams(
     });
   }
   if (teams.length % 2 === 1) teams.pop();
-  return teams;
+  return amplifySpread(teams);
 }
 
 function clamp(v: number, lo: number, hi: number): number {

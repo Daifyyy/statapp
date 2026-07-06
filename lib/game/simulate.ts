@@ -4,10 +4,21 @@
 // display „co říká model" před odehráním).
 
 import { poissonVector, drawTau } from "@/lib/stats/predict";
-import { DC_RHO, MAX_LAMBDA, MIN_LAMBDA, TACTIC_MULT } from "./balance";
-import type { GameTeam, MatchProbs, Tactic } from "./types";
+import { DC_RHO, MAX_LAMBDA, MIN_LAMBDA } from "./balance";
+import type { GameTeam, MatchProbs } from "./types";
 
 const MAX_GOALS = 10; // stejná mřížka 0..10 jako predict.ts
+
+/**
+ * Výsledná úprava λ jedné strany = plán × counter × morálka × eventy (sestaví engine).
+ * `attack` násobí vstřelené, `concede` OBDRŽENÉ. AI soupeři jedou NEUTRAL_ADJUST.
+ */
+export interface SideAdjust {
+  attack: number;
+  concede: number;
+}
+
+export const NEUTRAL_ADJUST: SideAdjust = { attack: 1, concede: 1 };
 
 interface Cell {
   home: number;
@@ -15,19 +26,17 @@ interface Cell {
   p: number;
 }
 
-/** Očekávané góly obou týmů z ratingů + taktik (domácí výhoda = homeBoost na útoku). */
+/** Očekávané góly obou týmů z ratingů + úprav (domácí výhoda = homeBoost na útoku). */
 export function matchLambdas(
   home: GameTeam,
   away: GameTeam,
-  homeTactic: Tactic,
-  awayTactic: Tactic
+  homeAdj: SideAdjust = NEUTRAL_ADJUST,
+  awayAdj: SideAdjust = NEUTRAL_ADJUST
 ): [number, number] {
-  const ht = TACTIC_MULT[homeTactic];
-  const at = TACTIC_MULT[awayTactic];
-  const homeAtk = home.attack * home.homeBoost * ht.attack;
-  const awayAtk = away.attack * at.attack;
-  const homeConcede = home.defense * ht.defense; // kolik domácí dostávají
-  const awayConcede = away.defense * at.defense; // kolik hosté dostávají
+  const homeAtk = home.attack * home.homeBoost * homeAdj.attack;
+  const awayAtk = away.attack * awayAdj.attack;
+  const homeConcede = home.defense * homeAdj.concede; // kolik domácí dostávají
+  const awayConcede = away.defense * awayAdj.concede; // kolik hosté dostávají
   const lh = clamp((homeAtk + awayConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
   const la = clamp((awayAtk + homeConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
   return [lh, la];
@@ -79,10 +88,10 @@ function sample(cells: Cell[], u: number): { home: number; away: number } {
 export function predictProbs(
   home: GameTeam,
   away: GameTeam,
-  homeTactic: Tactic = "balanced",
-  awayTactic: Tactic = "balanced"
+  homeAdj: SideAdjust = NEUTRAL_ADJUST,
+  awayAdj: SideAdjust = NEUTRAL_ADJUST
 ): MatchProbs {
-  const [lh, la] = matchLambdas(home, away, homeTactic, awayTactic);
+  const [lh, la] = matchLambdas(home, away, homeAdj, awayAdj);
   return outcomes(grid(lh, la));
 }
 
@@ -90,11 +99,11 @@ export function predictProbs(
 export function simulateMatch(
   home: GameTeam,
   away: GameTeam,
-  homeTactic: Tactic,
-  awayTactic: Tactic,
+  homeAdj: SideAdjust,
+  awayAdj: SideAdjust,
   rand: () => number
 ): { homeGoals: number; awayGoals: number; probs: MatchProbs } {
-  const [lh, la] = matchLambdas(home, away, homeTactic, awayTactic);
+  const [lh, la] = matchLambdas(home, away, homeAdj, awayAdj);
   const cells = grid(lh, la);
   const probs = outcomes(cells);
   const s = sample(cells, rand());

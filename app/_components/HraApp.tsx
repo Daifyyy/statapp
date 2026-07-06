@@ -12,13 +12,12 @@ import {
   simulateToEnd,
   isSeasonOver,
   currentTable,
-  setTactic,
+  setPlan,
   yourNextMatch,
   yourResults,
 } from "@/lib/game/engine";
 import { summarizeSeason, startNextSeason, careerStats } from "@/lib/game/career";
 import {
-  initialReputation,
   updateReputation,
   isHireable,
   expectedRank,
@@ -28,15 +27,23 @@ import {
   teamPrestige,
   seasonHeadline,
   seasonTone,
+  leagueStars,
+  evaluateSeason,
+  EUROPE_LABEL,
 } from "@/lib/game/leagues";
+import { PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
+import { getEvent, applyEventChoice } from "@/lib/game/events";
 import { teamSeasonStats } from "@/lib/game/analysis";
+import type { ScoutReport } from "@/lib/game/scouting";
 import { SAVE_VERSION } from "@/lib/game/types";
+import { STARTING_REPUTATION } from "@/lib/game/balance";
 import type {
   GameTeam,
   LeagueInfo,
+  Plan,
   SaveState,
   SeasonState,
-  Tactic,
+  SeasonSummary,
 } from "@/lib/game/types";
 
 const NAV = [
@@ -45,16 +52,14 @@ const NAV = [
   { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
 ];
 
-const TACTIC_LABEL: Record<Tactic, string> = {
-  attack: "Útočná",
-  balanced: "Vyvážená",
-  defense: "Defenzivní",
-};
-const TACTIC_HINT: Record<Tactic, string> = {
-  attack: "Víc vstřelíš, ale i dostaneš. Vysoká variance.",
-  balanced: "Bez úprav – vyrovnaný přístup.",
-  defense: "Míň gólů na obou stranách. Dobré proti favoritovi.",
-};
+const PLANS: Plan[] = ["balanced", "open", "low_block", "press", "counter"];
+
+/** Data pro popup výsledku po odehraném kole. */
+interface ToastData {
+  oppName: string;
+  yourGoals: number;
+  oppGoals: number;
+}
 
 function saveEndpoint(next: SaveState) {
   fetch("/api/game", {
@@ -80,6 +85,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   const [view, setView] = useState<"season" | "history">("season");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastData | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -113,14 +119,10 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     (leagueId: number, leagueName: string, teams: GameTeam[], teamId: number) => {
       const seed = randomSeed();
       const current = newSeason(seed, teamId, { teams, leagueId, leagueName });
-      const reputation = initialReputation(
-        teamById(teams, teamId),
-        leagueId,
-        teams
-      );
+      // Nový profil startuje na pevné reputaci → výběr klubu je gated (ne rovnou top klub).
       persist({
         version: SAVE_VERSION,
-        manager: { reputation },
+        manager: { reputation: STARTING_REPUTATION },
         current,
         history: [],
       });
@@ -140,9 +142,27 @@ export function HraApp({ user }: { user: SessionUser | null }) {
 
   const onPlayRound = useCallback(() => {
     setBusy(true);
-    mutateSeason((s) => playRound(s));
+    setSave((prev) => {
+      if (!prev || isSeasonOver(prev.current)) return prev;
+      const after = playRound(prev.current);
+      const next = { ...prev, current: after };
+      saveEndpoint(next);
+      // Popup výsledku tvého zápasu (jen pro jednotlivé kolo, ne „Dohrát sezónu").
+      const r = yourResults(after)[0];
+      if (r) {
+        const isHome = r.homeId === after.yourTeamId;
+        const opp = teamById(after.teams, isHome ? r.awayId : r.homeId);
+        const data: ToastData = {
+          oppName: opp.name,
+          yourGoals: isHome ? r.homeGoals : r.awayGoals,
+          oppGoals: isHome ? r.awayGoals : r.homeGoals,
+        };
+        queueMicrotask(() => setToast(data));
+      }
+      return next;
+    });
     setBusy(false);
-  }, [mutateSeason]);
+  }, []);
 
   const onSimulateToEnd = useCallback(() => {
     setBusy(true);
@@ -150,8 +170,14 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     setBusy(false);
   }, [mutateSeason]);
 
-  const onTactic = useCallback(
-    (t: Tactic) => mutateSeason((s) => setTactic(s, t)),
+  const onPlan = useCallback(
+    (p: Plan) => mutateSeason((s) => setPlan(s, p)),
+    [mutateSeason]
+  );
+
+  const onEventChoice = useCallback(
+    (choiceIndex: number) =>
+      mutateSeason((s) => applyEventChoice(s, choiceIndex)),
     [mutateSeason]
   );
 
@@ -232,14 +258,59 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           busy={busy}
           onPlayRound={onPlayRound}
           onSimulateToEnd={onSimulateToEnd}
-          onTactic={onTactic}
+          onPlan={onPlan}
+          onEventChoice={onEventChoice}
           onContinue={onContinue}
           onSwitch={onSwitch}
           onReset={onReset}
           onError={setError}
         />
       )}
+
+      <MatchResultToast toast={toast} onClose={() => setToast(null)} />
     </main>
+  );
+}
+
+/** Popup výsledku po odehraném kole (fixní overlay dole, auto-dismiss ~2.2 s). */
+function MatchResultToast({
+  toast,
+  onClose,
+}: {
+  toast: ToastData | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(onClose, 2200);
+    return () => clearTimeout(t);
+  }, [toast, onClose]);
+
+  if (!toast) return null;
+  const outcome =
+    toast.yourGoals > toast.oppGoals
+      ? { label: "Výhra", cls: "border-positive bg-positive/15 text-positive" }
+      : toast.yourGoals < toast.oppGoals
+        ? { label: "Prohra", cls: "border-negative bg-negative/15 text-negative" }
+        : { label: "Remíza", cls: "border-border bg-surface text-muted" };
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+      <div
+        className={
+          "fade-in pointer-events-auto flex items-center gap-3 rounded-full border px-5 py-2.5 shadow-lg backdrop-blur " +
+          outcome.cls
+        }
+        role="status"
+      >
+        <span className="text-sm font-bold">{outcome.label}</span>
+        <span className="tabular-nums text-base font-bold text-foreground">
+          {toast.yourGoals}:{toast.oppGoals}
+        </span>
+        <span className="max-w-[45vw] truncate text-xs text-muted">
+          vs {toast.oppName}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -290,13 +361,6 @@ function TeamBadge({ team, size = 26 }: { team: GameTeam; size?: number }) {
       {team.short}
     </span>
   );
-}
-
-/** Hrubá síla týmu jako 1–5 (útok mínus obrana). */
-function strengthStars(team: GameTeam): number {
-  const s = team.attack - team.defense;
-  const norm = (s + 1.0) / 2.6;
-  return Math.max(1, Math.min(5, Math.round(norm * 4) + 1));
 }
 
 function Stars({ n }: { n: number }) {
@@ -385,28 +449,48 @@ function NewGameFlow({
         <h2 className="mt-2 text-sm font-semibold text-foreground">
           {league.name} — vyber svůj klub
         </h2>
+        <p className="mt-1 text-xs text-muted">
+          Jako začínající trenér (reputace {STARTING_REPUTATION}) tě zatím vezmou jen menší
+          kluby. K velkým se propracuj úspěchy.
+        </p>
         {loadingTeams || !teams ? (
           <LoadingRows />
         ) : (
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {[...teams]
-              .sort((a, b) => strengthStars(b) - strengthStars(a))
-              .map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => onStart(league.id, league.name, teams, t.id)}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5 text-left shadow-sm transition hover:border-foreground/30"
-                >
-                  <TeamBadge team={t} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">
-                      {t.name}
+              .sort(
+                (a, b) => leagueStars(b, teams) - leagueStars(a, teams)
+              )
+              .map((t) => {
+                const ok = isHireable(t, league.id, teams, STARTING_REPUTATION);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={!ok}
+                    onClick={() => onStart(league.id, league.name, teams, t.id)}
+                    className={
+                      "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition " +
+                      (ok
+                        ? "border-border bg-surface hover:border-foreground/30"
+                        : "border-border/60 bg-surface/40 opacity-60")
+                    }
+                  >
+                    <TeamBadge team={t} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-foreground">
+                        {t.name}
+                      </span>
+                      <Stars n={leagueStars(t, teams)} />
                     </span>
-                    <Stars n={strengthStars(t)} />
-                  </span>
-                </button>
-              ))}
+                    {!ok && (
+                      <span className="shrink-0 text-[11px] text-negative">
+                        🔒 mimo dosah
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
           </div>
         )}
       </div>
@@ -447,7 +531,8 @@ function GameView({
   busy,
   onPlayRound,
   onSimulateToEnd,
-  onTactic,
+  onPlan,
+  onEventChoice,
   onContinue,
   onSwitch,
   onReset,
@@ -460,7 +545,8 @@ function GameView({
   busy: boolean;
   onPlayRound: () => void;
   onSimulateToEnd: () => void;
-  onTactic: (t: Tactic) => void;
+  onPlan: (p: Plan) => void;
+  onEventChoice: (choiceIndex: number) => void;
   onContinue: () => void;
   onSwitch: (
     leagueId: number,
@@ -523,12 +609,16 @@ function GameView({
         />
       ) : (
         <>
-          <NextMatch state={s} onTactic={onTactic} />
+          {s.pendingEvent && (
+            <EventCard event={s.pendingEvent} onChoice={onEventChoice} />
+          )}
+          <NextMatch state={s} onPlan={onPlan} />
           <div className="mt-3 flex gap-2">
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || Boolean(s.pendingEvent)}
               onClick={onPlayRound}
+              title={s.pendingEvent ? "Nejdřív vyřeš událost výše" : undefined}
               className="flex-1 rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
             >
               Odehrát kolo
@@ -646,21 +736,30 @@ function RoleNote({ save }: { save: SaveState }) {
   const exp = expectedRank(you, s.teams);
   const reach = Math.round(save.manager.reputation) + HIRE_MARGIN;
   return (
-    <p className="mt-2 rounded-xl border border-dashed border-border bg-surface/50 px-3 py-2 text-xs text-muted">
-      Vedeš <strong className="text-foreground">{you.name}</strong> ({s.leagueName}) —
-      prestiž klubu <strong className="text-foreground">{prestige}</strong>, očekává se{" "}
-      <strong className="text-foreground">{exp}. místo</strong>. S reputací tě teď osloví
-      kluby do prestiže ~{reach}.
-    </p>
+    <div className="mt-2 rounded-xl border border-dashed border-border bg-surface/50 px-3 py-2 text-xs text-muted">
+      <p>
+        Vedeš <strong className="text-foreground">{you.name}</strong> ({s.leagueName}) —
+        prestiž klubu <strong className="text-foreground">{prestige}</strong>, očekává se{" "}
+        <strong className="text-foreground">{exp}. místo</strong>. S reputací tě teď osloví
+        kluby do prestiže ~{reach}.
+      </p>
+      <p className="mt-1 flex items-center gap-1.5">
+        <span aria-hidden>🎯</span>
+        <span>
+          Cíl sezóny:{" "}
+          <strong className="text-foreground">{s.objective.text}</strong>
+        </span>
+      </p>
+    </div>
   );
 }
 
 function NextMatch({
   state,
-  onTactic,
+  onPlan,
 }: {
   state: SeasonState;
-  onTactic: (t: Tactic) => void;
+  onPlan: (p: Plan) => void;
 }) {
   const next = yourNextMatch(state);
   if (!next) return null;
@@ -696,32 +795,112 @@ function NextMatch({
         </div>
       </div>
 
+      {/* Scouting soupeře */}
+      <ScoutCard scout={next.scout} oppName={next.opponent.name} />
+
+      {/* Morálka */}
+      <MoraleBar morale={state.morale} />
+
       {/* Analýza z odehrané sezóny */}
       <AnalysisPanel state={state} youId={you.id} oppId={next.opponent.id} />
 
-      {/* Taktika */}
+      {/* Zápasový plán */}
       <div className="mt-4">
-        <div className="mb-1.5 text-xs font-semibold text-foreground">Taktika</div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {(["attack", "balanced", "defense"] as Tactic[]).map((t) => (
+        <div className="mb-1.5 text-xs font-semibold text-foreground">Zápasový plán</div>
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+          {PLANS.map((p) => (
             <button
-              key={t}
+              key={p}
               type="button"
-              onClick={() => onTactic(t)}
+              onClick={() => onPlan(p)}
               className={
                 "rounded-lg px-2 py-1.5 text-xs font-medium transition " +
-                (state.tactic === t
+                (state.plan === p
                   ? "bg-foreground text-background"
                   : "border border-border bg-surface text-muted hover:text-foreground")
               }
             >
-              {TACTIC_LABEL[t]}
+              {PLAN_LABEL[p]}
             </button>
           ))}
         </div>
         <p className="mt-1.5 text-center text-[11px] text-muted">
-          {TACTIC_HINT[state.tactic]}
+          {PLAN_HINT[state.plan]}
         </p>
+      </div>
+    </div>
+  );
+}
+
+const STYLE_LABEL: Record<ScoutReport["style"], string> = {
+  attacking: "Ofenzivní",
+  defensive: "Defenzivní",
+  balanced: "Vyvážený",
+};
+
+/** Scouting karta soupeře: styl + krátký popis (traity). */
+function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) {
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-foreground">🔍 Scouting</span>
+        <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted">
+          {STYLE_LABEL[scout.style]}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted">
+        <span className="text-foreground">{oppName}:</span> {scout.note}
+      </p>
+    </div>
+  );
+}
+
+/** Ukazatel morálky/momentum týmu. */
+function MoraleBar({ morale }: { morale: number }) {
+  const m = Math.round(morale);
+  const tone =
+    m >= 66 ? "bg-positive" : m >= 40 ? "bg-warning" : "bg-negative";
+  const label = m >= 66 ? "Výborná" : m >= 40 ? "Slušná" : "Nízká";
+  return (
+    <div className="mt-3 flex items-center gap-2 text-xs">
+      <span className="text-muted">Morálka</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
+        <div className={"bar-fill h-full rounded-full " + tone} style={{ width: `${m}%` }} />
+      </div>
+      <span className="tabular-nums font-semibold text-foreground">{label}</span>
+    </div>
+  );
+}
+
+/** Karta náhodného eventu s volbami (nutno zvolit před odehráním kola). */
+function EventCard({
+  event,
+  onChoice,
+}: {
+  event: NonNullable<SeasonState["pendingEvent"]>;
+  onChoice: (choiceIndex: number) => void;
+}) {
+  const ev = getEvent(event.id);
+  if (!ev) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-warning/50 bg-warning/10 p-4 shadow-sm">
+      <div className="text-xs font-semibold uppercase tracking-wide text-warning">
+        ⚡ Událost
+      </div>
+      <div className="mt-1 text-sm font-semibold text-foreground">{ev.title}</div>
+      <p className="mt-1 text-xs text-muted">{ev.text}</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {ev.choices.map((c, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onChoice(i)}
+            className="rounded-xl border border-border bg-surface px-3 py-2 text-left transition hover:border-foreground/30"
+          >
+            <span className="block text-sm font-medium text-foreground">{c.label}</span>
+            <span className="block text-[11px] text-muted">{c.detail}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -859,57 +1038,107 @@ function ProbBar({
   );
 }
 
+/** Zóna umístění (pohár / sestup) pro barevné zvýraznění řádku tabulky. */
+interface RankZone {
+  key: "ucl" | "uel" | "uecl" | "releg";
+  border: string;
+  dot: string;
+  label: string;
+}
+
+function rankZone(rank: number, size: number, leagueId: number): RankZone | null {
+  const v = evaluateSeason(rank, size, leagueId);
+  if (v.relegated)
+    return { key: "releg", border: "border-l-negative", dot: "bg-negative", label: "Sestup" };
+  const e = v.europe;
+  if (e === "UCL" || e === "UCL_Q")
+    return { key: "ucl", border: "border-l-home", dot: "bg-home", label: EUROPE_LABEL[e] };
+  if (e === "UEL" || e === "UEL_Q")
+    return { key: "uel", border: "border-l-away", dot: "bg-away", label: EUROPE_LABEL[e] };
+  if (e === "UECL" || e === "UECL_Q")
+    return { key: "uecl", border: "border-l-positive", dot: "bg-positive", label: EUROPE_LABEL[e] };
+  return null;
+}
+
 function LeagueTable({ state }: { state: SeasonState }) {
   const table = currentTable(state);
+  const size = state.teams.length;
+  const zones = table.map((row) => rankZone(row.rank, size, state.leagueId));
+  // Legenda jen pro zóny, které v této lize reálně existují (podle klíče, ne popisku).
+  const legend = zones
+    .filter((z): z is RankZone => Boolean(z))
+    .filter((z, i, arr) => arr.findIndex((x) => x.key === z.key) === i);
+
   return (
-    <div className="mt-4 overflow-x-auto">
-      <table className="w-full min-w-[420px] border-collapse text-sm">
-        <thead>
-          <tr className="text-left text-xs text-muted">
-            <th className="px-2 py-1.5">#</th>
-            <th className="px-2 py-1.5">Tým</th>
-            <th className="px-2 py-1.5 text-center">Z</th>
-            <th className="px-2 py-1.5 text-center">V-R-P</th>
-            <th className="px-2 py-1.5 text-center">Skóre</th>
-            <th className="px-2 py-1.5 text-center">B</th>
-          </tr>
-        </thead>
-        <tbody>
-          {table.map((row) => {
-            const t = teamById(state.teams, row.teamId);
-            const mine = row.teamId === state.yourTeamId;
-            return (
-              <tr
-                key={row.teamId}
-                className={
-                  "border-t border-border " +
-                  (mine ? "bg-positive/10 font-semibold" : "")
-                }
-              >
-                <td className="px-2 py-1.5 tabular-nums text-muted">{row.rank}</td>
-                <td className="px-2 py-1.5">
-                  <span className="flex items-center gap-2">
-                    <TeamBadge team={t} size={20} />
-                    <span className="truncate text-foreground">{t.name}</span>
-                  </span>
-                </td>
-                <td className="px-2 py-1.5 text-center tabular-nums text-muted">
-                  {row.played}
-                </td>
-                <td className="px-2 py-1.5 text-center tabular-nums text-muted">
-                  {row.win}-{row.draw}-{row.loss}
-                </td>
-                <td className="px-2 py-1.5 text-center tabular-nums text-muted">
-                  {row.goalsFor}:{row.goalsAgainst}
-                </td>
-                <td className="px-2 py-1.5 text-center font-semibold tabular-nums text-foreground">
-                  {row.points}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="mt-4">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[420px] border-collapse text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted">
+              <th className="px-2 py-1.5">#</th>
+              <th className="px-2 py-1.5">Tým</th>
+              <th className="px-2 py-1.5 text-center">Z</th>
+              <th className="px-2 py-1.5 text-center">V-R-P</th>
+              <th className="px-2 py-1.5 text-center">Skóre</th>
+              <th className="px-2 py-1.5 text-center">B</th>
+            </tr>
+          </thead>
+          <tbody>
+            {table.map((row, i) => {
+              const t = teamById(state.teams, row.teamId);
+              const mine = row.teamId === state.yourTeamId;
+              const zone = zones[i];
+              return (
+                <tr
+                  key={row.teamId}
+                  className={
+                    "border-t border-border " +
+                    (mine ? "bg-positive/10 font-semibold" : "")
+                  }
+                >
+                  <td
+                    className={
+                      "border-l-4 py-1.5 pl-2 pr-2 tabular-nums text-muted " +
+                      (zone ? zone.border : "border-l-transparent")
+                    }
+                    title={zone?.label}
+                  >
+                    {row.rank}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <span className="flex items-center gap-2">
+                      <TeamBadge team={t} size={20} />
+                      <span className="truncate text-foreground">{t.name}</span>
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-center tabular-nums text-muted">
+                    {row.played}
+                  </td>
+                  <td className="px-2 py-1.5 text-center tabular-nums text-muted">
+                    {row.win}-{row.draw}-{row.loss}
+                  </td>
+                  <td className="px-2 py-1.5 text-center tabular-nums text-muted">
+                    {row.goalsFor}:{row.goalsAgainst}
+                  </td>
+                  <td className="px-2 py-1.5 text-center font-semibold tabular-nums text-foreground">
+                    {row.points}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {legend.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">
+          {legend.map((z) => (
+            <span key={z.key} className="flex items-center gap-1">
+              <span className={"inline-block h-2 w-2 rounded-sm " + z.dot} />
+              {z.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1184,7 +1413,7 @@ function JobMarket({
                       <span className="block truncate text-sm font-medium text-foreground">
                         {t.name}
                       </span>
-                      <Stars n={strengthStars(t)} />
+                      <Stars n={leagueStars(t, teams)} />
                     </span>
                     <span className="shrink-0 text-right text-[11px]">
                       <span className="block text-muted">prestiž {prestige}</span>
@@ -1204,8 +1433,23 @@ function JobMarket({
 
 // ───────────────────────── kariéra / historie ─────────────────────────
 
+/**
+ * Reputační zisk/ztráta za každou sezónu = přehrání od STARTING_REPUTATION
+ * (deterministické, shodné s tím, jak reputace reálně narůstala během kariéry).
+ */
+function reputationDeltas(history: SeasonSummary[]): number[] {
+  let rep = STARTING_REPUTATION;
+  return history.map((h) => {
+    const after = updateReputation(rep, h);
+    const d = after - rep;
+    rep = after;
+    return d;
+  });
+}
+
 function HistoryView({ save }: { save: SaveState }) {
   const stats = careerStats(save.history);
+  const repDeltas = reputationDeltas(save.history);
   if (!stats) {
     return (
       <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
@@ -1242,6 +1486,7 @@ function HistoryView({ save }: { save: SaveState }) {
               : tone === "bad"
                 ? "bg-negative/15 text-negative"
                 : "bg-border/60 text-muted";
+          const delta = repDeltas[save.history.length - 1 - i];
           return (
             <div
               key={i}
@@ -1253,6 +1498,7 @@ function HistoryView({ save }: { save: SaveState }) {
                 <span className="text-foreground">{h.yourName}</span>{" "}
                 <span className="text-xs text-muted">· {h.leagueName}</span>
               </span>
+              <RepDelta delta={delta} />
               <span
                 className={
                   "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass
@@ -1265,6 +1511,25 @@ function HistoryView({ save }: { save: SaveState }) {
         })}
       </div>
     </div>
+  );
+}
+
+/** Reputační zisk/ztráta za sezónu (barevný odznak). */
+function RepDelta({ delta }: { delta: number }) {
+  const cls =
+    delta > 0
+      ? "bg-positive/15 text-positive"
+      : delta < 0
+        ? "bg-negative/15 text-negative"
+        : "bg-border/60 text-muted";
+  return (
+    <span
+      className={"shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums " + cls}
+      title="Změna reputace za sezónu"
+    >
+      {delta > 0 ? "+" : ""}
+      {delta}
+    </span>
   );
 }
 

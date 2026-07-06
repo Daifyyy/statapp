@@ -383,45 +383,56 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   simulace běží na **témže predikčním jádru** jako reálné tipy (Poisson + Dixon–Coles) → před
   každým zápasem se ukáže **predikce modelu (1X2) + analýza** ve stylu Porovnání. FREE pro přihlášené.
 - **Klíčová myšlenka:** každý tým = **dvě čísla (síla útoku/obrany)** → `λ` do Poissonu → sampluje
-  se skóre. **Taktika** je jediná páka (útočná/vyvážená/defenzivní posune útok/obranu). Bez sestav
-  hráčů/přestupů (vědomě mimo scope).
+  se skóre. Trenérova rozhodnutí (**zápasový plán + counter, morálka, eventy**) hýbou λ **jen tvého
+  týmu**; AI soupeři jedou neutrálně. Bez sestav hráčů/přestupů (vědomě mimo scope).
+- **Realismus sil** (Phase 1): `SPREAD`+`amplifySpread(teams)` (`teams.ts`, laděno v `balance.ts`)
+  roztáhne rozptyl kolem ligového průměru → mistr silný, dno slabé. Volá se na **konci každého
+  trychtýře ratingů** (`generateLeague`/`standingsToTeams` i po `driftTeams`). Empiricky: nejsilnější
+  tým vyhraje titul ~33 %, nejslabší ~0 %, Ø mistr ~80 b / poslední ~26 b (náročné, ne walkover).
+  `leagueStars(team, league)` = hvězdy 1–5 dle **percentilu** síly v lize.
 - **Reálné týmy = z ligové tabulky** (`getGameLeague` v `repository.ts` → `getLeagueGameTeams` v
   `realRepository.ts`): ratingy útoku/obrany = **góly na zápas** z tabulky (shrink k ligovému
   průměru), domácí výhoda z home splitu, loga+jména z API. **1 cachované volání/liga** (sdílí
-  `standings:` cache). **Mezisezóna** (0 odehraných) → fallback na **předchozí sezónu** (jinak by
-  byly všechny týmy stejně silné). Mock/bez API → fiktivní `generateLeague`. Pool lig = `GAME_LEAGUES`
-  (`lib/game/leagues.ts`, Top-5 + Portugalsko/Nizozemsko/Česko).
+  `standings:` cache). **Mezisezóna** (0 odehraných) → fallback na **předchozí sezónu**. Mock/bez API
+  → fiktivní `generateLeague`. Pool lig = `GAME_LEAGUES` (`lib/game/leagues.ts`, Top-5 + Portugalsko/
+  Nizozemsko/**Belgie/Skotsko/Rakousko/Řecko**/Česko; malé ligy = předkola v `LEAGUE_ACCESS`).
 - **Čisté jádro `lib/game/`** (na zdroji nezávislé jako `lib/picks/`, testy `game.test.ts`):
   `simulate.ts` (`matchLambdas`/`predictProbs`/`simulateMatch` staví normalizovanou mřížku z
-  **reused** `poissonVector`+`drawTau` z `lib/stats/predict.ts`), `teams.ts` (`generateLeague` fikce +
-  `standingsToTeams` = čistý mapper tabulka→ratingy), `schedule.ts` (`roundRobin` dvoukolově),
-  `standings.ts` (`buildTable`), `engine.ts` (`newSeason`/`playRound`/`simulateToEnd`/`yourNextMatch`,
-  **per-kolo RNG** `deriveSeed(seed,round)` → odolné vůči reloadu), `career.ts` (`summarizeSeason` vč.
-  čistých kont + hodnocení sezóny, `startNextSeason` s driftem, `careerStats`), `leagues.ts`
-  (prestiž lig/týmů, `evaluateSeason` = mistr + **evropská příčka** + sestup jako **label**, ne hraná
-  soutěž; **kurátorovaný UEFA access list per liga** `LEAGUE_ACCESS` rozlišuje základní fázi vs.
-  **předkolo** – malé ligy jako Fortuna liga dávají mistrovi „Liga mistrů (předkolo)", ne přímou
-  skupinu; UEFA klíč není v API → udržuje se ručně), `reputation.ts` (reputace 0–100:
-  `updateReputation` dle příčky+over/under-performance, `isHireable`/`expectedRank`/`initialReputation`,
-  `HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats` = forma/průměry/čistá konta z odehrané sezóny pro
-  předzápasové porovnání), `balance.ts` (**laditelné konstanty**).
-- **Kariéra + role:** UI ukazuje **profil trenéra** (jméno z účtu, reputace/tier, tituly/poháry/sezóny)
-  + „RoleNote" (koho vedeš, prestiž klubu, očekávané umístění, dosah reputace). Konec sezóny → hodnocení
-  (odznak `seasonHeadline`/`seasonTone`, vč. předkola) + změna **reputace**; pak **Pokračovat s klubem**
-  (drift) nebo **Změnit tým** = job market (vyber ligu → týmy s prestiží; zvučnější kluby si tě najmou jen
-  s dost vysokou reputací → `isHireable`). Historie ukládá průměr vstřelených/obdržených, čistá konta,
-  tituly/poháry/sestupy.
+  **reused** `poissonVector`+`drawTau`; přijímá per-stranu `SideAdjust{attack,concede}`, AI =
+  `NEUTRAL_ADJUST`), `teams.ts` (`generateLeague`+`standingsToTeams`+`amplifySpread`), `schedule.ts`
+  (`roundRobin`), `standings.ts` (`buildTable`), `engine.ts` (`newSeason`/`setPlan`/`playRound`/
+  `simulateToEnd`/`yourNextMatch`+`resolveYourAdjust` = plán×counter×morálka×eventy, **per-kolo RNG**
+  `deriveSeed(seed,round)`), `career.ts` (`summarizeSeason` vč. `objectiveMet`, `startNextSeason`
+  s driftem, `careerStats`), `leagues.ts` (prestiž, `evaluateSeason`, `LEAGUE_ACCESS`, `leagueStars`,
+  `seasonObjective`), `reputation.ts` (`updateReputation` dle příčky+over/under-performance+**cíle**,
+  `isHireable`/`expectedRank`/`HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats`), `balance.ts`
+  (**laditelné konstanty**).
+- **Manažerská agency (Phase 2):** `scouting.ts` (`scoutOpponent` → styl attacking/defensive/balanced
+  + traity + CZ popis), `plans.ts` (5 plánů `balanced/open/low_block/press/counter`, `resolvePlan(plan,
+  oppStyle)` = base × counter; správný protitah = výhoda, špatný = postih, ±`COUNTER_*`), `morale.ts`
+  (`moraleFactor` ±6 % λ, `updateMorale` po kole dle výsledku+překvapení), `events.ts` (deterministické
+  eventy dle `(seed,round)`, `maybeEvent`/`applyEventChoice` → morálka / dočasný `Modifier{untilRound}`).
+  `SeasonState` nese `plan`/`morale`/`objective`/`modifiers`/`pendingEvent`. Empiricky: adaptivní plán
+  ~+2.4 b/sezónu vs vždy balanced (znatelné, ne overpowered).
+- **Kariéra + role:** UI ukazuje **profil trenéra** + „RoleNote" (koho vedeš, prestiž, očekávání, dosah
+  reputace, **sezónní cíl**). Konec sezóny → hodnocení (`seasonHeadline`/`seasonTone`) + změna reputace
+  (vč. bonusu za splněný cíl); pak **Pokračovat s klubem** (drift) nebo **Změnit tým** = job market
+  (`isHireable`). **Start kariéry** je gated: nový profil má `STARTING_REPUTATION` (~30) → první výběr
+  klubu jde jen po `isHireable` (ne rovnou top klub). „Nová kariéra" = plný reset.
 - **Perzistence = profil (DB), přihlášení povinné.** Tabulka `GameSave` (`userId @id`, `state Json`).
-  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace + size cap 512 KB + rate-limit;
-  ukládá **původní** objekt, ne `parsed.data` → neořízne pole)/`DELETE`. `app/api/game/leagues`
-  (nabídka lig) + `app/api/game/league?id=` (týmy ligy s ratingy, auth+rate-limit). `SaveState` =
-  `{version, manager:{reputation}, current:SeasonState, history:SeasonSummary[]}`; `SAVE_VERSION` bump
-  = zahodit nekompatibilní save (aktuálně **2**).
-- **UI `HraApp.tsx`** (client, mobile-first): anonym → výzva k přihlášení; bez save → výběr ligy→klubu;
-  jinak sezóna (predikce+analýza+taktika, „Odehrát kolo"/„Dohrát sezónu", tabulka, forma, pruh reputace)
-  a záložka **Kariéra**. Reálná loga přes `TeamLogo`, fiktivní = barevný odznak. Stránka `app/hra/`
-  (+ `loading`), nav 🎮 napříč taby, `/hra` v sitemap.
-- **Možná rozšíření (TODO):** rozpočet, hratelné evropské poháry / druhé ligy (dnes jen labely+reputace).
+  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `plan`/`morale`/… + size cap
+  512 KB + rate-limit; ukládá **původní** objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/
+  league?id=`. `SaveState` = `{version, manager:{reputation}, current:SeasonState, history[]}`;
+  `SAVE_VERSION` bump = zahodit nekompatibilní save (aktuálně **4**).
+- **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; bez save → gated výběr ligy→klubu;
+  jinak sezóna (predikce + **scouting karta** + **ukazatel morálky** + analýza + **výběr plánu** +
+  **event karta** s volbou, popup výsledku `MatchResultToast` po kole, tabulka, forma, cíl) a **Kariéra**.
+  Ligová tabulka **zvýrazňuje pohárové/sestupové zóny** (barevný levý okraj + legenda, přes
+  `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL=positive, sestup=negative). Historie kariéry
+  ukazuje u každé sezóny **reputační zisk/ztrátu** (`reputationDeltas` = přehrání od `STARTING_REPUTATION`).
+  Reálná loga přes `TeamLogo`. Stránka `app/hra/`, nav 🎮, `/hra` v sitemap.
+- **Možná rozšíření (TODO):** Phase 3 (refaktor SaveState + klubový pohár/Liga mistrů) a Phase 4
+  (reprezentační pohár Euro/MS) z roadmapy; dále rozpočet.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
 
 ## PWA (instalace na iOS/Android)

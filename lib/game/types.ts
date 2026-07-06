@@ -1,8 +1,33 @@
 // Typy herního modulu „Manažer" (klubový simulátor ligy). Čistě serializovatelné –
 // celý SaveState putuje do DB (Json) bez ztráty. Žádné metody/třídy.
 
-/** Taktika tvého týmu – jediná páka, kterou hráč posouvá sílu útoku/obrany. */
-export type Tactic = "attack" | "balanced" | "defense";
+/**
+ * Zápasový plán tvého týmu – hlavní páka trenéra. Proti stylu soupeře funguje jako
+ * counter (správný protitah = výhoda, špatný = postih; viz plans.ts).
+ */
+export type Plan = "balanced" | "open" | "low_block" | "press" | "counter";
+
+/** Sezónní cíl vedení klubu (dle očekávaného umístění). Splnění → bonus k reputaci. */
+export interface Objective {
+  kind: "title" | "europe" | "midtable" | "survival";
+  /** Umístění, které je třeba dosáhnout (met = yourRank ≤ targetRank). */
+  targetRank: number;
+  text: string;
+}
+
+/** Dočasný modifikátor λ z náhodného eventu (platí do daného kola včetně). */
+export interface Modifier {
+  untilRound: number;
+  attack?: number;
+  concede?: number;
+  label: string;
+}
+
+/** Nevyřešený náhodný event navázaný na kolo (choices žijí v registru events.ts). */
+export interface PendingEvent {
+  id: string;
+  round: number;
+}
 
 /** Tým v lize = dvě čísla (síla útoku/obrany) + kosmetika pro odznak/logo. */
 export interface GameTeam {
@@ -97,6 +122,8 @@ export interface SeasonSummary {
   relegated: boolean;
   championId: number;
   championName: string;
+  /** Byl splněn sezónní cíl vedení? (bonus k reputaci) */
+  objectiveMet: boolean;
 }
 
 /** Stav probíhající sezóny. */
@@ -116,8 +143,16 @@ export interface SeasonState {
   results: MatchResult[];
   /** Index dalšího kola k odehrání (= schedule.length když je sezóna dohraná). */
   round: number;
-  /** Zvolená taktika pro nejbližší zápas tvého týmu. */
-  tactic: Tactic;
+  /** Zvolený zápasový plán pro nejbližší zápas tvého týmu. */
+  plan: Plan;
+  /** Morálka/momentum týmu 0–100 (start 50) – ovlivňuje λ. */
+  morale: number;
+  /** Sezónní cíl vedení (fixní pro celou sezónu). */
+  objective: Objective;
+  /** Aktivní dočasné modifikátory z eventů. */
+  modifiers: Modifier[];
+  /** Nevyřešený event pro aktuální kolo (nutno zvolit před odehráním), nebo null. */
+  pendingEvent: PendingEvent | null;
 }
 
 /** Kariérní profil trenéra (napříč sezónami). */
@@ -127,7 +162,7 @@ export interface Manager {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {

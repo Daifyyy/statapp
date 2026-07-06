@@ -27,18 +27,9 @@ export function expectedRank(team: GameTeam, league: GameTeam[]): number {
   return sorted.findIndex((t) => t.id === team.id) + 1;
 }
 
-/** Reputace na startu kariéry = prestiž prvního zvoleného týmu. */
-export function initialReputation(
-  team: GameTeam,
-  leagueId: number,
-  league: GameTeam[]
-): number {
-  return teamPrestige(team, leagueId, league);
-}
-
 /**
- * Nová reputace po sezóně. Kombinuje výsledek (poháry/sestup) a over/under-performance
- * vůči očekávanému umístění. Plynulá změna, clamp 0–100.
+ * Nová reputace po sezóně. Kombinuje výsledek (poháry/sestup), over/under-performance
+ * vůči očekávanému umístění a splnění sezónního cíle. Plynulá změna, clamp 0–100.
  */
 export function updateReputation(
   prev: number,
@@ -47,9 +38,10 @@ export function updateReputation(
   const euroRep = EUROPE_REP[summary.europe];
   const championRep = summary.champion ? 6 : 0;
   const relegRep = summary.relegated ? -12 : 0;
+  const objectiveRep = summary.objectiveMet ? 3 : 0;
   // Kladné = skončil jsi líp, než se čekalo (nižší rank = lepší).
   const performance = clamp(summary.expectedRank - summary.yourRank, -10, 10);
-  const delta = euroRep + championRep + relegRep + performance * 0.6;
+  const delta = euroRep + championRep + relegRep + objectiveRep + performance * 0.6;
   return clamp(Math.round(prev + delta), 0, 100);
 }
 

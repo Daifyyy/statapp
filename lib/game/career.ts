@@ -3,7 +3,7 @@
 
 import { deriveSeed, mulberry32 } from "./rng";
 import { newSeason, currentTable } from "./engine";
-import { teamById } from "./teams";
+import { teamById, amplifySpread } from "./teams";
 import { evaluateSeason } from "./leagues";
 import { expectedRank } from "./reputation";
 import {
@@ -51,6 +51,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
     relegated: verdict.relegated,
     championId: champion.teamId,
     championName: teamById(state.teams, champion.teamId).name,
+    objectiveMet: you.rank <= state.objective.targetRank,
   };
 }
 
@@ -62,7 +63,7 @@ function driftTeams(teams: GameTeam[], seed: number): GameTeam[] {
   const rand = mulberry32(seed);
   const midAttack = (ATTACK_MIN + ATTACK_MAX) / 2;
   const midDefense = (DEFENSE_BEST + DEFENSE_WORST) / 2;
-  return teams.map((t) => {
+  const drifted = teams.map((t) => {
     const attack = clamp(
       t.attack + (midAttack - t.attack) * 0.1 + (rand() - 0.5) * 0.25,
       ATTACK_MIN,
@@ -75,6 +76,8 @@ function driftTeams(teams: GameTeam[], seed: number): GameTeam[] {
     );
     return { ...t, attack: round2(attack), defense: round2(defense) };
   });
+  // Znovu roztáhnout rozptyl, aby regrese ke středu mezisezónně nesmyla rozdíly sil.
+  return amplifySpread(drifted);
 }
 
 /** Spustí další sezónu se STEJNÝM týmem i ligou (driftnuté ratingy, nový rozpis). */

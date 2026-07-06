@@ -2,7 +2,7 @@
 // evropské poháry a sestup jako HODNOCENÍ sezóny (labely) – žádná zvlášť hraná soutěž.
 // Prahy se ladí tady; čisté funkce (testovatelné).
 
-import type { EuropeSpot, GameTeam } from "./types";
+import type { EuropeSpot, GameTeam, Objective } from "./types";
 
 /** Ligy nabízené ve hře (Top-5 + pár dalších). id = reálné league id z katalogu. */
 export const GAME_LEAGUES: {
@@ -19,6 +19,10 @@ export const GAME_LEAGUES: {
   { id: 61, name: "Ligue 1", country: "Francie", prestige: 80 },
   { id: 94, name: "Primeira Liga", country: "Portugalsko", prestige: 66 },
   { id: 88, name: "Eredivisie", country: "Nizozemsko", prestige: 64 },
+  { id: 144, name: "Jupiler Pro League", country: "Belgie", prestige: 58 },
+  { id: 179, name: "Premiership", country: "Skotsko", prestige: 52 },
+  { id: 218, name: "Bundesliga", country: "Rakousko", prestige: 50 },
+  { id: 197, name: "Super League", country: "Řecko", prestige: 50 },
   { id: 345, name: "Fortuna Liga", country: "Česko", prestige: 44 },
 ];
 
@@ -60,6 +64,14 @@ const LEAGUE_ACCESS: Record<number, LeagueAccess> = {
   94: { slots: euro([["UCL", 1], ["UCL_Q", 1], ["UEL", 1], ["UECL_Q", 1]]), relegBottom: 2 },
   // Nizozemsko: mistr do ligové fáze, 2. předkolo LM, 3. EL předkolo, 4. EKL předkolo.
   88: { slots: euro([["UCL", 1], ["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
+  // Belgie: mistr do předkola LM, 2. předkolo EL, 3. předkolo EKL.
+  144: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 3 },
+  // Skotsko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
+  179: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 1 },
+  // Rakousko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
+  218: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
+  // Řecko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
+  197: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
   // Česko (Fortuna liga): mistr PŘEDKOLO LM, 2. předkolo EL, 3. předkolo EKL.
   345: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
   // Fiktivní liga (mock): jednoduchý generický klíč.
@@ -134,6 +146,40 @@ export function seasonTone(s: {
 /** Skóre síly týmu (útok − obrana). Vyšší = lepší. */
 export function teamStrengthScore(team: GameTeam): number {
   return team.attack - team.defense;
+}
+
+/**
+ * Hvězdy 1–5 dle PERCENTILU síly týmu v jeho lize (ne absolutní práh). Nejsilnější tým
+ * ligy ~5★, nejslabší ~1★, střed ~3★ – rozprostřené i pro slabé ligy.
+ */
+export function leagueStars(team: GameTeam, league: GameTeam[]): number {
+  const mine = teamStrengthScore(team);
+  const below = league.filter((t) => teamStrengthScore(t) < mine).length;
+  const pct = league.length > 1 ? below / (league.length - 1) : 0.5; // 0 (dno) .. 1 (top)
+  return Math.max(1, Math.min(5, Math.round(pct * 4) + 1));
+}
+
+/**
+ * Sezónní cíl vedení dle očekávaného umístění (síla týmu v lize) a UEFA/sestupového
+ * klíče ligy. Splnění (yourRank ≤ targetRank) dá bonus k reputaci.
+ */
+export function seasonObjective(team: GameTeam, league: GameTeam[], leagueId: number): Objective {
+  const size = league.length;
+  const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+  const exp = sorted.findIndex((t) => t.id === team.id) + 1;
+  const a = accessFor(leagueId, size);
+  const euroSlots = Math.max(1, a.slots.length);
+  const safe = size - a.relegBottom; // poslední bezpečné místo
+  if (exp === 1) return { kind: "title", targetRank: 1, text: "Vyhraj ligu 🏆" };
+  if (exp <= euroSlots)
+    return {
+      kind: "europe",
+      targetRank: euroSlots,
+      text: `Probojuj se do Evropy (do ${euroSlots}. místa)`,
+    };
+  if (exp > safe)
+    return { kind: "survival", targetRank: safe, text: "Zachraň se — vyhni se sestupu" };
+  return { kind: "midtable", targetRank: exp, text: `Potvrď sílu — skonči do ${exp}. místa` };
 }
 
 /**

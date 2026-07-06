@@ -35,7 +35,11 @@ const seasonSchema = z
     schedule: z.array(z.array(z.object({}).passthrough())).max(60),
     results: z.array(z.object({}).passthrough()).max(2000),
     round: z.number().int().min(0).max(60),
-    tactic: z.enum(["attack", "balanced", "defense"]),
+    plan: z.enum(["balanced", "open", "low_block", "press", "counter"]),
+    morale: z.number(),
+    objective: z.object({}).passthrough(),
+    modifiers: z.array(z.object({}).passthrough()).max(50),
+    pendingEvent: z.object({}).passthrough().nullable(),
   })
   .passthrough();
 

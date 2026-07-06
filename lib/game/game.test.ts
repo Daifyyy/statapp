@@ -1,28 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { generateLeague, LEAGUE_SIZE, standingsToTeams } from "./teams";
-import { evaluateSeason, teamPrestige } from "./leagues";
-import {
-  expectedRank,
-  initialReputation,
-  updateReputation,
-  isHireable,
-} from "./reputation";
+import { generateLeague, LEAGUE_SIZE, standingsToTeams, amplifySpread } from "./teams";
+import { evaluateSeason, teamPrestige, leagueStars, seasonObjective, teamStrengthScore } from "./leagues";
+import { expectedRank, updateReputation, isHireable } from "./reputation";
 import { teamSeasonStats } from "./analysis";
 import { cleanSheetsOf } from "./career";
 import { roundRobin } from "./schedule";
 import { buildTable } from "./standings";
-import { matchLambdas, predictProbs, simulateMatch } from "./simulate";
+import { matchLambdas, predictProbs, simulateMatch, NEUTRAL_ADJUST } from "./simulate";
 import {
   newSeason,
   simulateToEnd,
   isSeasonOver,
   currentTable,
-  setTactic,
+  setPlan,
   yourNextMatch,
 } from "./engine";
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
+import { resolvePlan } from "./plans";
+import { moraleFactor, updateMorale } from "./morale";
+import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
 import { mulberry32 } from "./rng";
-import type { MatchResult } from "./types";
+import type { GameTeam, MatchResult, SeasonState } from "./types";
 
 describe("generateLeague", () => {
   it("dá 20 týmů s validními ratingy a je deterministická", () => {
@@ -112,9 +110,9 @@ describe("simulate", () => {
   it("silnější útok → vyšší λ; predikce 1X2 dá součet 1", () => {
     const strong = { id: 1, name: "A", short: "A", color: "#000", attack: 2.2, defense: 0.8, homeBoost: 1.1 };
     const weak = { id: 2, name: "B", short: "B", color: "#000", attack: 1.0, defense: 1.7, homeBoost: 1.1 };
-    const [lh, la] = matchLambdas(strong, weak, "balanced", "balanced");
+    const [lh, la] = matchLambdas(strong, weak);
     expect(lh).toBeGreaterThan(la);
-    const p = predictProbs(strong, weak, "balanced", "balanced");
+    const p = predictProbs(strong, weak);
     expect(p.homeWin + p.draw + p.awayWin).toBeCloseTo(1, 6);
     expect(p.homeWin).toBeGreaterThan(p.awayWin);
   });
@@ -122,13 +120,13 @@ describe("simulate", () => {
   it("vysamplované skóre dlouhodobě sedí na λ", () => {
     const a = { id: 1, name: "A", short: "A", color: "#000", attack: 1.6, defense: 1.2, homeBoost: 1.0 };
     const b = { id: 2, name: "B", short: "B", color: "#000", attack: 1.6, defense: 1.2, homeBoost: 1.0 };
-    const [lh, la] = matchLambdas(a, b, "balanced", "balanced");
+    const [lh, la] = matchLambdas(a, b);
     const rand = mulberry32(42);
     const N = 8000;
     let sumH = 0;
     let sumA = 0;
     for (let i = 0; i < N; i++) {
-      const r = simulateMatch(a, b, "balanced", "balanced", rand);
+      const r = simulateMatch(a, b, NEUTRAL_ADJUST, NEUTRAL_ADJUST, rand);
       expect(r.homeGoals).toBeGreaterThanOrEqual(0);
       expect(r.awayGoals).toBeGreaterThanOrEqual(0);
       sumH += r.homeGoals;
@@ -138,13 +136,15 @@ describe("simulate", () => {
     expect(sumA / N).toBeCloseTo(la, 1);
   });
 
-  it("útočná taktika zvýší očekávané góly na obou stranách oproti defenzivní", () => {
+  it("otevřená hra zvýší očekávané góly na obou stranách oproti nízkému bloku", () => {
     const a = { id: 1, name: "A", short: "A", color: "#000", attack: 1.5, defense: 1.2, homeBoost: 1.0 };
     const b = { id: 2, name: "B", short: "B", color: "#000", attack: 1.5, defense: 1.2, homeBoost: 1.0 };
-    const [ahH, ahA] = matchLambdas(a, b, "attack", "balanced");
-    const [dfH, dfA] = matchLambdas(a, b, "defense", "balanced");
-    expect(ahH).toBeGreaterThan(dfH); // víc dáš
-    expect(ahA).toBeGreaterThan(dfA); // ale i víc dostaneš
+    const open = resolvePlan("open", "balanced");
+    const block = resolvePlan("low_block", "balanced");
+    const [ohH, ohA] = matchLambdas(a, b, open, NEUTRAL_ADJUST);
+    const [blH, blA] = matchLambdas(a, b, block, NEUTRAL_ADJUST);
+    expect(ohH).toBeGreaterThan(blH); // víc dáš
+    expect(ohA).toBeGreaterThan(blA); // ale i víc dostaneš (soupeř těží z tvé otevřenosti)
   });
 });
 
@@ -164,20 +164,21 @@ describe("engine – sezóna", () => {
     expect(totalPoints).toBe(380 * 3 - draws);
   });
 
-  it("je deterministická (stejný seed + taktika = stejné výsledky)", () => {
+  it("je deterministická (stejný seed + plán = stejné výsledky)", () => {
     const a = simulateToEnd(newSeason(55, 3));
     const b = simulateToEnd(newSeason(55, 3));
     expect(a.results).toEqual(b.results);
   });
 
-  it("yourNextMatch vrací zápas tvého týmu s predikcí", () => {
-    const s = setTactic(newSeason(9, 5), "attack");
+  it("yourNextMatch vrací zápas tvého týmu s predikcí a scoutem", () => {
+    const s = setPlan(newSeason(9, 5), "open");
     const next = yourNextMatch(s);
     expect(next).not.toBeNull();
     expect(
       next!.fixture.homeId === 5 || next!.fixture.awayId === 5
     ).toBe(true);
     expect(next!.probs.homeWin + next!.probs.draw + next!.probs.awayWin).toBeCloseTo(1, 6);
+    expect(["attacking", "defensive", "balanced"]).toContain(next!.scout.style);
   });
 
   it("silnější tým vyhraje titul výrazně častěji než slabý", () => {
@@ -303,6 +304,7 @@ describe("reputation", () => {
       relegated: false,
       championId: 1,
       championName: "A",
+      objectiveMet: true,
     });
     const releg = updateReputation(base, {
       season: 1,
@@ -324,6 +326,7 @@ describe("reputation", () => {
       relegated: true,
       championId: 2,
       championName: "B",
+      objectiveMet: false,
     });
     expect(win).toBeGreaterThan(base);
     expect(releg).toBeLessThan(base);
@@ -344,7 +347,6 @@ describe("reputation", () => {
       (a, b) => b.attack - b.defense - (a.attack - a.defense)
     )[0];
     expect(expectedRank(top, league)).toBe(1);
-    expect(initialReputation(top, 39, league)).toBeGreaterThan(0);
   });
 });
 
@@ -378,5 +380,132 @@ describe("standingsToTeams", () => {
     expect(alpha.logo).toBe("a.png");
     expect(alpha.short).toBe("AF"); // iniciály slov
     expect(alpha.homeBoost).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ───────────────────────── Phase 1: realismus ─────────────────────────
+
+describe("amplifySpread + leagueStars (realismus)", () => {
+  it("roztáhne rozptyl kolem průměru (zachová pořadí, zvětší rozestup)", () => {
+    const flat: GameTeam[] = [
+      { id: 1, name: "T1", short: "T1", color: "#000", attack: 1.6, defense: 1.2, homeBoost: 1.1 },
+      { id: 2, name: "T2", short: "T2", color: "#000", attack: 1.4, defense: 1.2, homeBoost: 1.1 },
+      { id: 3, name: "T3", short: "T3", color: "#000", attack: 1.2, defense: 1.2, homeBoost: 1.1 },
+    ];
+    const spread = amplifySpread(flat);
+    // Pořadí síly zachováno
+    expect(spread[0].attack).toBeGreaterThan(spread[1].attack);
+    expect(spread[1].attack).toBeGreaterThan(spread[2].attack);
+    // Rozestup top↔dno se zvětšil (SPREAD>1)
+    const before = flat[0].attack - flat[2].attack;
+    const after = spread[0].attack - spread[2].attack;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it("generovaná liga je po roztažení výrazně rozvrstvená (top nad spodní třetinou)", () => {
+    const league = generateLeague(7);
+    const scores = league.map(teamStrengthScore).sort((a, b) => b - a);
+    const topAvg = (scores[0] + scores[1]) / 2;
+    const bottomThird = scores.slice(-Math.ceil(scores.length / 3));
+    const bottomAvg = bottomThird.reduce((a, b) => a + b, 0) / bottomThird.length;
+    expect(topAvg).toBeGreaterThan(bottomAvg + 0.6);
+  });
+
+  it("leagueStars dá rozprostřené 1–5 (nejsilnější 5, nejslabší 1)", () => {
+    const league = generateLeague(3);
+    const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    expect(leagueStars(sorted[0], league)).toBe(5);
+    expect(leagueStars(sorted[sorted.length - 1], league)).toBe(1);
+    for (const t of league) {
+      const s = leagueStars(t, league);
+      expect(s).toBeGreaterThanOrEqual(1);
+      expect(s).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("seasonObjective: nejsilnější → titul, nejslabší → záchrana", () => {
+    const league = generateLeague(9);
+    const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    expect(seasonObjective(sorted[0], league, 39).kind).toBe("title");
+    expect(seasonObjective(sorted[sorted.length - 1], league, 39).kind).toBe("survival");
+  });
+});
+
+// ───────────────────────── Phase 2: agency ─────────────────────────
+
+describe("plans – countery", () => {
+  it("kontry proti ofenzivnímu soupeři = útok nahoru, obdržené dolů vs neutrál", () => {
+    const vsAtk = resolvePlan("counter", "attacking");
+    const vsBal = resolvePlan("counter", "balanced");
+    expect(vsAtk.attack).toBeGreaterThan(vsBal.attack);
+    expect(vsAtk.concede).toBeLessThan(vsBal.concede);
+  });
+
+  it("presink proti ofenzivnímu soupeři zvedne riziko (víc obdržených)", () => {
+    const vsAtk = resolvePlan("press", "attacking");
+    const vsDef = resolvePlan("press", "defensive");
+    expect(vsAtk.concede).toBeGreaterThan(vsDef.concede);
+  });
+
+  it("balanced je bez counteru (neutrál napříč styly)", () => {
+    const a = resolvePlan("balanced", "attacking");
+    const b = resolvePlan("balanced", "defensive");
+    expect(a).toEqual(b);
+  });
+});
+
+describe("morale", () => {
+  it("moraleFactor roste s morálkou (100 > 50 > 0)", () => {
+    expect(moraleFactor(100)).toBeGreaterThan(moraleFactor(50));
+    expect(moraleFactor(50)).toBeGreaterThan(moraleFactor(0));
+    expect(moraleFactor(50)).toBeCloseTo(1, 6);
+  });
+
+  it("updateMorale: výhra zvedá, prohra sráží, clamp 0–100", () => {
+    expect(updateMorale(50, "W", false)).toBeGreaterThan(50);
+    expect(updateMorale(50, "L", false)).toBeLessThan(50);
+    expect(updateMorale(100, "W", true)).toBeLessThanOrEqual(100);
+    expect(updateMorale(0, "L", false)).toBeGreaterThanOrEqual(0);
+    // Překvapivá výhra nad silnějším > obyčejná výhra
+    expect(updateMorale(50, "W", true)).toBeGreaterThan(updateMorale(50, "W", false));
+  });
+});
+
+describe("events", () => {
+  it("maybeEvent je deterministický dle seedu+kola", () => {
+    expect(maybeEvent(123, 4)).toEqual(maybeEvent(123, 4));
+    // Napříč koly aspoň někdy event nastane
+    let hits = 0;
+    for (let r = 0; r < 38; r++) if (maybeEvent(123, r)) hits++;
+    expect(hits).toBeGreaterThan(0);
+    // Vrácené id existuje v registru
+    const ev = maybeEvent(123, 4);
+    if (ev) expect(getEvent(ev.id)).toBeDefined();
+  });
+
+  it("applyEventChoice mění morálku/modifikátory a čistí pendingEvent", () => {
+    const base = newSeason(50, 1);
+    const withEvent: SeasonState = {
+      ...base,
+      pendingEvent: { id: EVENTS[0].id, round: base.round },
+      morale: 50,
+      modifiers: [],
+    };
+    const after = applyEventChoice(withEvent, 0);
+    expect(after.pendingEvent).toBeNull();
+    // Aspoň jeden efekt (morálka nebo modifikátor) se projevil
+    const changed = after.morale !== 50 || after.modifiers.length > 0;
+    expect(changed).toBe(true);
+  });
+});
+
+describe("objective v souhrnu", () => {
+  it("summarizeSeason nese objectiveMet a splněný cíl zvedne reputaci", () => {
+    const s = simulateToEnd(newSeason(11, 2));
+    const summary = summarizeSeason(s);
+    expect(typeof summary.objectiveMet).toBe("boolean");
+    const met = updateReputation(50, { ...summary, objectiveMet: true });
+    const missed = updateReputation(50, { ...summary, objectiveMet: false });
+    expect(met).toBeGreaterThan(missed);
   });
 });
