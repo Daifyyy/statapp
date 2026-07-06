@@ -11,6 +11,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { path: "/porovnani", priority: 0.9, changeFrequency: "daily" },
     { path: "/predikce", priority: 0.8, changeFrequency: "daily" },
     { path: "/transfers", priority: 0.6, changeFrequency: "weekly" },
+    { path: "/hra", priority: 0.7, changeFrequency: "weekly" },
   ];
   return routes.map((r) => ({
     url: `${BASE}${r.path}`,

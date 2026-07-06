@@ -34,6 +34,8 @@ import {
 import { selectCurrentInjuries } from "./injuries";
 import { computeLeagueGoalsAvg, pickTeamStanding } from "./standings";
 import { pickTeamScorers } from "./scorers";
+import { standingsToTeams } from "@/lib/game/teams";
+import type { GameTeam } from "@/lib/game/types";
 import {
   CLUB_LEAGUES,
   CURRENT_SEASON,
@@ -215,13 +217,53 @@ export async function getLeagueStanding(
   }
 }
 
-/** Syrová ligová tabulka přes per-liga TTL cache (`standings:<liga>:<sezóna>`). */
-function cachedLeagueStandings(leagueId: number): Promise<ApiStandingRow[]> {
-  return cachedJson(
-    `standings:${leagueId}:${CURRENT_SEASON}`,
-    STANDINGS_TTL,
-    () => fetchLeagueStandings(leagueId, CURRENT_SEASON)
+/**
+ * Reálné týmy ligy s herními ratingy útoku/obrany (herní modul „Manažer"). Odvozeno
+ * z ligové tabulky (góly na zápas + home split) přes **1 cachované volání** (sdílí
+ * `standings:` cache se záložkou Tabulka). Žádné drahé per-zápas fetche.
+ */
+export async function getLeagueGameTeams(leagueId: number): Promise<GameTeam[]> {
+  let raw = await cachedLeagueStandings(leagueId);
+  // Mezisezóna: aktuální tabulka je prázdná (0 odehraných) → ratingy by byly všechny
+  // stejné (ligový průměr). Spadni na PŘEDCHOZÍ sezónu, ať mají týmy reálné síly.
+  const totalPlayed = raw.reduce((s, r) => s + (r.all?.played ?? 0), 0);
+  if (totalPlayed === 0) {
+    const prev = await cachedLeagueStandingsFor(leagueId, PREVIOUS_SEASON).catch(
+      () => [] as ApiStandingRow[]
+    );
+    if (prev.length) raw = prev;
+  }
+  const avg = computeLeagueGoalsAvg(raw);
+  return standingsToTeams(
+    raw.map((r) => ({
+      teamId: r.team.id,
+      name: r.team.name,
+      logo: r.team.logo,
+      played: r.all?.played ?? 0,
+      goalsFor: r.all?.goals?.for ?? 0,
+      goalsAgainst: r.all?.goals?.against ?? 0,
+      homePlayed: r.home?.played ?? 0,
+      homeGoalsFor: r.home?.goals?.for ?? 0,
+    })),
+    avg
   );
+}
+
+/** Syrová ligová tabulka dané sezóny přes per-liga TTL cache. */
+function cachedLeagueStandingsFor(
+  leagueId: number,
+  season: number
+): Promise<ApiStandingRow[]> {
+  return cachedJson(
+    `standings:${leagueId}:${season}`,
+    STANDINGS_TTL,
+    () => fetchLeagueStandings(leagueId, season)
+  );
+}
+
+/** Syrová ligová tabulka aktuální sezóny (`standings:<liga>:<sezóna>`). */
+function cachedLeagueStandings(leagueId: number): Promise<ApiStandingRow[]> {
+  return cachedLeagueStandingsFor(leagueId, CURRENT_SEASON);
 }
 
 /**

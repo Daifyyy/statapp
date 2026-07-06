@@ -86,6 +86,7 @@ model User {
   accounts         Account[]
   sessions         Session[]
   savedComparisons SavedComparison[]
+  gameSave         GameSave?
 }
 
 model Account {
@@ -230,4 +231,16 @@ model SavedComparison {
 
   @@unique([userId, homeTeamId, awayTeamId, homeLeagueId, awayLeagueId])
   @@index([userId, savedAt])
+}
+
+/// Uložená rozehraná hra „Manažer" (klubový simulátor ligy) – vázaná na profil.
+/// Jeden save na uživatele; celý SaveState (sezóna + historie kariéry) jako JSON.
+/// Herní modul je offline/samostatný – nesahá na predikční ani cache tabulky.
+model GameSave {
+  userId    String   @id
+  /// Celý SaveState (lib/game/types.ts) – aktuální sezóna + kompaktní historie sezón.
+  state     Json
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

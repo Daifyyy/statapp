@@ -38,6 +38,7 @@ export function ZapasyApp({
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
+          { href: "/hra", label: "Hra", emoji: "🎮" },
         ]}
       />
 

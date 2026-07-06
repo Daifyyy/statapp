@@ -10,6 +10,7 @@
   --away: #f97316; /* hostující tým */
   --warning: #d97706;
   --positive: #16a34a;
+  --negative: #dc2626;
 }
 
 @theme inline {
@@ -22,6 +23,7 @@
   --color-away: var(--away);
   --color-warning: var(--warning);
   --color-positive: var(--positive);
+  --color-negative: var(--negative);
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial,
     sans-serif;
@@ -37,6 +39,7 @@
   --border: #232a35;
   --home: #3b82f6;
   --away: #fb923c;
+  --negative: #f87171;
 }
 
 body {

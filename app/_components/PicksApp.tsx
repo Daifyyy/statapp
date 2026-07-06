@@ -148,6 +148,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
           { href: "/digest", label: "Tipy týdne", emoji: "🔥" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
+          { href: "/hra", label: "Hra", emoji: "🎮" },
         ]}
       />
 
