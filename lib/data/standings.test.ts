@@ -79,6 +79,28 @@ describe("deriveLeagueAccess", () => {
     });
   });
 
+  it("fázový split (nadstavba) se nepočítá jako sestup – jen skutečné sestupové příčky", () => {
+    // Ligy s nadstavbou (ČR/Skotsko/…) vrací víc skupin: základní tabulku s fázovými
+    // labely ("Championship round"/"Relegation Round") + evropskou a sestupovou podtabulku.
+    // Sestup smí počítat jen "Relegation"/"Relegation Playoffs", ne "Relegation Round".
+    const raw = [
+      // Základní 12týmová tabulka – jen fázový split, ŽÁDNÝ skutečný sestup.
+      ...Array.from({ length: 6 }, (_, i) =>
+        row(100 + i, i + 1, { description: "Championship round" })
+      ),
+      ...Array.from({ length: 6 }, (_, i) =>
+        row(200 + i, i + 7, { description: "Relegation Round" })
+      ),
+      // Evropská podtabulka.
+      row(1, 1, { description: "Champions League Qualification" }),
+      row(2, 2, { description: "Conference League Qualification" }),
+      // Sestupová podtabulka – 2 skutečné sestupové příčky.
+      row(3, 5, { description: "Relegation Playoffs" }),
+      row(4, 6, { description: "Relegation" }),
+    ];
+    expect(deriveLeagueAccess(raw)?.relegBottom).toBe(2);
+  });
+
   it("žádný řádek s rozpoznatelným popisem → null (fallback na kurátorovanou tabulku)", () => {
     const raw = [row(1, 1, { description: null }), row(2, 2, { description: undefined })];
     expect(deriveLeagueAccess(raw)).toBeNull();

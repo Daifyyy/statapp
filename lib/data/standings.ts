@@ -45,7 +45,10 @@ export function deriveLeagueAccess(raw: ApiStandingRow[]): LeagueAccess | null {
     else if (desc.includes("europa league")) spot = isQualifier ? "UEL_Q" : "UEL";
     else if (desc.includes("conference league")) spot = isQualifier ? "UECL_Q" : "UECL";
     if (spot) slots.push({ rank: row.rank, spot });
-    if (desc.includes("relegation")) relegBottom++;
+    // Skutečný sestup, ne fázový split. Ligy s nadstavbou (ČR/Skotsko/Belgie/…) značí
+    // spodní skupinu jako "Relegation Round"/"Relegation Group" – to je jen fáze sezóny,
+    // ne sestupová příčka. Počítej jen řádky bez "round"/"group".
+    if (desc.includes("relegation") && !/round|group/.test(desc)) relegBottom++;
   }
   if (slots.length === 0 && relegBottom === 0) return null;
   slots.sort((a, b) => a.rank - b.rank);
