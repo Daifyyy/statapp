@@ -11,6 +11,8 @@ import {
   ATTACK_MIN,
   DEFENSE_BEST,
   DEFENSE_WORST,
+  DRIFT_NOISE,
+  DRIFT_REGRESSION,
 } from "./balance";
 import type { GameTeam, MatchResult, SeasonState, SeasonSummary } from "./types";
 
@@ -30,7 +32,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
   const you = table.find((r) => r.teamId === state.yourTeamId)!;
   const champion = table[0];
   const yourTeam = teamById(state.teams, state.yourTeamId);
-  const verdict = evaluateSeason(you.rank, state.teams.length, state.leagueId);
+  const verdict = evaluateSeason(you.rank, state.teams.length, state.leagueId, state.leagueAccess);
   return {
     season: state.season,
     leagueId: state.leagueId,
@@ -65,12 +67,12 @@ function driftTeams(teams: GameTeam[], seed: number): GameTeam[] {
   const midDefense = (DEFENSE_BEST + DEFENSE_WORST) / 2;
   const drifted = teams.map((t) => {
     const attack = clamp(
-      t.attack + (midAttack - t.attack) * 0.1 + (rand() - 0.5) * 0.25,
+      t.attack + (midAttack - t.attack) * DRIFT_REGRESSION + (rand() - 0.5) * DRIFT_NOISE,
       ATTACK_MIN,
       ATTACK_MAX
     );
     const defense = clamp(
-      t.defense + (midDefense - t.defense) * 0.1 + (rand() - 0.5) * 0.25,
+      t.defense + (midDefense - t.defense) * DRIFT_REGRESSION + (rand() - 0.5) * DRIFT_NOISE,
       DEFENSE_BEST,
       DEFENSE_WORST
     );
@@ -108,6 +110,7 @@ export interface CareerStats {
   totalGoalsAgainst: number;
   avgGoalsFor: number;
   avgGoalsAgainst: number;
+  avgPPG: number;
   cleanSheets: number;
 }
 
@@ -124,6 +127,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
   let totalLoss = 0;
   let totalGoalsFor = 0;
   let totalGoalsAgainst = 0;
+  let totalPoints = 0;
   let cleanSheets = 0;
   let games = 0;
   for (const s of history) {
@@ -138,6 +142,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
     totalLoss += s.loss;
     totalGoalsFor += s.goalsFor;
     totalGoalsAgainst += s.goalsAgainst;
+    totalPoints += s.yourPoints;
     cleanSheets += s.cleanSheets;
     games += s.win + s.draw + s.loss;
   }
@@ -157,6 +162,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
     totalGoalsAgainst,
     avgGoalsFor: Math.round((totalGoalsFor / g) * 100) / 100,
     avgGoalsAgainst: Math.round((totalGoalsAgainst / g) * 100) / 100,
+    avgPPG: Math.round((totalPoints / g) * 100) / 100,
     cleanSheets,
   };
 }

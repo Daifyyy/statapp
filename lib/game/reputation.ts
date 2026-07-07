@@ -1,20 +1,22 @@
 // Reputace trenéra + job market. Reputace roste s úspěchem (titul, evropské poháry,
 // přeplnění očekávání) a klesá při sestupu/podvýkonu. Řídí, které týmy si tě najmou.
 // Čisté funkce (testovatelné). Prahy laditelné tady.
+//
+// ZÁMĚRNĚ NEIMPLEMENTOVÁNO: decay/"burnout" reputace na stropu 100 (dlouhá kariéra na
+// elitní úrovni zůstává navždy hireable, žádný tlak udržet formu). Vyžaduje produktové
+// rozhodnutí (jak přesně by decay měl fungovat, aby netrestal hráče jen za to, že je
+// dobrý), ne jen inženýrskou volbu — neimplementovat bez toho rozhodnutí.
 
 import { teamPrestige, teamStrengthScore } from "./leagues";
-import type { EuropeSpot, GameTeam, SeasonSummary } from "./types";
-
-/** Bonus k reputaci za evropskou příčku (základní fáze > předkolo). */
-const EUROPE_REP: Record<EuropeSpot, number> = {
-  UCL: 6,
-  UCL_Q: 4,
-  UEL: 3,
-  UEL_Q: 2,
-  UECL: 2,
-  UECL_Q: 1,
-  NONE: 0,
-};
+import {
+  CHAMPION_REP,
+  EUROPE_REP,
+  OBJECTIVE_MET_REP,
+  RELEGATION_REP,
+  REP_PERF_CLAMP,
+  REP_PERF_WEIGHT,
+} from "./balance";
+import type { GameTeam, SeasonSummary } from "./types";
 
 /** O kolik smí prestiž týmu přesáhnout reputaci, aby tě přesto najal (mírné natažení). */
 export const HIRE_MARGIN = 4;
@@ -36,12 +38,16 @@ export function updateReputation(
   summary: SeasonSummary
 ): number {
   const euroRep = EUROPE_REP[summary.europe];
-  const championRep = summary.champion ? 6 : 0;
-  const relegRep = summary.relegated ? -12 : 0;
-  const objectiveRep = summary.objectiveMet ? 3 : 0;
+  const championRep = summary.champion ? CHAMPION_REP : 0;
+  const relegRep = summary.relegated ? RELEGATION_REP : 0;
+  const objectiveRep = summary.objectiveMet ? OBJECTIVE_MET_REP : 0;
   // Kladné = skončil jsi líp, než se čekalo (nižší rank = lepší).
-  const performance = clamp(summary.expectedRank - summary.yourRank, -10, 10);
-  const delta = euroRep + championRep + relegRep + objectiveRep + performance * 0.6;
+  const performance = clamp(
+    summary.expectedRank - summary.yourRank,
+    -REP_PERF_CLAMP,
+    REP_PERF_CLAMP
+  );
+  const delta = euroRep + championRep + relegRep + objectiveRep + performance * REP_PERF_WEIGHT;
   return clamp(Math.round(prev + delta), 0, 100);
 }
 

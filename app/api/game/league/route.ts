@@ -20,10 +20,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Neznámá liga" }, { status: 400 });
 
   try {
-    const { teams } = await getGameLeague(id);
+    const { teams, leagueAccess } = await getGameLeague(id);
     if (teams.length < 2)
       return NextResponse.json({ error: "Liga zatím nemá data" }, { status: 503 });
-    return NextResponse.json({ teams });
+    return NextResponse.json({ teams, leagueAccess });
   } catch {
     return NextResponse.json({ error: "Nepodařilo se načíst ligu" }, { status: 502 });
   }

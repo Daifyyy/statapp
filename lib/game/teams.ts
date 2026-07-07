@@ -9,19 +9,17 @@ import {
   DEFENSE_WORST,
   HOME_BOOST_MAX,
   HOME_BOOST_MIN,
+  SHRINK_K,
   SPREAD,
+  SPREAD_ATTACK_MAX,
+  SPREAD_ATTACK_MIN,
+  SPREAD_DEFENSE_MAX,
+  SPREAD_DEFENSE_MIN,
 } from "./balance";
 import type { GameTeam } from "./types";
 
 /** Počet týmů v lize (38 kol). */
 export const LEAGUE_SIZE = 20;
-
-// Meze po roztažení rozptylu – širší než generační rozsah, ať SPREAD nekomprimuje
-// špičku zpět (λ je stejně stropované MAX_LAMBDA).
-const SPREAD_ATTACK_MIN = 0.4;
-const SPREAD_ATTACK_MAX = 3.4;
-const SPREAD_DEFENSE_MIN = 0.4;
-const SPREAD_DEFENSE_MAX = 3.2;
 
 /**
  * Roztáhne rozptyl sil ligy kolem jejího průměru (`rating' = mean + (rating−mean)·SPREAD`).
@@ -146,7 +144,7 @@ export interface RawStandingRow {
 }
 
 /** Shrink k ligovému průměru při malém vzorku (méně šumu na začátku sezóny). */
-function shrink(value: number, mean: number, n: number, k = 3): number {
+function shrink(value: number, mean: number, n: number, k = SHRINK_K): number {
   return (value * n + mean * k) / (n + k);
 }
 

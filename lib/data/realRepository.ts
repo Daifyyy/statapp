@@ -32,10 +32,10 @@ import {
   type MatchContext,
 } from "./cache";
 import { selectCurrentInjuries } from "./injuries";
-import { computeLeagueGoalsAvg, pickTeamStanding } from "./standings";
+import { computeLeagueGoalsAvg, deriveLeagueAccess, pickTeamStanding } from "./standings";
 import { pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
-import type { GameTeam } from "@/lib/game/types";
+import type { GameTeam, LeagueAccess } from "@/lib/game/types";
 import {
   CLUB_LEAGUES,
   CURRENT_SEASON,
@@ -222,7 +222,9 @@ export async function getLeagueStanding(
  * z ligové tabulky (góly na zápas + home split) přes **1 cachované volání** (sdílí
  * `standings:` cache se záložkou Tabulka). Žádné drahé per-zápas fetche.
  */
-export async function getLeagueGameTeams(leagueId: number): Promise<GameTeam[]> {
+export async function getLeagueGameTeams(
+  leagueId: number
+): Promise<{ teams: GameTeam[]; leagueAccess: LeagueAccess | null }> {
   let raw = await cachedLeagueStandings(leagueId);
   // Mezisezóna: aktuální tabulka je prázdná (0 odehraných) → ratingy by byly všechny
   // stejné (ligový průměr). Spadni na PŘEDCHOZÍ sezónu, ať mají týmy reálné síly.
@@ -234,7 +236,7 @@ export async function getLeagueGameTeams(leagueId: number): Promise<GameTeam[]> 
     if (prev.length) raw = prev;
   }
   const avg = computeLeagueGoalsAvg(raw);
-  return standingsToTeams(
+  const teams = standingsToTeams(
     raw.map((r) => ({
       teamId: r.team.id,
       name: r.team.name,
@@ -247,6 +249,7 @@ export async function getLeagueGameTeams(leagueId: number): Promise<GameTeam[]> 
     })),
     avg
   );
+  return { teams, leagueAccess: deriveLeagueAccess(raw) };
 }
 
 /** Syrová ligová tabulka dané sezóny přes per-liga TTL cache. */

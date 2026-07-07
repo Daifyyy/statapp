@@ -5,6 +5,12 @@
 import { teamById } from "./teams";
 import { teamStrengthScore } from "./leagues";
 import { teamSeasonStats } from "./analysis";
+import {
+  SCOUT_STRENGTH_GAP,
+  SCOUT_STYLE_GAP,
+  SCOUT_TRAIT_RATIO_HIGH,
+  SCOUT_TRAIT_RATIO_LOW,
+} from "./balance";
 import type { SeasonState } from "./types";
 
 /** Herní styl soupeře – vstup pro counter logiku plánu. */
@@ -54,16 +60,16 @@ export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
   const atkIndex = opp.attack - meanAtk;
   const defIndex = meanDef - opp.defense;
   const style: OppStyle =
-    atkIndex > defIndex + 0.1
+    atkIndex > defIndex + SCOUT_STYLE_GAP
       ? "attacking"
-      : defIndex > atkIndex + 0.1
+      : defIndex > atkIndex + SCOUT_STYLE_GAP
         ? "defensive"
         : "balanced";
 
   const traits: Trait[] = [];
-  if (opp.attack > meanAtk * 1.1) traits.push("strongAttack");
-  if (opp.defense > meanDef * 1.1) traits.push("weakDefense");
-  if (opp.defense < meanDef * 0.9) traits.push("solidDefense");
+  if (opp.attack > meanAtk * SCOUT_TRAIT_RATIO_HIGH) traits.push("strongAttack");
+  if (opp.defense > meanDef * SCOUT_TRAIT_RATIO_HIGH) traits.push("weakDefense");
+  if (opp.defense < meanDef * SCOUT_TRAIT_RATIO_LOW) traits.push("solidDefense");
 
   const stats = teamSeasonStats(state, oppId);
   const wins = stats.form.filter((f) => f === "W").length;
@@ -72,8 +78,8 @@ export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
   if (stats.form.length >= 3 && losses >= 3) traits.push("poorForm");
 
   const diff = teamStrengthScore(opp) - teamStrengthScore(you);
-  if (diff > 0.25) traits.push("favourite");
-  else if (diff < -0.25) traits.push("underdog");
+  if (diff > SCOUT_STRENGTH_GAP) traits.push("favourite");
+  else if (diff < -SCOUT_STRENGTH_GAP) traits.push("underdog");
 
   const traitText = traits.length
     ? traits.map((t) => TRAIT_LABEL[t]).join(", ")

@@ -131,6 +131,170 @@ export const EVENTS: GameEvent[] = [
       },
     ],
   },
+  {
+    id: "goalkeeper_injury",
+    title: "Zranění brankáře",
+    text: "Jednička v bráně vypadává na několik zápasů se svalovým zraněním.",
+    choices: [
+      {
+        label: "Nasadit mladou dvojku",
+        detail: "Nezkušenost může stát body.",
+        effect: {
+          moraleDelta: -2,
+          modifier: { concede: 1.07, rounds: 3, label: "Nezkušený gólman" },
+        },
+      },
+      {
+        label: "Přeorganizovat obranu",
+        detail: "Víc opatrnosti, míň risku vzadu.",
+        effect: {
+          modifier: { attack: 0.94, concede: 0.92, rounds: 3, label: "Kryjeme gólmana" },
+        },
+      },
+    ],
+  },
+  {
+    id: "captain_dispute",
+    title: "Spor s kapitánem",
+    text: "Kapitán nesouhlasí s tvým taktickým směřováním a chce to řešit veřejně.",
+    choices: [
+      {
+        label: "Postavit se za autoritu",
+        detail: "Ukážeš, kdo velí, šatna to sleduje.",
+        effect: { moraleDelta: -3 },
+      },
+      {
+        label: "Vyslyšet připomínky",
+        detail: "Ústupek zvedne náladu, ale oslabí tvé slovo.",
+        effect: {
+          moraleDelta: 6,
+          modifier: { concede: 1.04, rounds: 2, label: "Rozvolněná disciplína" },
+        },
+      },
+    ],
+  },
+  {
+    id: "reserve_reinforcement",
+    title: "Posila z rezervy",
+    text: "Hráč z rezervního týmu tě přesvědčil, že si zaslouží šanci v sestavě.",
+    choices: [
+      {
+        label: "Dát mu prostor",
+        detail: "Čerstvá krev, ale nesehraná sestava.",
+        effect: {
+          moraleDelta: 2,
+          modifier: { attack: 1.04, concede: 1.03, rounds: 2, label: "Nesehraná sestava" },
+        },
+      },
+      {
+        label: "Držet se osvědčené sestavy",
+        detail: "Jistota, žádná změna.",
+        effect: { moraleDelta: 0 },
+      },
+    ],
+  },
+  {
+    id: "clean_sheet_confidence",
+    title: "Sebevědomí v obraně",
+    text: "Obrana si v posledních zápasech věří jako nikdy — hráči chtějí risknout víc vepředu.",
+    choices: [
+      {
+        label: "Uvolnit obranu dopředu",
+        detail: "Víc ofenzivy z beků, riziko vzadu.",
+        effect: {
+          moraleDelta: 3,
+          modifier: { attack: 1.05, concede: 1.05, rounds: 2, label: "Útočící obrana" },
+        },
+      },
+      {
+        label: "Nechat obranu na svém místě",
+        detail: "Proč měnit to, co funguje.",
+        effect: { moraleDelta: 2 },
+      },
+    ],
+  },
+  {
+    id: "losing_streak_crisis",
+    title: "Krizová porada",
+    text: "Série proher tlačí na tým — vedení kabiny žádá okamžitou reakci.",
+    choices: [
+      {
+        label: "Tvrdý trénink navíc",
+        detail: "Zvýšíš nasazení, ale tým je unavený.",
+        effect: {
+          moraleDelta: -1,
+          modifier: { concede: 0.93, rounds: 2, label: "Utažená defenziva" },
+        },
+      },
+      {
+        label: "Uvolnit atmosféru",
+        detail: "Stmelovací večer místo dřiny — risk, že to nezabere.",
+        effect: { moraleDelta: 5 },
+      },
+    ],
+  },
+  {
+    id: "fan_protest",
+    title: "Fanouškovský protest",
+    text: "Část fanoušků si před stadionem stěžuje na výsledky a styl hry.",
+    choices: [
+      {
+        label: "Ignorovat tlak zvenčí",
+        detail: "Klid na práci, ale chladnější atmosféra.",
+        effect: { moraleDelta: -2 },
+      },
+      {
+        label: "Slíbit ofenzivnější fotbal",
+        detail: "Fanoušci spokojeni, závazek tě tlačí hrát nahoru.",
+        effect: {
+          moraleDelta: 4,
+          modifier: { attack: 1.05, concede: 1.04, rounds: 2, label: "Slib ofenzivy" },
+        },
+      },
+    ],
+  },
+  {
+    id: "derby_motivation",
+    title: "Derby na obzoru",
+    text: "Blíží se derby a celé město o ničem jiném nemluví.",
+    choices: [
+      {
+        label: "Vyhecovat kabinu",
+        detail: "Emoce nahoru, energie do zápasu.",
+        effect: {
+          moraleDelta: 5,
+          modifier: { attack: 1.06, rounds: 1, label: "Derby nasazení" },
+        },
+      },
+      {
+        label: "Držet chladnou hlavu",
+        detail: "Bez emočního výkyvu, žádné riziko.",
+        effect: { moraleDelta: 0 },
+      },
+    ],
+  },
+  {
+    id: "international_break_fatigue",
+    title: "Únava z reprezentační pauzy",
+    text: "Několik opor se vrátilo z reprezentace unavených a s nabušeným programem.",
+    choices: [
+      {
+        label: "Šetřit unavené hráče",
+        detail: "Míň sil vepředu, ale svěžejší nohy.",
+        effect: {
+          modifier: { attack: 0.93, rounds: 2, label: "Šetření po repre pauze" },
+        },
+      },
+      {
+        label: "Spolehnout se na profesionalitu",
+        detail: "Žádné šetření — riskuješ pokles výkonu.",
+        effect: {
+          moraleDelta: -1,
+          modifier: { concede: 1.05, rounds: 1, label: "Unavený tým" },
+        },
+      },
+    ],
+  },
 ];
 
 /** Vyhledá event dle id (pro UI render z pendingEvent). */

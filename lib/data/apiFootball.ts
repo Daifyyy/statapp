@@ -177,6 +177,10 @@ const standingRowSchema = z.object({
   points: z.number().nullable().optional(),
   goalsDiff: z.number().nullable().optional(),
   form: z.string().nullable().optional(),
+  // Popis místa přímo od API-Football (např. "Promotion - Champions League (Group
+  // Stage)", "Relegation - Relegation Play-offs") – zdroj pravdy pro odvození reálného
+  // UEFA/sestupového klíče, viz `deriveLeagueAccess` v standings.ts.
+  description: z.string().nullable().optional(),
   all: standingSplitSchema.optional(),
   home: standingSplitSchema.optional(),
   away: standingSplitSchema.optional(),

@@ -97,6 +97,19 @@ export type EuropeSpot =
   | "UECL_Q" // Konferenční liga – předkolo
   | "NONE"; // bez evropského poháru
 
+/**
+ * Access key ligy: které umístění vede do kterého poháru (a zda do ZÁKLADNÍ fáze nebo
+ * PŘEDKOLA) + kolik posledních míst sestupuje. Buď kurátorovaný fallback (`LEAGUE_ACCESS`
+ * v leagues.ts), nebo odvozený z reálných dat sezóny (`deriveLeagueAccess` v
+ * lib/data/standings.ts) a zachycený na `SeasonState.leagueAccess`.
+ */
+export interface LeagueAccess {
+  /** Umístění → evropská příčka (jen místa, která do Evropy vedou). */
+  slots: { rank: number; spot: EuropeSpot }[];
+  /** Kolik posledních míst sestupuje. */
+  relegBottom: number;
+}
+
 /** Kompaktní souhrn dohrané sezóny (do historie kariéry – ne všech ~380 zápasů). */
 export interface SeasonSummary {
   season: number;
@@ -153,6 +166,13 @@ export interface SeasonState {
   modifiers: Modifier[];
   /** Nevyřešený event pro aktuální kolo (nutno zvolit před odehráním), nebo null. */
   pendingEvent: PendingEvent | null;
+  /**
+   * Access key zachycený při výběru ligy – odvozený z reálné aktuální sezóny
+   * (`deriveLeagueAccess`), nebo `null` (mock režim / odvození selhalo → `evaluateSeason`
+   * padne na kurátorovaný fallback `LEAGUE_ACCESS`). Zachycen JEDNOU při startu sezóny,
+   * aby se v jejím průběhu neměnil, i kdyby se mezitím reálná tabulka posunula.
+   */
+  leagueAccess: LeagueAccess | null;
 }
 
 /** Kariérní profil trenéra (napříč sezónami). Per-kariéra (reset při „Nové kariéře"). */
@@ -205,7 +225,7 @@ export interface ManagerProfile {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {

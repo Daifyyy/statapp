@@ -44,6 +44,7 @@ import { leagueName as leagueNameFor } from "@/lib/game/leagues";
 import type {
   EarnedAchievement,
   GameTeam,
+  LeagueAccess,
   LeagueInfo,
   ManagerProfile,
   Plan,
@@ -67,16 +68,45 @@ interface ToastData {
   oppName: string;
   yourGoals: number;
   oppGoals: number;
+  /** Změna morálky za tento zápas (±), aby efekt výsledku nebyl jen tichá aktualizace baru. */
+  moraleDelta: number;
 }
 
-function saveEndpoint(next: SaveState) {
-  fetch("/api/game", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ state: next }),
-  }).catch(() => {
-    /* ticho: lokální stav je zdroj pravdy, další akce uloží znovu */
-  });
+/**
+ * Uloží stav na server. Vrací, zda uložení uspělo – volající při `false` zobrazí
+ * chybový banner s možností zkusit znovu (jinak by hráč mohl tiše přijít o postup,
+ * viz `onSaveError`/`saveError` v `HraApp`).
+ */
+async function saveEndpoint(next: SaveState): Promise<boolean> {
+  try {
+    const r = await fetch("/api/game", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state: next }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Migruje uložený save na aktuální SAVE_VERSION beze ztráty rozehrané kariéry. Appka
+ * běží živě (Vercel) → bump verze nesmí zahodit existující save, jen doplní nová pole.
+ * Neznámá/nižší než migrovaná verze → zahodit (nekompatibilní tvar).
+ */
+function migrateSave(raw: unknown): SaveState | null {
+  const save = raw as (SaveState & { version: number }) | null | undefined;
+  if (!save) return null;
+  if (save.version === SAVE_VERSION) return save;
+  if (save.version === 5) {
+    return {
+      ...save,
+      version: 6,
+      current: save.current ? { ...save.current, leagueAccess: null } : null,
+    };
+  }
+  return null;
 }
 
 function repTier(r: number): string {
@@ -94,6 +124,17 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+  const [hasUnseenAchievement, setHasUnseenAchievement] = useState(false);
+  /** Stav, který se nepodařilo uložit na server – zůstává, dokud "Zkusit znovu" neuspěje. */
+  const [saveError, setSaveError] = useState<SaveState | null>(null);
+
+  const trackSave = useCallback((next: SaveState) => {
+    saveEndpoint(next).then((ok) => setSaveError(ok ? null : next));
+  }, []);
+
+  const retrySave = useCallback(() => {
+    if (saveError) trackSave(saveError);
+  }, [saveError, trackSave]);
 
   useEffect(() => {
     if (!user) return;
@@ -104,9 +145,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         const d = await r.json();
         if (!active) return;
         if (!r.ok) throw new Error(d.error ?? "Chyba načtení");
-        setSave(
-          d.save && d.save.version === SAVE_VERSION ? (d.save as SaveState) : null
-        );
+        setSave(migrateSave(d.save));
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : "Chyba načtení");
       } finally {
@@ -119,9 +158,15 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   }, [user]);
 
   const startGame = useCallback(
-    (leagueId: number, leagueName: string, teams: GameTeam[], teamId: number) => {
+    (
+      leagueId: number,
+      leagueName: string,
+      teams: GameTeam[],
+      teamId: number,
+      leagueAccess: LeagueAccess | null
+    ) => {
       const seed = randomSeed();
-      const current = newSeason(seed, teamId, { teams, leagueId, leagueName });
+      const current = newSeason(seed, teamId, { teams, leagueId, leagueName, leagueAccess });
       setSave((prev) => {
         // Trvalý profil se zachová napříč kariérami; nová kariéra jen navýší počítadlo.
         const profile = startCareer(prev?.profile ?? emptyProfile());
@@ -133,52 +178,67 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           current,
           history: [],
         };
-        saveEndpoint(next);
+        trackSave(next);
         return next;
       });
       setView("season");
     },
-    []
+    [trackSave]
   );
 
   const mutateSeason = useCallback((fn: (s: SeasonState) => SeasonState) => {
     setSave((prev) => {
       if (!prev || !prev.current) return prev;
       const next = { ...prev, current: fn(prev.current) };
-      saveEndpoint(next);
+      trackSave(next);
       return next;
     });
-  }, []);
+  }, [trackSave]);
 
   const onPlayRound = useCallback(() => {
     setBusy(true);
-    setSave((prev) => {
-      if (!prev || !prev.current || isSeasonOver(prev.current)) return prev;
-      const after = playRound(prev.current);
-      const next = { ...prev, current: after };
-      saveEndpoint(next);
-      // Popup výsledku tvého zápasu (jen pro jednotlivé kolo, ne „Dohrát sezónu").
-      const r = yourResults(after)[0];
-      if (r) {
-        const isHome = r.homeId === after.yourTeamId;
-        const opp = teamById(after.teams, isHome ? r.awayId : r.homeId);
-        const data: ToastData = {
-          oppName: opp.name,
-          yourGoals: isHome ? r.homeGoals : r.awayGoals,
-          oppGoals: isHome ? r.awayGoals : r.homeGoals,
-        };
-        queueMicrotask(() => setToast(data));
-      }
-      return next;
-    });
-    setBusy(false);
-  }, []);
+    // setTimeout (ne přímo synchronně) nechá prohlížeč nejdřív vykreslit `busy`
+    // stav (spinner/disabled) – jinak React batchuje a "busy" se nikdy nezobrazí.
+    setTimeout(() => {
+      setSave((prev) => {
+        if (!prev || !prev.current || isSeasonOver(prev.current)) return prev;
+        const prevMorale = prev.current.morale;
+        const after = playRound(prev.current);
+        const next = { ...prev, current: after };
+        trackSave(next);
+        // Popup výsledku tvého zápasu (jen pro jednotlivé kolo, ne „Dohrát sezónu").
+        const r = yourResults(after)[0];
+        if (r) {
+          const isHome = r.homeId === after.yourTeamId;
+          const opp = teamById(after.teams, isHome ? r.awayId : r.homeId);
+          const data: ToastData = {
+            oppName: opp.name,
+            yourGoals: isHome ? r.homeGoals : r.awayGoals,
+            oppGoals: isHome ? r.awayGoals : r.homeGoals,
+            moraleDelta: after.morale - prevMorale,
+          };
+          queueMicrotask(() => setToast(data));
+        }
+        return next;
+      });
+      setBusy(false);
+    }, 0);
+  }, [trackSave]);
 
   const onSimulateToEnd = useCallback(() => {
+    const planLabel = save?.current ? PLAN_LABEL[save.current.plan] : "";
+    if (
+      !confirm(
+        `Dohrát celou sezónu s aktuálně zvoleným plánem (${planLabel})? Zbývající zápasy se odehrají najednou se stejným plánem, náhodné události se přeskočí a akci nejde vrátit zpět.`
+      )
+    )
+      return;
     setBusy(true);
-    mutateSeason((s) => simulateToEnd(s));
-    setBusy(false);
-  }, [mutateSeason]);
+    setTimeout(() => {
+      mutateSeason((s) => simulateToEnd(s));
+      setBusy(false);
+    }, 0);
+  }, [mutateSeason, save]);
 
   const onPlan = useCallback(
     (p: Plan) => mutateSeason((s) => setPlan(s, p)),
@@ -219,12 +279,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           current: buildNext(prev, prev.current),
           history: [...prev.history, summary],
         };
-        saveEndpoint(next);
+        trackSave(next);
+        if (earned.length > 0) setHasUnseenAchievement(true);
         return next;
       });
       setView("season");
     },
-    []
+    [trackSave]
   );
 
   const onContinue = useCallback(
@@ -233,12 +294,19 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   );
 
   const onSwitch = useCallback(
-    (leagueId: number, leagueName: string, teams: GameTeam[], teamId: number) =>
+    (
+      leagueId: number,
+      leagueName: string,
+      teams: GameTeam[],
+      teamId: number,
+      leagueAccess: LeagueAccess | null
+    ) =>
       finishAndAdvance((_prev, current) =>
         newSeason(randomSeed(), teamId, {
           teams,
           leagueId,
           leagueName,
+          leagueAccess,
           season: current.season + 1,
         })
       ),
@@ -260,11 +328,12 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         current: null,
         history: [],
       };
-      saveEndpoint(next);
+      trackSave(next);
       return next;
     });
     setView("season");
-  }, []);
+    setHasUnseenAchievement(false);
+  }, [trackSave]);
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
@@ -279,6 +348,19 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         <p className="mt-3 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-negative">
           {error}
         </p>
+      )}
+
+      {saveError && (
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-negative/40 bg-negative/10 px-3 py-2 text-sm text-negative">
+          <span>Nepodařilo se uložit postup. Zkontroluj připojení.</span>
+          <button
+            type="button"
+            onClick={retrySave}
+            className="shrink-0 rounded-full border border-negative/50 px-3 py-1 text-xs font-semibold hover:bg-negative/15"
+          >
+            Zkusit znovu
+          </button>
+        </div>
       )}
 
       {!user ? (
@@ -307,6 +389,8 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           onSwitch={onSwitch}
           onReset={onReset}
           onError={setError}
+          hasUnseenAchievement={hasUnseenAchievement}
+          onDismissUnseenAchievement={() => setHasUnseenAchievement(false)}
         />
       )}
 
@@ -352,6 +436,17 @@ function MatchResultToast({
         <span className="max-w-[45vw] truncate text-xs text-muted">
           vs {toast.oppName}
         </span>
+        {toast.moraleDelta !== 0 && (
+          <span
+            className={
+              "text-xs font-semibold tabular-nums " +
+              (toast.moraleDelta > 0 ? "text-positive" : "text-negative")
+            }
+          >
+            {toast.moraleDelta > 0 ? "+" : ""}
+            {toast.moraleDelta} morálka
+          </span>
+        )}
       </div>
     </div>
   );
@@ -417,21 +512,15 @@ function Stars({ n }: { n: number }) {
 
 // ───────────────────────── nová hra ─────────────────────────
 
-function NewGameFlow({
-  onStart,
-  onError,
-}: {
-  onStart: (
-    leagueId: number,
-    leagueName: string,
-    teams: GameTeam[],
-    teamId: number
-  ) => void;
-  onError: (e: string | null) => void;
-}) {
+/**
+ * Sdílená datová logika výběru liga→klub (dřív duplikovaná v `NewGameFlow` i
+ * `JobMarket`): fetch seznamu lig, fetch týmů zvolené ligy, reset zpět na seznam lig.
+ */
+function useLeaguePicker(onError: (e: string | null) => void) {
   const [leagues, setLeagues] = useState<LeagueInfo[] | null>(null);
   const [league, setLeague] = useState<LeagueInfo | null>(null);
   const [teams, setTeams] = useState<GameTeam[] | null>(null);
+  const [leagueAccess, setLeagueAccess] = useState<LeagueAccess | null>(null);
   const [loadingTeams, setLoadingTeams] = useState(false);
 
   useEffect(() => {
@@ -456,6 +545,7 @@ function NewGameFlow({
     async (l: LeagueInfo) => {
       setLeague(l);
       setTeams(null);
+      setLeagueAccess(null);
       setLoadingTeams(true);
       onError(null);
       try {
@@ -463,6 +553,7 @@ function NewGameFlow({
         const d = await r.json();
         if (!r.ok) throw new Error(d.error ?? "Chyba");
         setTeams(d.teams as GameTeam[]);
+        setLeagueAccess((d.leagueAccess as LeagueAccess | null) ?? null);
       } catch (e) {
         onError(e instanceof Error ? e.message : "Nepodařilo se načíst ligu.");
         setLeague(null);
@@ -473,6 +564,55 @@ function NewGameFlow({
     [onError]
   );
 
+  const backToLeagues = useCallback(() => {
+    setLeague(null);
+    setTeams(null);
+  }, []);
+
+  return { leagues, league, teams, leagueAccess, loadingTeams, pickLeague, backToLeagues };
+}
+
+/** Seznam lig k výběru (krok 1) – identický v `NewGameFlow` i `JobMarket`. */
+function LeagueList({
+  leagues,
+  onPick,
+}: {
+  leagues: LeagueInfo[];
+  onPick: (l: LeagueInfo) => void;
+}) {
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {leagues.map((l) => (
+        <button
+          key={l.id}
+          type="button"
+          onClick={() => onPick(l)}
+          className="flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-sm transition hover:border-foreground/30"
+        >
+          <span className="text-sm font-medium text-foreground">{l.name}</span>
+          <span className="text-xs text-muted">{l.country}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NewGameFlow({
+  onStart,
+  onError,
+}: {
+  onStart: (
+    leagueId: number,
+    leagueName: string,
+    teams: GameTeam[],
+    teamId: number,
+    leagueAccess: LeagueAccess | null
+  ) => void;
+  onError: (e: string | null) => void;
+}) {
+  const { leagues, league, teams, leagueAccess, loadingTeams, pickLeague, backToLeagues } =
+    useLeaguePicker(onError);
+
   if (!leagues) return <LoadingRows />;
 
   // Krok 2: výběr klubu ve zvolené lize.
@@ -481,10 +621,7 @@ function NewGameFlow({
       <div className="mt-5">
         <button
           type="button"
-          onClick={() => {
-            setLeague(null);
-            setTeams(null);
-          }}
+          onClick={backToLeagues}
           className="text-xs text-muted hover:text-foreground"
         >
           ← Zpět na ligy
@@ -511,7 +648,7 @@ function NewGameFlow({
                     key={t.id}
                     type="button"
                     disabled={!ok}
-                    onClick={() => onStart(league.id, league.name, teams, t.id)}
+                    onClick={() => onStart(league.id, league.name, teams, t.id, leagueAccess)}
                     className={
                       "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition " +
                       (ok
@@ -547,19 +684,7 @@ function NewGameFlow({
       <p className="mt-1 text-xs text-muted">
         Reálné týmy a jejich síla se berou z aktuální ligové tabulky.
       </p>
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {leagues.map((l) => (
-          <button
-            key={l.id}
-            type="button"
-            onClick={() => pickLeague(l)}
-            className="flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-sm transition hover:border-foreground/30"
-          >
-            <span className="text-sm font-medium text-foreground">{l.name}</span>
-            <span className="text-xs text-muted">{l.country}</span>
-          </button>
-        ))}
-      </div>
+      <LeagueList leagues={leagues} onPick={pickLeague} />
     </div>
   );
 }
@@ -580,6 +705,8 @@ function GameView({
   onSwitch,
   onReset,
   onError,
+  hasUnseenAchievement,
+  onDismissUnseenAchievement,
 }: {
   save: SaveState;
   managerName: string | null;
@@ -595,10 +722,13 @@ function GameView({
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
-    teamId: number
+    teamId: number,
+    leagueAccess: LeagueAccess | null
   ) => void;
   onReset: () => void;
   onError: (e: string | null) => void;
+  hasUnseenAchievement: boolean;
+  onDismissUnseenAchievement: () => void;
 }) {
   const s = save.current;
   if (!s) return null; // GameView se renderuje jen s aktivní kariérou
@@ -626,7 +756,14 @@ function GameView({
           <Segment active={view === "history"} onClick={() => setView("history")}>
             Kariéra
           </Segment>
-          <Segment active={view === "profile"} onClick={() => setView("profile")}>
+          <Segment
+            active={view === "profile"}
+            dot={hasUnseenAchievement}
+            onClick={() => {
+              setView("profile");
+              onDismissUnseenAchievement();
+            }}
+          >
             Profil
           </Segment>
           <button
@@ -639,7 +776,9 @@ function GameView({
         </div>
       </div>
 
-      <ManagerProfile save={save} managerName={managerName} />
+      {view !== "profile" && (
+        <ManagerSummaryBar save={save} managerName={managerName} />
+      )}
 
       {view === "season" && !done && (
         <RoleNote save={save} />
@@ -675,7 +814,7 @@ function GameView({
               title={s.pendingEvent ? "Nejdřív vyřeš událost výše" : undefined}
               className="flex-1 rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
             >
-              Odehrát kolo
+              {busy ? "Simuluje se…" : "Odehrát kolo"}
             </button>
             <button
               type="button"
@@ -683,7 +822,7 @@ function GameView({
               onClick={onSimulateToEnd}
               className="rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-50"
             >
-              Dohrát sezónu
+              {busy ? "Simuluje se…" : "Dohrát sezónu"}
             </button>
           </div>
           <LeagueTable state={s} />
@@ -698,28 +837,37 @@ function Segment({
   active,
   onClick,
   children,
+  dot,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  /** Malá tečka signalizující nový obsah (např. neprohlédnutý achievement). */
+  dot?: boolean;
 }) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={
-        "rounded-full px-3 py-1.5 text-xs font-medium transition " +
+        "relative rounded-full px-3 py-1.5 text-xs font-medium transition " +
         (active
           ? "bg-foreground text-background"
           : "border border-border bg-surface text-muted hover:text-foreground")
       }
     >
       {children}
+      {dot && (
+        <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-negative" />
+      )}
     </button>
   );
 }
 
-function ManagerProfile({
+/** Rychlý přehled nad Sezóna/Kariéra tabem – ne totéž jako typ `ManagerProfile` z types.ts. */
+function ManagerSummaryBar({
   save,
   managerName,
 }: {
@@ -819,9 +967,6 @@ function NextMatch({
   const next = yourNextMatch(state);
   if (!next) return null;
   const you = teamById(state.teams, state.yourTeamId);
-  const yourWin = next.isHome ? next.probs.homeWin : next.probs.awayWin;
-  const yourLoss = next.isHome ? next.probs.awayWin : next.probs.homeWin;
-  const draw = next.probs.draw;
 
   return (
     <div className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
@@ -840,13 +985,39 @@ function NextMatch({
         <TeamBadge team={next.isHome ? next.opponent : you} size={30} />
       </div>
 
-      {/* Predikce modelu */}
+      {/* Predikce modelu – domácí vlevo / host vpravo, stejně jako odznaky výše a jako
+          v MatchPrediction.tsx (bez ohledu na to, kde hraješ ty). */}
       <div className="mt-3">
         <div className="mb-1 text-center text-xs text-muted">Predikce modelu</div>
-        <div className="flex overflow-hidden rounded-full border border-border text-[11px] font-semibold text-white">
-          <ProbBar label="Výhra" pct={yourWin} className="bg-positive" />
-          <ProbBar label="Remíza" pct={draw} className="bg-muted" />
-          <ProbBar label="Prohra" pct={yourLoss} className="bg-negative" />
+        <div className="flex items-center justify-between text-sm font-bold tabular-nums">
+          <span className="text-home">{Math.round(next.probs.homeWin * 100)} %</span>
+          <span className="text-muted">{Math.round(next.probs.draw * 100)} %</span>
+          <span className="text-away">{Math.round(next.probs.awayWin * 100)} %</span>
+        </div>
+        <div className="mt-1 flex h-2.5 overflow-hidden rounded-full bg-border/60">
+          <div
+            className="bar-fill bg-home/80"
+            style={{ width: `${next.probs.homeWin * 100}%` }}
+          />
+          <div
+            className="bar-fill bg-muted/50"
+            style={{ width: `${next.probs.draw * 100}%` }}
+          />
+          <div
+            className="bar-fill bg-away/80"
+            style={{ width: `${next.probs.awayWin * 100}%` }}
+          />
+        </div>
+        <div className="mt-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted">
+          <span className="max-w-[40%] truncate">
+            {next.isHome ? you.name : next.opponent.name}
+            {next.isHome ? " (ty)" : ""}
+          </span>
+          <span>Remíza</span>
+          <span className="max-w-[40%] truncate text-right">
+            {next.isHome ? next.opponent.name : you.name}
+            {next.isHome ? "" : " (ty)"}
+          </span>
         </div>
       </div>
 
@@ -855,6 +1026,9 @@ function NextMatch({
 
       {/* Morálka */}
       <MoraleBar morale={state.morale} />
+
+      {/* Aktivní dočasné efekty z eventů – jinak jsou pro hráče neviditelné */}
+      <ActiveModifiers state={state} />
 
       {/* Analýza z odehrané sezóny */}
       <AnalysisPanel state={state} youId={you.id} oppId={next.opponent.id} />
@@ -867,6 +1041,7 @@ function NextMatch({
             <button
               key={p}
               type="button"
+              aria-pressed={state.plan === p}
               onClick={() => onPlan(p)}
               className={
                 "rounded-lg px-2 py-1.5 text-xs font-medium transition " +
@@ -923,6 +1098,41 @@ function MoraleBar({ morale }: { morale: number }) {
         <div className={"bar-fill h-full rounded-full " + tone} style={{ width: `${m}%` }} />
       </div>
       <span className="tabular-nums font-semibold text-foreground">{label}</span>
+    </div>
+  );
+}
+
+/** Aktivní dočasné modifikátory z eventů (jinak by hráč neviděl, že ještě běží). */
+function ActiveModifiers({ state }: { state: SeasonState }) {
+  const active = state.modifiers.filter((m) => m.untilRound >= state.round);
+  if (active.length === 0) return null;
+  return (
+    <div className="mt-3 space-y-1">
+      <div className="text-[11px] font-semibold text-foreground">Aktivní efekty</div>
+      {active.map((m, i) => {
+        const roundsLeft = m.untilRound - state.round + 1;
+        const attackUp = m.attack != null && m.attack > 1;
+        const attackDown = m.attack != null && m.attack < 1;
+        const concedeUp = m.concede != null && m.concede > 1; // víc obdržených = horší
+        const concedeDown = m.concede != null && m.concede < 1;
+        const positive = attackUp || concedeDown;
+        const negative = attackDown || concedeUp;
+        const tone = positive && !negative ? "text-positive" : negative && !positive ? "text-negative" : "text-muted";
+        return (
+          <div
+            key={i}
+            className="flex items-center justify-between rounded-lg border border-border bg-background/40 px-2.5 py-1 text-[11px]"
+          >
+            <span className={tone}>
+              {positive ? "▲ " : negative ? "▼ " : ""}
+              {m.label}
+            </span>
+            <span className="text-muted">
+              ještě {roundsLeft} {roundsLeft === 1 ? "kolo" : roundsLeft < 5 ? "kola" : "kol"}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1072,27 +1282,6 @@ function FormDots({ form }: { form: ("W" | "D" | "L")[] }) {
   );
 }
 
-function ProbBar({
-  label,
-  pct,
-  className,
-}: {
-  label: string;
-  pct: number;
-  className: string;
-}) {
-  const p = Math.round(pct * 100);
-  return (
-    <div
-      className={"flex items-center justify-center py-1 " + className}
-      style={{ width: `${Math.max(pct * 100, 8)}%` }}
-      title={`${label} ${p}%`}
-    >
-      {p >= 12 ? `${p}%` : ""}
-    </div>
-  );
-}
-
 /** Zóna umístění (pohár / sestup) pro barevné zvýraznění řádku tabulky. */
 interface RankZone {
   key: "ucl" | "uel" | "uecl" | "releg";
@@ -1101,8 +1290,13 @@ interface RankZone {
   label: string;
 }
 
-function rankZone(rank: number, size: number, leagueId: number): RankZone | null {
-  const v = evaluateSeason(rank, size, leagueId);
+function rankZone(
+  rank: number,
+  size: number,
+  leagueId: number,
+  leagueAccess: LeagueAccess | null
+): RankZone | null {
+  const v = evaluateSeason(rank, size, leagueId, leagueAccess);
   if (v.relegated)
     return { key: "releg", border: "border-l-negative", dot: "bg-negative", label: "Sestup" };
   const e = v.europe;
@@ -1118,7 +1312,9 @@ function rankZone(rank: number, size: number, leagueId: number): RankZone | null
 function LeagueTable({ state }: { state: SeasonState }) {
   const table = currentTable(state);
   const size = state.teams.length;
-  const zones = table.map((row) => rankZone(row.rank, size, state.leagueId));
+  const zones = table.map((row) =>
+    rankZone(row.rank, size, state.leagueId, state.leagueAccess)
+  );
   // Legenda jen pro zóny, které v této lize reálně existují (podle klíče, ne popisku).
   const legend = zones
     .filter((z): z is RankZone => Boolean(z))
@@ -1260,7 +1456,8 @@ function SeasonDone({
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
-    teamId: number
+    teamId: number,
+    leagueAccess: LeagueAccess | null
   ) => void;
   onError: (e: string | null) => void;
 }) {
@@ -1374,51 +1571,14 @@ function JobMarket({
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
-    teamId: number
+    teamId: number,
+    leagueAccess: LeagueAccess | null
   ) => void;
   onClose: () => void;
   onError: (e: string | null) => void;
 }) {
-  const [leagues, setLeagues] = useState<LeagueInfo[] | null>(null);
-  const [league, setLeague] = useState<LeagueInfo | null>(null);
-  const [teams, setTeams] = useState<GameTeam[] | null>(null);
-  const [loadingTeams, setLoadingTeams] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const r = await fetch("/api/game/leagues");
-        const d = await r.json();
-        if (active && r.ok) setLeagues(d.leagues as LeagueInfo[]);
-      } catch {
-        if (active) onError("Nepodařilo se načíst ligy.");
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [onError]);
-
-  const pickLeague = useCallback(
-    async (l: LeagueInfo) => {
-      setLeague(l);
-      setTeams(null);
-      setLoadingTeams(true);
-      try {
-        const r = await fetch(`/api/game/league?id=${l.id}`);
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error ?? "Chyba");
-        setTeams(d.teams as GameTeam[]);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Nepodařilo se načíst ligu.");
-        setLeague(null);
-      } finally {
-        setLoadingTeams(false);
-      }
-    },
-    [onError]
-  );
+  const { leagues, league, teams, leagueAccess, loadingTeams, pickLeague, backToLeagues } =
+    useLeaguePicker(onError);
 
   return (
     <div className="mt-4">
@@ -1441,29 +1601,14 @@ function JobMarket({
       {!leagues ? (
         <LoadingRows />
       ) : !league ? (
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {leagues.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              onClick={() => pickLeague(l)}
-              className="flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-sm transition hover:border-foreground/30"
-            >
-              <span className="text-sm font-medium text-foreground">{l.name}</span>
-              <span className="text-xs text-muted">{l.country}</span>
-            </button>
-          ))}
-        </div>
+        <LeagueList leagues={leagues} onPick={pickLeague} />
       ) : loadingTeams || !teams ? (
         <LoadingRows />
       ) : (
         <div className="mt-3">
           <button
             type="button"
-            onClick={() => {
-              setLeague(null);
-              setTeams(null);
-            }}
+            onClick={backToLeagues}
             className="text-xs text-muted hover:text-foreground"
           >
             ← Zpět na ligy
@@ -1479,7 +1624,7 @@ function JobMarket({
                     key={t.id}
                     type="button"
                     disabled={!ok}
-                    onClick={() => onPick(league.id, league.name, teams, t.id)}
+                    onClick={() => onPick(league.id, league.name, teams, t.id, leagueAccess)}
                     className={
                       "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition " +
                       (ok
@@ -1553,6 +1698,7 @@ function HistoryView({ save }: { save: SaveState }) {
         <StatTile label="Výhry" value={stats.totalWin} />
         <StatTile label="Remízy" value={stats.totalDraw} />
         <StatTile label="Prohry" value={stats.totalLoss} />
+        <StatTile label="Ø PPG" value={stats.avgPPG.toFixed(2)} />
       </div>
 
       <h3 className="mt-4 text-xs font-semibold text-foreground">Odehrané sezóny</h3>
@@ -1576,6 +1722,9 @@ function HistoryView({ save }: { save: SaveState }) {
               <span className="min-w-0 flex-1 truncate">
                 <span className="text-foreground">{h.yourName}</span>{" "}
                 <span className="text-xs text-muted">· {h.leagueName}</span>
+              </span>
+              <span className="shrink-0 text-xs tabular-nums text-muted" title="Body na zápas">
+                {(h.yourPoints / (h.win + h.draw + h.loss)).toFixed(2)} PPG
               </span>
               <RepDelta delta={delta} />
               <span
@@ -1651,7 +1800,8 @@ function ManagerHub({
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
-    teamId: number
+    teamId: number,
+    leagueAccess: LeagueAccess | null
   ) => void;
   onError: (e: string | null) => void;
 }) {

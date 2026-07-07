@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickTeamStanding } from "./standings";
+import { deriveLeagueAccess, pickTeamStanding } from "./standings";
 import type { ApiStandingRow } from "./apiFootball";
 
 function row(
@@ -49,6 +49,49 @@ describe("pickTeamStanding", () => {
       all: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
       home: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
       away: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
+    });
+  });
+});
+
+describe("deriveLeagueAccess", () => {
+  it("odvodí evropské příčky a sestupový blok z reálných description řetězců", () => {
+    const raw = [
+      row(1, 1, { description: "Promotion - Champions League (Group Stage)" }),
+      row(2, 2, { description: "Promotion - Champions League (Group Stage)" }),
+      row(3, 3, { description: "Promotion - Champions League (Qualification)" }),
+      row(4, 4, { description: "Promotion - Europa League (Play Offs)" }),
+      row(5, 5, { description: "Promotion - Conference League (Qualification)" }),
+      row(6, 6, { description: null }),
+      row(7, 7, { description: null }),
+      row(8, 8, { description: "Relegation - Relegation Play-offs" }),
+      row(9, 9, { description: "Relegation" }),
+      row(10, 10, { description: "Relegation" }),
+    ];
+    expect(deriveLeagueAccess(raw)).toEqual({
+      slots: [
+        { rank: 1, spot: "UCL" },
+        { rank: 2, spot: "UCL" },
+        { rank: 3, spot: "UCL_Q" },
+        { rank: 4, spot: "UEL_Q" },
+        { rank: 5, spot: "UECL_Q" },
+      ],
+      relegBottom: 3,
+    });
+  });
+
+  it("žádný řádek s rozpoznatelným popisem → null (fallback na kurátorovanou tabulku)", () => {
+    const raw = [row(1, 1, { description: null }), row(2, 2, { description: undefined })];
+    expect(deriveLeagueAccess(raw)).toBeNull();
+  });
+
+  it("neznámý/neparsovatelný popis se ignoruje, ale nerozbije ostatní řádky", () => {
+    const raw = [
+      row(1, 1, { description: "Promotion - Champions League (Group Stage)" }),
+      row(2, 2, { description: "Something unexpected" }),
+    ];
+    expect(deriveLeagueAccess(raw)).toEqual({
+      slots: [{ rank: 1, spot: "UCL" }],
+      relegBottom: 0,
     });
   });
 });

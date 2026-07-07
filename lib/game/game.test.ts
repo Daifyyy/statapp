@@ -14,13 +14,16 @@ import {
   currentTable,
   setPlan,
   yourNextMatch,
+  resolveAdjust,
 } from "./engine";
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
 import { resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
-import { mulberry32 } from "./rng";
-import { emptyProfile, foldSeason, coachedAllTop5, TOP5_LEAGUE_IDS } from "./profile";
+import { mulberry32, randomSeed, deriveSeed } from "./rng";
+import { ADJUST_MAX, ADJUST_MIN } from "./balance";
+import { scoutOpponent } from "./scouting";
+import { emptyProfile, foldSeason, coachedAllTop5, startCareer, TOP5_LEAGUE_IDS } from "./profile";
 import { newlyEarned, evaluateAchievements, ACHIEVEMENTS } from "./achievements";
 import type { GameTeam, MatchResult, SeasonState, SeasonSummary } from "./types";
 
@@ -199,6 +202,119 @@ describe("engine – sezóna", () => {
     }
     expect(strongTitles).toBeGreaterThan(weakTitles);
   });
+
+  it("plná sezóna na malé reálně-tvarované lize (12 týmů) funguje end-to-end", () => {
+    // Ne všechny GAME_LEAGUES mají 20 týmů (Skotsko/Rakousko apod. jsou menší) –
+    // ověřit, že newSeason→simulateToEnd→summarizeSeason→updateReputation/evaluateSeason
+    // fungují i mimo výchozí generateLeague velikost.
+    const twelve = generateLeague(42).slice(0, 12);
+    const yourTeamId = twelve[0].id;
+    let s = newSeason(42, yourTeamId, {
+      teams: twelve,
+      leagueId: 179, // Skotsko – malá liga v LEAGUE_ACCESS
+      leagueName: "Premiership",
+    });
+    expect(s.teams).toHaveLength(12);
+    s = simulateToEnd(s);
+    expect(isSeasonOver(s)).toBe(true);
+    const table = currentTable(s);
+    expect(table).toHaveLength(12);
+    // 12 týmů dvoukolově = 22 zápasů/tým
+    for (const row of table) expect(row.played).toBe(22);
+    const summary = summarizeSeason(s);
+    expect(summary.yourRank).toBeGreaterThanOrEqual(1);
+    expect(summary.yourRank).toBeLessThanOrEqual(12);
+    const rep = updateReputation(50, summary);
+    expect(rep).toBeGreaterThanOrEqual(0);
+    expect(rep).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("resolveAdjust – stohování plán×counter×morálka×eventy", () => {
+  const teams: GameTeam[] = [
+    { id: 1, name: "You", short: "YOU", color: "#000", attack: 1.4, defense: 1.4, homeBoost: 1.1 },
+    { id: 2, name: "Attacker", short: "ATK", color: "#000", attack: 2.0, defense: 1.4, homeBoost: 1.1 },
+  ];
+
+  it("clamp zabrání extrémní kombinaci jít mimo ADJUST_MIN/ADJUST_MAX", () => {
+    let s = newSeason(1, 1, { teams });
+    s = {
+      ...s,
+      morale: 100, // moraleFactor > 1 (nahoru)
+      modifiers: [
+        { untilRound: 5, attack: 1.3, label: "Event A" },
+        { untilRound: 5, attack: 1.3, label: "Event B" },
+        { untilRound: 5, concede: 0.5, label: "Event C" },
+      ],
+    };
+    // "open" proti "attacking" soupeři = counter navíc nahoru → bez clampu by attack
+    // vyšlo výrazně nad 1.4 (PLAN_BASE≈1.15 × counter≈1.1 × morálka≈1.06 × 1.3 × 1.3 ≈ 2.3).
+    const adj = resolveAdjust(s, 2, "open");
+    expect(adj.attack).toBeLessThanOrEqual(ADJUST_MAX);
+    expect(adj.concede).toBeGreaterThanOrEqual(ADJUST_MIN);
+  });
+
+  it("bez extrémního stohování zůstává v mezích i naprosto neutrální kombinace", () => {
+    const s = newSeason(1, 1, { teams });
+    const adj = resolveAdjust(s, 2, "balanced");
+    expect(adj.attack).toBeGreaterThanOrEqual(ADJUST_MIN);
+    expect(adj.attack).toBeLessThanOrEqual(ADJUST_MAX);
+    expect(adj.concede).toBeGreaterThanOrEqual(ADJUST_MIN);
+    expect(adj.concede).toBeLessThanOrEqual(ADJUST_MAX);
+  });
+});
+
+describe("scoutOpponent", () => {
+  const teams: GameTeam[] = [
+    { id: 1, name: "You", short: "YOU", color: "#000", attack: 1.4, defense: 1.4, homeBoost: 1.1 },
+    { id: 2, name: "Attacker", short: "ATK", color: "#000", attack: 2.0, defense: 1.4, homeBoost: 1.1 },
+    { id: 3, name: "Defender", short: "DEF", color: "#000", attack: 1.4, defense: 0.9, homeBoost: 1.1 },
+    { id: 4, name: "Balanced", short: "BAL", color: "#000", attack: 1.4, defense: 1.4, homeBoost: 1.1 },
+  ];
+
+  it("klasifikuje styl (attacking/defensive/balanced) a traity dle ratingů vůči průměru", () => {
+    const state = newSeason(1, 1, { teams });
+    const attacker = scoutOpponent(state, 2);
+    expect(attacker.style).toBe("attacking");
+    expect(attacker.traits).toContain("strongAttack");
+
+    const defender = scoutOpponent(state, 3);
+    expect(defender.style).toBe("defensive");
+    expect(defender.traits).toContain("solidDefense");
+
+    const balanced = scoutOpponent(state, 4);
+    expect(balanced.style).toBe("balanced");
+  });
+
+  it("favourite/underdog dle rozdílu síly vůči tvému týmu", () => {
+    const strongVsWeak: GameTeam[] = [
+      { id: 1, name: "You", short: "YOU", color: "#000", attack: 1.4, defense: 1.4, homeBoost: 1.1 },
+      { id: 2, name: "Much stronger", short: "STR", color: "#000", attack: 2.2, defense: 0.8, homeBoost: 1.1 },
+      { id: 3, name: "Much weaker", short: "WEK", color: "#000", attack: 1.0, defense: 1.9, homeBoost: 1.1 },
+      { id: 4, name: "Filler", short: "FIL", color: "#000", attack: 1.4, defense: 1.4, homeBoost: 1.1 },
+    ];
+    const state = newSeason(1, 1, { teams: strongVsWeak });
+    expect(scoutOpponent(state, 2).traits).toContain("favourite");
+    expect(scoutOpponent(state, 3).traits).toContain("underdog");
+  });
+});
+
+describe("rng", () => {
+  it("randomSeed vrací hodnoty v uint32 rozsahu, prakticky vždy různé", () => {
+    const seeds = Array.from({ length: 20 }, () => randomSeed());
+    for (const s of seeds) {
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThan(0x100000000);
+    }
+    expect(new Set(seeds).size).toBeGreaterThan(15);
+  });
+
+  it("deriveSeed je deterministický a nekoliduje pro sousední kola", () => {
+    expect(deriveSeed(42, 0)).toBe(deriveSeed(42, 0));
+    expect(deriveSeed(42, 0)).not.toBe(deriveSeed(42, 1));
+    const seeds = new Set(Array.from({ length: 100 }, (_, i) => deriveSeed(42, i)));
+    expect(seeds.size).toBe(100);
+  });
 });
 
 describe("career", () => {
@@ -264,6 +380,19 @@ describe("leagues – hodnocení sezóny", () => {
     expect(champ.europe).toBe("UCL_Q"); // předkolo, ne "UCL"
     expect(evaluateSeason(2, 16, 345).europe).toBe("UEL_Q");
     expect(evaluateSeason(3, 16, 345).europe).toBe("UECL_Q");
+  });
+
+  it("evaluateSeason s explicitním override ignoruje kurátorovanou LEAGUE_ACCESS", () => {
+    const override = { slots: [{ rank: 1, spot: "UEL" as const }], relegBottom: 1 };
+    // Liga 39 (Anglie) by bez override dala rank 1 → "UCL"; s override musí dát "UEL".
+    expect(evaluateSeason(1, 20, 39, override).europe).toBe("UEL");
+    expect(evaluateSeason(20, 20, 39, override).relegated).toBe(true);
+    expect(evaluateSeason(19, 20, 39, override).relegated).toBe(false);
+  });
+
+  it("evaluateSeason bez override se chová beze změny (fallback na LEAGUE_ACCESS)", () => {
+    expect(evaluateSeason(1, 20, 39, null).europe).toBe("UCL");
+    expect(evaluateSeason(1, 20, 39, undefined).europe).toBe("UCL");
   });
 
   it("teamPrestige: silnější tým a prestižnější liga = vyšší prestiž", () => {
@@ -431,6 +560,14 @@ describe("amplifySpread + leagueStars (realismus)", () => {
     expect(seasonObjective(sorted[0], league, 39).kind).toBe("title");
     expect(seasonObjective(sorted[sorted.length - 1], league, 39).kind).toBe("survival");
   });
+
+  it("seasonObjective respektuje explicitní leagueAccess override (méně euro slotů)", () => {
+    const league = generateLeague(9);
+    const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    // Override s jen 1 evropským slotem → 2. nejsilnější tým už nemá "europe", jen "midtable".
+    const override = { slots: [{ rank: 1, spot: "UCL" as const }], relegBottom: 3 };
+    expect(seasonObjective(sorted[1], league, 39, override).kind).not.toBe("europe");
+  });
 });
 
 // ───────────────────────── Phase 2: agency ─────────────────────────
@@ -561,6 +698,12 @@ describe("profile – trvalé rekordy", () => {
   it("startCareer navýší počítadlo kariér", () => {
     const p = emptyProfile();
     expect(p.allTime.careers).toBe(0);
+    const afterFirst = startCareer(p);
+    expect(afterFirst.allTime.careers).toBe(1);
+    const afterSecond = startCareer(afterFirst);
+    expect(afterSecond.allTime.careers).toBe(2);
+    // Zbytek profilu (achievementy, ostatní rekordy) se startem kariéry nemění.
+    expect(afterSecond.achievements).toEqual(p.achievements);
   });
 
   it("coachedAllTop5 až po pokrytí všech Top-5 lig", () => {

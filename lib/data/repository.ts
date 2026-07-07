@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 import { isRealDataConfigured } from "@/lib/db";
 import { generateLeague } from "@/lib/game/teams";
-import type { GameTeam } from "@/lib/game/types";
+import type { GameTeam, LeagueAccess } from "@/lib/game/types";
 import { LEAGUES, buildTeams } from "./mock/seed";
 import { mockUpcomingPredictions, mockSettledPredictions } from "./mock/predictions";
 import { mockFixturesByDates } from "./mock/fixtures";
@@ -229,9 +229,11 @@ function mockLeagueGoalsAvg(): LeagueGoalsAvg {
  * Týmy ligy s herními ratingy pro modul „Manažer". Reálně z ligové tabulky
  * (1 cachované volání); v mocku fiktivní liga (offline, bez DB/API).
  */
-export async function getGameLeague(leagueId: number): Promise<{ teams: GameTeam[] }> {
-  if (useReal) return { teams: await real.getLeagueGameTeams(leagueId) };
-  return { teams: generateLeague(12345) };
+export async function getGameLeague(
+  leagueId: number
+): Promise<{ teams: GameTeam[]; leagueAccess: LeagueAccess | null }> {
+  if (useReal) return real.getLeagueGameTeams(leagueId);
+  return { teams: generateLeague(12345), leagueAccess: null };
 }
 
 function mockStanding(teamId: number): Standing | null {

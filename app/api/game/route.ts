@@ -62,6 +62,7 @@ const saveSchema = z.object({
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
+  if (!allowRequest(`game:${user.id}`, 120, 60_000)) return tooMany();
 
   const row = await prisma.gameSave.findUnique({ where: { userId: user.id } });
   return NextResponse.json({ save: row?.state ?? null });

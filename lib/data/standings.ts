@@ -1,4 +1,5 @@
 import type { LeagueGoalsAvg, Standing, StandingSplit } from "@/lib/types";
+import type { EuropeSpot, LeagueAccess } from "@/lib/game/types";
 import type { ApiStandingRow } from "./apiFootball";
 
 /**
@@ -22,6 +23,33 @@ export function pickTeamStanding(
     home: split(row.home),
     away: split(row.away),
   };
+}
+
+/**
+ * Odvodí skutečný evropský/sestupový access key ligy z reálného pole `description`
+ * u každého řádku (API-Football, např. "Promotion - Champions League (Group Stage)",
+ * "Promotion - Europa League (Play Offs)", "Relegation - Relegation Play-offs") –
+ * náhrada za ručně udržovanou `LEAGUE_ACCESS` v lib/game/leagues.ts, sezónně přesná bez
+ * ruční údržby. Vrací `null`, pokud žádný řádek nemá rozpoznatelný popis (chybějící
+ * data / neznámá soutěž) → volající pak spadne na kurátorovaný fallback.
+ */
+export function deriveLeagueAccess(raw: ApiStandingRow[]): LeagueAccess | null {
+  const slots: { rank: number; spot: EuropeSpot }[] = [];
+  let relegBottom = 0;
+  for (const row of raw) {
+    const desc = row.description?.toLowerCase() ?? "";
+    if (!desc) continue;
+    const isQualifier = /qualif|play.?off|preliminary/.test(desc);
+    let spot: EuropeSpot | null = null;
+    if (desc.includes("champions league")) spot = isQualifier ? "UCL_Q" : "UCL";
+    else if (desc.includes("europa league")) spot = isQualifier ? "UEL_Q" : "UEL";
+    else if (desc.includes("conference league")) spot = isQualifier ? "UECL_Q" : "UECL";
+    if (spot) slots.push({ rank: row.rank, spot });
+    if (desc.includes("relegation")) relegBottom++;
+  }
+  if (slots.length === 0 && relegBottom === 0) return null;
+  slots.sort((a, b) => a.rank - b.rank);
+  return { slots, relegBottom };
 }
 
 /** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */

@@ -1,8 +1,15 @@
 // Ligový kontext hry: nabízený pool lig, prestiž (pro reputaci/job market),
 // evropské poháry a sestup jako HODNOCENÍ sezóny (labely) – žádná zvlášť hraná soutěž.
 // Prahy se ladí tady; čisté funkce (testovatelné).
+//
+// ZNÁMÉ ZJEDNODUŠENÍ: sezóna se vždy simuluje jako plochá dvoukolová liga (round-robin).
+// Některé reálné ligy v GAME_LEAGUES ve skutečnosti nehrají čistou tabulku (např. belgická
+// Jupiler Pro League má po základní části play-off o titul/Evropu/sestup) – tahle hra tenhle
+// split-formát nemodeluje, jen vyhodnotí finální pořadí ploché tabulky přes
+// evaluateSeason/deriveLeagueAccess. Vědomý kompromis pro jednoduchost, ne bug.
 
-import type { EuropeSpot, GameTeam, Objective } from "./types";
+import { PRESTIGE_SCALE, PRESTIGE_SHIFT } from "./balance";
+import type { EuropeSpot, GameTeam, LeagueAccess, Objective } from "./types";
 
 /** Ligy nabízené ve hře (Top-5 + pár dalších). id = reálné league id z katalogu. */
 export const GAME_LEAGUES: {
@@ -40,18 +47,13 @@ export function leagueName(leagueId: number): string {
 }
 
 /**
- * Kurátorovaný UEFA access list per liga: které místo vede do kterého poháru (a zda
- * do ZÁKLADNÍ fáze nebo PŘEDKOLA) + kolik posledních míst sestupuje. UEFA klíč není
- * v API-Football (řídí se koeficienty) → udržuje se ručně (odpovídá ~2025/26). Menší
- * ligy mají typicky jen předkola (mistr do LM přes předkolo, ne přímo do skupiny).
+ * FALLBACK kurátorovaný UEFA access list per liga: které místo vede do kterého poháru
+ * (a zda do ZÁKLADNÍ fáze nebo PŘEDKOLA) + kolik posledních míst sestupuje. Používá se
+ * jen když se nepodaří odvodit skutečný klíč z reálné sezóny (`deriveLeagueAccess` v
+ * lib/data/standings.ts, ze zápasového pole `description` v odpovědi API-Football) –
+ * typicky mock režim nebo výpadek dat. UEFA klíč se řídí koeficienty a rok od roku se
+ * mění → tahle tabulka je jen přibližná snímek (~2025/26), ne zdroj pravdy.
  */
-interface LeagueAccess {
-  /** Umístění → evropská příčka (jen místa, která do Evropy vedou). */
-  slots: { rank: number; spot: EuropeSpot }[];
-  /** Kolik posledních míst sestupuje. */
-  relegBottom: number;
-}
-
 const LEAGUE_ACCESS: Record<number, LeagueAccess> = {
   // Top-4 koeficientové ligy: 1.–4. rovnou do ligové fáze LM.
   39: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 }, // Anglie
@@ -88,7 +90,8 @@ function euro(spec: [EuropeSpot, number][]): { rank: number; spot: EuropeSpot }[
   return out;
 }
 
-function accessFor(leagueId: number, size: number): LeagueAccess {
+function accessFor(leagueId: number, size: number, override?: LeagueAccess | null): LeagueAccess {
+  if (override) return override;
   return (
     LEAGUE_ACCESS[leagueId] ?? {
       slots: euro([["UCL", 1], ["UECL_Q", 2]]),
@@ -97,13 +100,18 @@ function accessFor(leagueId: number, size: number): LeagueAccess {
   );
 }
 
-/** Vyhodnotí konec sezóny: mistr / evropská příčka (vč. předkola) / sestup. */
+/**
+ * Vyhodnotí konec sezóny: mistr / evropská příčka (vč. předkola) / sestup.
+ * `override` = access key odvozený z reálné sezóny (`SeasonState.leagueAccess`); bez
+ * něj (mock/neznámá liga) se použije kurátorovaný fallback `LEAGUE_ACCESS`.
+ */
 export function evaluateSeason(
   rank: number,
   size: number,
-  leagueId: number
+  leagueId: number,
+  override?: LeagueAccess | null
 ): { champion: boolean; europe: EuropeSpot; relegated: boolean } {
-  const a = accessFor(leagueId, size);
+  const a = accessFor(leagueId, size, override);
   return {
     champion: rank === 1,
     europe: a.slots.find((s) => s.rank === rank)?.spot ?? "NONE",
@@ -163,11 +171,16 @@ export function leagueStars(team: GameTeam, league: GameTeam[]): number {
  * Sezónní cíl vedení dle očekávaného umístění (síla týmu v lize) a UEFA/sestupového
  * klíče ligy. Splnění (yourRank ≤ targetRank) dá bonus k reputaci.
  */
-export function seasonObjective(team: GameTeam, league: GameTeam[], leagueId: number): Objective {
+export function seasonObjective(
+  team: GameTeam,
+  league: GameTeam[],
+  leagueId: number,
+  leagueAccess?: LeagueAccess | null
+): Objective {
   const size = league.length;
   const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
   const exp = sorted.findIndex((t) => t.id === team.id) + 1;
-  const a = accessFor(leagueId, size);
+  const a = accessFor(leagueId, size, leagueAccess);
   const euroSlots = Math.max(1, a.slots.length);
   const safe = size - a.relegBottom; // poslední bezpečné místo
   if (exp === 1) return { kind: "title", targetRank: 1, text: "Vyhraj ligu 🏆" };
@@ -197,7 +210,7 @@ export function teamPrestige(
   const range = max - min || 1;
   const pct = (teamStrengthScore(team) - min) / range; // 0 (dno) .. 1 (top)
   const base = leaguePrestige(leagueId);
-  return clamp(Math.round(base - 18 + pct * 34), 0, 100);
+  return clamp(Math.round(base + PRESTIGE_SHIFT + pct * PRESTIGE_SCALE), 0, 100);
 }
 
 function clamp(v: number, lo: number, hi: number): number {

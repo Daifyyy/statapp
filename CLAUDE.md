@@ -511,7 +511,9 @@ znaku (https, bez koncového `/`).
   v `globals.css`. Hypotézy k ověření: skutečná computed font-size na fokusovaném
   inputu v mobilním Safari; jestli zoom netriggeruje jiný prvek; alternativně řešení
   přes `visualViewport` / `meta viewport interactive-widget`. Nutno ladit přímo na
-  zařízení (Safari Web Inspector).
+  zařízení (Safari Web Inspector). **Pozn.:** pravděpodobně nepatří k Manažerovi
+  (`HraApp.tsx` nemá žádný `<select>`/`<input>`, výběr ligy/klubu jsou čistá tlačítka) –
+  hledat spíš ve výběru týmu v `/porovnani` nebo `/predikce`.
 
 - **HOTOVO: Benchmark predikcí vs. API-Football** – viz „Interní benchmark vs. API-Football"
   v sekci o predikční záložce výše. Implementováno (schéma `bench*`, `fetchPrediction`,
