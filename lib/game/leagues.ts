@@ -36,14 +36,65 @@ export const GAME_LEAGUES: {
 /** Fiktivní liga (mock režim / bez API). */
 export const MOCK_LEAGUE = { id: 0, name: "Fiktivní liga", country: "", prestige: 55 };
 
+/**
+ * Druhé ligy navázané na nejvyšší soutěž (reálný sestup/postup). Jen velké ligy s
+ * kvalitními daty (Top-5) – menší země 2. ligu nemodelují (sestup = vyhazov → job market).
+ * `promoSpots` = kolik prvních míst postupuje zpět nahoru (auto-postup, bez play-off).
+ * `firstTierId` = nadřazená nejvyšší liga. Prestiž je nižší než u nejvyšší ligy → 2. liga
+ * zároveň slouží jako přirozené „dno" pro pojistku job marketu (`MIN_HIREABLE_PRESTIGE`).
+ */
+export interface SecondTier {
+  id: number;
+  name: string;
+  country: string;
+  prestige: number;
+  promoSpots: number;
+  firstTierId: number;
+}
+
+const SECOND_TIERS: SecondTier[] = [
+  { id: 40, name: "Championship", country: "Anglie", prestige: 62, promoSpots: 2, firstTierId: 39 },
+  { id: 141, name: "LaLiga 2", country: "Španělsko", prestige: 56, promoSpots: 2, firstTierId: 140 },
+  { id: 136, name: "Serie B", country: "Itálie", prestige: 54, promoSpots: 2, firstTierId: 135 },
+  { id: 79, name: "2. Bundesliga", country: "Německo", prestige: 56, promoSpots: 2, firstTierId: 78 },
+  { id: 62, name: "Ligue 2", country: "Francie", prestige: 48, promoSpots: 2, firstTierId: 61 },
+];
+
+/** Id všech modelovaných 2. lig (pro allowlist API routy). */
+export const SECOND_TIER_IDS = SECOND_TIERS.map((t) => t.id);
+
+/** 2. liga navázaná na danou nejvyšší ligu (nebo undefined = malá liga bez 2. ligy). */
+export function secondTierOf(firstTierId: number): SecondTier | undefined {
+  return SECOND_TIERS.find((t) => t.firstTierId === firstTierId);
+}
+
+/** Nejvyšší liga nad danou 2. ligou (nebo undefined když leagueId není 2. liga). */
+export function firstTierOf(secondTierId: number): number | undefined {
+  return SECOND_TIERS.find((t) => t.id === secondTierId)?.firstTierId;
+}
+
+/** Je leagueId modelovaná 2. liga? */
+export function isSecondTier(leagueId: number): boolean {
+  return SECOND_TIERS.some((t) => t.id === leagueId);
+}
+
+/** Kolik prvních míst 2. ligy postupuje (0 = není to 2. liga). */
+function promoSpotsOf(leagueId: number): number {
+  return SECOND_TIERS.find((t) => t.id === leagueId)?.promoSpots ?? 0;
+}
+
 export function leaguePrestige(leagueId: number): number {
   if (leagueId === MOCK_LEAGUE.id) return MOCK_LEAGUE.prestige;
-  return GAME_LEAGUES.find((l) => l.id === leagueId)?.prestige ?? 50;
+  const top = GAME_LEAGUES.find((l) => l.id === leagueId);
+  if (top) return top.prestige;
+  return SECOND_TIERS.find((t) => t.id === leagueId)?.prestige ?? 50;
 }
 
 export function leagueName(leagueId: number): string {
   if (leagueId === MOCK_LEAGUE.id) return MOCK_LEAGUE.name;
-  return GAME_LEAGUES.find((l) => l.id === leagueId)?.name ?? "Liga";
+  const top = GAME_LEAGUES.find((l) => l.id === leagueId);
+  if (top) return top.name;
+  return SECOND_TIERS.find((t) => t.id === leagueId)?.name ?? "Liga";
 }
 
 /**
@@ -110,13 +161,51 @@ export function evaluateSeason(
   size: number,
   leagueId: number,
   override?: LeagueAccess | null
-): { champion: boolean; europe: EuropeSpot; relegated: boolean } {
+): { champion: boolean; europe: EuropeSpot; relegated: boolean; promoted: boolean } {
   const a = accessFor(leagueId, size, override);
+  const second = isSecondTier(leagueId);
   return {
     champion: rank === 1,
-    europe: a.slots.find((s) => s.rank === rank)?.spot ?? "NONE",
+    // Z 2. ligy se do Evropy nepostupuje → vždy NONE (jen postup/sestup).
+    europe: second ? "NONE" : a.slots.find((s) => s.rank === rank)?.spot ?? "NONE",
     relegated: rank > size - a.relegBottom,
+    promoted: second && rank <= promoSpotsOf(leagueId),
   };
+}
+
+/**
+ * Přechod do další sezóny podle výsledku a úrovně ligy:
+ * - 2. liga + postupová zóna → `up` (do nejvyšší ligy),
+ * - 2. liga + sestupová zóna → `sacked` (3. ligu nemodelujeme → vyhazov),
+ * - nejvyšší liga + sestup + existuje 2. liga → `down`,
+ * - nejvyšší liga + sestup bez modelované 2. ligy (malé ligy) → `sacked`,
+ * - jinak → `stay` (pokračuj se stejným klubem, drift ratingů).
+ * Čistá funkce; fetch cílové ligy dělá až UI.
+ */
+export type Transition =
+  | { type: "stay" }
+  | { type: "up"; leagueId: number; leagueName: string }
+  | { type: "down"; leagueId: number; leagueName: string }
+  | { type: "sacked" };
+
+export function nextTransition(
+  summary: { relegated: boolean; promoted?: boolean },
+  leagueId: number
+): Transition {
+  if (isSecondTier(leagueId)) {
+    if (summary.promoted) {
+      const upId = firstTierOf(leagueId)!;
+      return { type: "up", leagueId: upId, leagueName: leagueName(upId) };
+    }
+    if (summary.relegated) return { type: "sacked" };
+    return { type: "stay" };
+  }
+  if (summary.relegated) {
+    const second = secondTierOf(leagueId);
+    if (second) return { type: "down", leagueId: second.id, leagueName: second.name };
+    return { type: "sacked" }; // malá liga bez modelované 2. ligy
+  }
+  return { type: "stay" };
 }
 
 export const EUROPE_LABEL: Record<EuropeSpot, string> = {
@@ -129,12 +218,14 @@ export const EUROPE_LABEL: Record<EuropeSpot, string> = {
   NONE: "",
 };
 
-/** Hlavní odznak sezóny (mistr + evropská příčka / sestup / střed tabulky). */
+/** Hlavní odznak sezóny (postup / mistr + evropská příčka / sestup / střed tabulky). */
 export function seasonHeadline(s: {
   champion: boolean;
   europe: EuropeSpot;
   relegated: boolean;
+  promoted?: boolean;
 }): string {
+  if (s.promoted) return s.champion ? "Vítěz 2. ligy 🏆 · Postup 🔼" : "Postup 🔼";
   if (s.relegated) return "Sestup";
   const euroLabel = EUROPE_LABEL[s.europe];
   if (s.champion) return euroLabel ? `Mistr 🏆 · ${euroLabel}` : "Mistr 🏆";
@@ -145,7 +236,9 @@ export function seasonTone(s: {
   champion: boolean;
   europe: EuropeSpot;
   relegated: boolean;
+  promoted?: boolean;
 }): "good" | "ok" | "bad" {
+  if (s.promoted) return "good";
   if (s.relegated) return "bad";
   if (s.champion || s.europe !== "NONE") return "good";
   return "ok";
@@ -181,6 +274,14 @@ export function seasonObjective(
   const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
   const exp = sorted.findIndex((t) => t.id === team.id) + 1;
   const a = accessFor(leagueId, size, leagueAccess);
+  // Ve 2. lize je celý smysl sezóny postup zpět do nejvyšší soutěže.
+  if (isSecondTier(leagueId)) {
+    const spots = promoSpotsOf(leagueId);
+    const target = exp <= spots ? spots : Math.max(spots + 1, exp);
+    return exp <= spots
+      ? { kind: "promotion", targetRank: spots, text: `Postup do nejvyšší ligy (do ${spots}. místa)` }
+      : { kind: "midtable", targetRank: target, text: `Zabojuj o postup — skonči do ${target}. místa` };
+  }
   const euroSlots = Math.max(1, a.slots.length);
   const safe = size - a.relegBottom; // poslední bezpečné místo
   if (exp === 1) return { kind: "title", targetRank: 1, text: "Vyhraj ligu 🏆" };

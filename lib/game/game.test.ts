@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { generateLeague, LEAGUE_SIZE, standingsToTeams, amplifySpread } from "./teams";
-import { evaluateSeason, teamPrestige, leagueStars, seasonObjective, teamStrengthScore } from "./leagues";
+import {
+  generateLeague,
+  LEAGUE_SIZE,
+  standingsToTeams,
+  amplifySpread,
+  injectYourTeam,
+} from "./teams";
+import {
+  evaluateSeason,
+  teamPrestige,
+  leagueStars,
+  seasonObjective,
+  teamStrengthScore,
+  nextTransition,
+  isSecondTier,
+  secondTierOf,
+  firstTierOf,
+  seasonHeadline,
+} from "./leagues";
 import { expectedRank, updateReputation, isHireable } from "./reputation";
 import { teamSeasonStats } from "./analysis";
 import { cleanSheetsOf } from "./career";
@@ -366,6 +383,7 @@ describe("leagues – hodnocení sezóny", () => {
       champion: true,
       europe: "UCL",
       relegated: false,
+      promoted: false,
     });
     expect(evaluateSeason(3, 20, 39).europe).toBe("UCL");
     expect(evaluateSeason(5, 20, 39).europe).toBe("UEL");
@@ -409,6 +427,99 @@ describe("leagues – hodnocení sezóny", () => {
     expect(teamPrestige(top, 39, league)).toBeGreaterThan(
       teamPrestige(top, 345, league)
     );
+  });
+});
+
+describe("sestup/postup mezi 1. a 2. ligou", () => {
+  it("2. liga: postupová zóna (top 2) = promoted, žádná Evropa, sestup dole", () => {
+    // Championship (40) = 2. liga Anglie, 24 týmů, 2 postupová místa.
+    const first = evaluateSeason(1, 24, 40);
+    expect(first.promoted).toBe(true);
+    expect(first.europe).toBe("NONE"); // z 2. ligy se do Evropy nejde
+    expect(first.champion).toBe(true);
+    expect(evaluateSeason(2, 24, 40).promoted).toBe(true);
+    expect(evaluateSeason(3, 24, 40).promoted).toBe(false);
+    expect(evaluateSeason(24, 24, 40).relegated).toBe(true);
+  });
+
+  it("nejvyšší liga nikdy nemá promoted", () => {
+    expect(evaluateSeason(1, 20, 39).promoted).toBe(false);
+    expect(evaluateSeason(2, 20, 39).promoted).toBe(false);
+  });
+
+  it("mapa 1.↔2. liga (Top-5) je konzistentní", () => {
+    expect(isSecondTier(40)).toBe(true);
+    expect(isSecondTier(39)).toBe(false);
+    expect(secondTierOf(39)?.id).toBe(40);
+    expect(firstTierOf(40)).toBe(39);
+    expect(secondTierOf(345)).toBeUndefined(); // Fortuna liga = malá liga bez modelu 2. ligy
+  });
+
+  it("nextTransition: sestup z Top-5 → do 2. ligy; z malé ligy → vyhazov", () => {
+    expect(nextTransition({ relegated: true }, 39)).toEqual({
+      type: "down",
+      leagueId: 40,
+      leagueName: "Championship",
+    });
+    expect(nextTransition({ relegated: true }, 345)).toEqual({ type: "sacked" });
+    expect(nextTransition({ relegated: false }, 39)).toEqual({ type: "stay" });
+  });
+
+  it("nextTransition: 2. liga → postup nahoru / sestup = vyhazov / jinak stay", () => {
+    expect(nextTransition({ relegated: false, promoted: true }, 40)).toEqual({
+      type: "up",
+      leagueId: 39,
+      leagueName: "Premier League",
+    });
+    expect(nextTransition({ relegated: true, promoted: false }, 40)).toEqual({ type: "sacked" });
+    expect(nextTransition({ relegated: false, promoted: false }, 40)).toEqual({ type: "stay" });
+  });
+
+  it("seasonObjective ve 2. lize míří na postup", () => {
+    const league = standingsToTeams(
+      Array.from({ length: 24 }, (_, i) => ({
+        teamId: i + 1,
+        name: `T${i + 1}`,
+        played: 10,
+        goalsFor: 20 - i * 0.5,
+        goalsAgainst: 5 + i * 0.5,
+      }))
+    );
+    const strongest = [...league].sort(
+      (a, b) => teamStrengthScore(b) - teamStrengthScore(a)
+    )[0];
+    const obj = seasonObjective(strongest, league, 40, null);
+    expect(obj.kind).toBe("promotion");
+  });
+
+  it("seasonHeadline hlásí postup", () => {
+    expect(seasonHeadline({ champion: false, europe: "NONE", relegated: false, promoted: true })).toContain(
+      "Postup"
+    );
+    expect(
+      seasonHeadline({ champion: true, europe: "NONE", relegated: false, promoted: true })
+    ).toContain("Postup");
+  });
+
+  it("injectYourTeam vloží tvůj klub a udrží sudý počet", () => {
+    const league = generateLeague(7); // 20 týmů, id 1..20
+    const you: GameTeam = {
+      id: 999,
+      name: "Tvůj klub",
+      short: "TVU",
+      color: "#000",
+      attack: 1.8,
+      defense: 0.9,
+      homeBoost: 1.1,
+    };
+    const roster = injectYourTeam(league, you);
+    expect(roster.length % 2).toBe(0);
+    expect(roster.some((t) => t.id === 999)).toBe(true);
+    // Tvůj tým si nese své ratingy (nepřepočítané spreadem).
+    expect(roster.find((t) => t.id === 999)?.attack).toBe(1.8);
+    // Když tvůj klub v lize už je, nezdvojí se.
+    const withDup = injectYourTeam([...league, you], you);
+    expect(withDup.filter((t) => t.id === 999)).toHaveLength(1);
   });
 });
 
@@ -470,6 +581,42 @@ describe("reputation", () => {
     )[0];
     expect(isHireable(top, 39, league, 10)).toBe(false);
     expect(isHireable(top, 39, league, 100)).toBe(true);
+  });
+
+  it("pojistka: nejslabší klub malé ligy tě vezme i při nulové reputaci", () => {
+    const league = generateLeague(4);
+    const bottom = [...league].sort(
+      (a, b) => b.attack - b.defense - (a.attack - a.defense)
+    )[league.length - 1];
+    // I s reputací 0 existuje klub k převzetí (kariéra neuvízne).
+    expect(isHireable(bottom, 345, league, 0)).toBe(true);
+  });
+
+  it("postup zvýší reputaci", () => {
+    const summary: SeasonSummary = {
+      season: 1,
+      leagueId: 40,
+      leagueName: "Championship",
+      yourTeamId: 1,
+      yourName: "A",
+      yourRank: 1,
+      expectedRank: 3,
+      yourPoints: 90,
+      win: 28,
+      draw: 6,
+      loss: 4,
+      goalsFor: 80,
+      goalsAgainst: 30,
+      cleanSheets: 15,
+      champion: true,
+      europe: "NONE",
+      relegated: false,
+      promoted: true,
+      championId: 1,
+      championName: "A",
+      objectiveMet: true,
+    };
+    expect(updateReputation(50, summary)).toBeGreaterThan(50);
   });
 
   it("expectedRank: nejsilnější tým má očekávané umístění 1", () => {

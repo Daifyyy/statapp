@@ -11,7 +11,9 @@ import { teamPrestige, teamStrengthScore } from "./leagues";
 import {
   CHAMPION_REP,
   EUROPE_REP,
+  MIN_HIREABLE_PRESTIGE,
   OBJECTIVE_MET_REP,
+  PROMOTION_REP,
   RELEGATION_REP,
   REP_PERF_CLAMP,
   REP_PERF_WEIGHT,
@@ -40,6 +42,7 @@ export function updateReputation(
   const euroRep = EUROPE_REP[summary.europe];
   const championRep = summary.champion ? CHAMPION_REP : 0;
   const relegRep = summary.relegated ? RELEGATION_REP : 0;
+  const promotionRep = summary.promoted ? PROMOTION_REP : 0;
   const objectiveRep = summary.objectiveMet ? OBJECTIVE_MET_REP : 0;
   // Kladné = skončil jsi líp, než se čekalo (nižší rank = lepší).
   const performance = clamp(
@@ -47,18 +50,24 @@ export function updateReputation(
     -REP_PERF_CLAMP,
     REP_PERF_CLAMP
   );
-  const delta = euroRep + championRep + relegRep + objectiveRep + performance * REP_PERF_WEIGHT;
+  const delta =
+    euroRep + championRep + relegRep + promotionRep + objectiveRep + performance * REP_PERF_WEIGHT;
   return clamp(Math.round(prev + delta), 0, 100);
 }
 
-/** Najme si tě tým? Prestiž týmu nesmí příliš přesáhnout tvou reputaci. */
+/**
+ * Najme si tě tým? Prestiž nesmí příliš přesáhnout reputaci – VÝJIMKA: nejmenší kluby
+ * (prestiž ≤ `MIN_HIREABLE_PRESTIGE`) tě vezmou vždycky, aby kariéra po sérii sestupů
+ * neuvízla ve slepé uličce (vždy existuje klub k převzetí).
+ */
 export function isHireable(
   team: GameTeam,
   leagueId: number,
   league: GameTeam[],
   reputation: number
 ): boolean {
-  return teamPrestige(team, leagueId, league) <= reputation + HIRE_MARGIN;
+  const prestige = teamPrestige(team, leagueId, league);
+  return prestige <= MIN_HIREABLE_PRESTIGE || prestige <= reputation + HIRE_MARGIN;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

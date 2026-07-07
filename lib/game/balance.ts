@@ -128,9 +128,18 @@ export const EUROPE_REP: Record<EuropeSpot, number> = {
 };
 export const CHAMPION_REP = 6;
 export const RELEGATION_REP = -12;
+export const PROMOTION_REP = 8;
 export const OBJECTIVE_MET_REP = 3;
 export const REP_PERF_CLAMP = 10;
 export const REP_PERF_WEIGHT = 0.6;
+
+/**
+ * Spodní patro job marketu (pojistka proti uvíznutí kariéry): kluby s prestiží ≤ tohoto
+ * prahu si tě najmou VŽDY, bez ohledu na reputaci ("nejmenší ryba vezme kohokoliv").
+ * Zajišťuje, že i po několika sestupech za sebou existuje klub, který můžeš vzít –
+ * kariéra nikdy neskončí ve slepé uličce. Kryje nejslabší kluby malých lig i 2. ligy.
+ */
+export const MIN_HIREABLE_PRESTIGE = 40;
 
 /** Posun/rozsah prestiže týmu v rámci ligy (`teamPrestige` v leagues.ts). */
 export const PRESTIGE_SHIFT = -18;

@@ -39,6 +39,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
     leagueName: state.leagueName,
     yourTeamId: state.yourTeamId,
     yourName: yourTeam.name,
+    yourLogo: yourTeam.logo,
     yourRank: you.rank,
     expectedRank: expectedRank(yourTeam, state.teams),
     yourPoints: you.points,
@@ -51,6 +52,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
     champion: verdict.champion,
     europe: verdict.europe,
     relegated: verdict.relegated,
+    promoted: verdict.promoted,
     championId: champion.teamId,
     championName: teamById(state.teams, champion.teamId).name,
     objectiveMet: you.rank <= state.objective.targetRank,
@@ -100,6 +102,7 @@ export interface CareerStats {
   titles: number;
   europeanQualifs: number;
   relegations: number;
+  promotions: number;
   bestRank: number;
   worstRank: number;
   avgRank: number;
@@ -119,6 +122,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
   let titles = 0;
   let europeanQualifs = 0;
   let relegations = 0;
+  let promotions = 0;
   let bestRank = Infinity;
   let worstRank = 0;
   let sumRank = 0;
@@ -134,6 +138,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
     if (s.champion) titles++;
     if (s.europe !== "NONE") europeanQualifs++;
     if (s.relegated) relegations++;
+    if (s.promoted) promotions++;
     bestRank = Math.min(bestRank, s.yourRank);
     worstRank = Math.max(worstRank, s.yourRank);
     sumRank += s.yourRank;
@@ -152,6 +157,7 @@ export function careerStats(history: SeasonSummary[]): CareerStats | null {
     titles,
     europeanQualifs,
     relegations,
+    promotions,
     bestRank,
     worstRank,
     avgRank: Math.round((sumRank / history.length) * 10) / 10,

@@ -124,6 +124,22 @@ export function generateLeague(seed: number): GameTeam[] {
   return amplifySpread(base);
 }
 
+/**
+ * Vloží tvůj klub do cílové ligy (postup/sestup) – tvůj tým si nese SVÉ ratingy
+ * (kontinuita síly), soupeři přijdou z reálné tabulky cílové ligy. Udrží sudý počet
+ * (roundRobin ho vyžaduje): tvůj tým nahradí nejslabšího soupeře, když by byl počet lichý.
+ * Ratingy se ZÁMĚRNĚ nepřepočítávají spreadem – jinak by se tvá síla stáhla k průměru
+ * nové ligy (sestoupivší klub má být v nižší lize relativně silný a naopak).
+ */
+export function injectYourTeam(leagueTeams: GameTeam[], you: GameTeam): GameTeam[] {
+  const others = leagueTeams
+    .filter((t) => t.id !== you.id)
+    .sort((a, b) => b.attack - b.defense - (a.attack - a.defense)); // nejsilnější první
+  let roster = [you, ...others];
+  if (roster.length % 2 === 1) roster = roster.slice(0, -1); // dropni nejslabšího soupeře
+  return roster;
+}
+
 /** Rychlé vyhledání týmu podle id. */
 export function teamById(teams: GameTeam[], id: number): GameTeam {
   const t = teams.find((x) => x.id === id);

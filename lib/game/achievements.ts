@@ -68,6 +68,14 @@ export const ACHIEVEMENTS: Achievement[] = [
     check: (c) => c.last.expectedRank >= 15 && !c.last.relegated,
   },
   {
+    id: "promotion",
+    title: "Návrat mezi elitu",
+    desc: "Postup z druhé ligy zpět do nejvyšší soutěže.",
+    icon: "🔼",
+    tier: "silver",
+    check: (c) => Boolean(c.last.promoted),
+  },
+  {
     id: "fairytale",
     title: "Pohádka",
     desc: "Vyhraj titul s týmem, u kterého se čekalo 7. místo a hůř.",

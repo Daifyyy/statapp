@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/authUser";
 import { allowRequest, tooMany } from "@/lib/rateLimit";
 import { getGameLeague } from "@/lib/data/repository";
-import { GAME_LEAGUES, MOCK_LEAGUE } from "@/lib/game/leagues";
+import { GAME_LEAGUES, MOCK_LEAGUE, SECOND_TIER_IDS } from "@/lib/game/leagues";
 
-const ALLOWED = new Set<number>([...GAME_LEAGUES.map((l) => l.id), MOCK_LEAGUE.id]);
+// Nejvyšší ligy (výběr/job market) + 2. ligy (cíl sestupu/postupu) + mock.
+const ALLOWED = new Set<number>([
+  ...GAME_LEAGUES.map((l) => l.id),
+  ...SECOND_TIER_IDS,
+  MOCK_LEAGUE.id,
+]);
 
 /**
  * Týmy jedné ligy s herními ratingy (výběr klubu / job market). Na cold cache spouští

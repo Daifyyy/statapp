@@ -9,7 +9,7 @@ export type Plan = "balanced" | "open" | "low_block" | "press" | "counter";
 
 /** Sezónní cíl vedení klubu (dle očekávaného umístění). Splnění → bonus k reputaci. */
 export interface Objective {
-  kind: "title" | "europe" | "midtable" | "survival";
+  kind: "title" | "europe" | "midtable" | "survival" | "promotion";
   /** Umístění, které je třeba dosáhnout (met = yourRank ≤ targetRank). */
   targetRank: number;
   text: string;
@@ -117,6 +117,8 @@ export interface SeasonSummary {
   leagueName: string;
   yourTeamId: number;
   yourName: string;
+  /** URL loga tvého klubu (reálné týmy z API); u fiktivní ligy chybí. */
+  yourLogo?: string;
   yourRank: number;
   /** Očekávané umístění dle síly týmu (pro over/under-performance). */
   expectedRank: number;
@@ -131,8 +133,10 @@ export interface SeasonSummary {
   champion: boolean;
   /** Kam vede umístění evropsky (vč. předkola). */
   europe: EuropeSpot;
-  /** Sestup z ligy. */
+  /** Sestup z ligy (z nejvyšší → 2. liga; z 2. ligy → vyhazov). */
   relegated: boolean;
+  /** Postup do vyšší ligy (jen z 2. ligy: umístění v postupové zóně). */
+  promoted?: boolean;
   championId: number;
   championName: string;
   /** Byl splněn sezónní cíl vedení? (bonus k reputaci) */

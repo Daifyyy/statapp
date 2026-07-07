@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AppHeader } from "./AppHeader";
 import { TeamLogo } from "./TeamLogo";
 import type { SessionUser } from "./sessionUser";
-import { teamById } from "@/lib/game/teams";
+import { teamById, injectYourTeam } from "@/lib/game/teams";
 import { randomSeed } from "@/lib/game/rng";
 import {
   newSeason,
@@ -29,6 +29,7 @@ import {
   seasonTone,
   leagueStars,
   evaluateSeason,
+  nextTransition,
   EUROPE_LABEL,
 } from "@/lib/game/leagues";
 import { PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
@@ -1282,9 +1283,9 @@ function FormDots({ form }: { form: ("W" | "D" | "L")[] }) {
   );
 }
 
-/** Zóna umístění (pohár / sestup) pro barevné zvýraznění řádku tabulky. */
+/** Zóna umístění (postup / pohár / sestup) pro barevné zvýraznění řádku tabulky. */
 interface RankZone {
-  key: "ucl" | "uel" | "uecl" | "releg";
+  key: "promo" | "ucl" | "uel" | "uecl" | "releg";
   border: string;
   dot: string;
   label: string;
@@ -1297,6 +1298,8 @@ function rankZone(
   leagueAccess: LeagueAccess | null
 ): RankZone | null {
   const v = evaluateSeason(rank, size, leagueId, leagueAccess);
+  if (v.promoted)
+    return { key: "promo", border: "border-l-positive", dot: "bg-positive", label: "Postup" };
   if (v.relegated)
     return { key: "releg", border: "border-l-negative", dot: "bg-negative", label: "Sestup" };
   const e = v.europe;
@@ -1444,6 +1447,19 @@ function YourForm({ state }: { state: SeasonState }) {
 
 // ───────────────────────── konec sezóny + job market ─────────────────────────
 
+/** Načte týmy jedné ligy s ratingy (pro přechod sestup/postup). */
+async function fetchGameLeagueTeams(
+  id: number
+): Promise<{ teams: GameTeam[]; leagueAccess: LeagueAccess | null }> {
+  const r = await fetch(`/api/game/league?id=${id}`);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error ?? "Chyba");
+  return {
+    teams: d.teams as GameTeam[],
+    leagueAccess: (d.leagueAccess as LeagueAccess | null) ?? null,
+  };
+}
+
 function SeasonDone({
   save,
   onContinue,
@@ -1462,6 +1478,7 @@ function SeasonDone({
   onError: (e: string | null) => void;
 }) {
   const [jobs, setJobs] = useState(false);
+  const [moving, setMoving] = useState(false);
   const s = save.current;
   if (!s) return null;
   const summary = summarizeSeason(s);
@@ -1469,6 +1486,22 @@ function SeasonDone({
   const repDelta = projectedRep - Math.round(save.manager.reputation);
   const champ = teamById(s.teams, summary.championId);
   const tone = seasonTone(summary);
+  const transition = nextTransition(summary, s.leagueId);
+
+  // Přechod do vyšší/nižší ligy: dotáhni cílovou ligu a vlož svůj klub, pak spusť sezónu.
+  async function moveTo(targetId: number, targetName: string) {
+    if (!s) return;
+    setMoving(true);
+    onError(null);
+    try {
+      const { teams, leagueAccess } = await fetchGameLeagueTeams(targetId);
+      const roster = injectYourTeam(teams, teamById(s.teams, s.yourTeamId));
+      onSwitch(targetId, targetName, roster, s.yourTeamId, leagueAccess);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Nepodařilo se načíst ligu.");
+      setMoving(false);
+    }
+  }
   // Náhled nově odemčených achievementů (shodné s tím, co uloží finishAndAdvance).
   const folded = foldSeason(save.profile, summary, projectedRep);
   const earned = newlyEarned(
@@ -1498,7 +1531,13 @@ function SeasonDone({
     <div className="mt-4">
       <div className="rounded-2xl border border-border bg-surface p-5 text-center shadow-sm">
         <p className="text-3xl">
-          {summary.champion ? "🏆" : summary.relegated ? "⚠️" : "🏁"}
+          {summary.promoted
+            ? "🔼"
+            : summary.champion
+              ? "🏆"
+              : summary.relegated
+                ? "⚠️"
+                : "🏁"}
         </p>
         <p className="mt-2 text-sm font-semibold text-foreground">
           Sezóna {summary.season} · {s.leagueName}
@@ -1538,21 +1577,73 @@ function SeasonDone({
             </div>
           </div>
         )}
+        {transition.type === "sacked" && (
+          <p className="mt-3 rounded-xl border border-negative/30 bg-negative/10 px-3 py-2 text-xs text-negative">
+            Vedení tě po sestupu odvolalo. Najdi si nový klub — se sníženou reputací tě vezmou
+            spíš menší týmy.
+          </p>
+        )}
+        {transition.type === "down" && (
+          <p className="mt-3 text-xs text-muted">
+            Klub sestupuje do druhé ligy. Můžeš ho vzít i o patro níž a zabojovat o postup,
+            nebo přijmout jinou nabídku.
+          </p>
+        )}
+        {transition.type === "up" && (
+          <p className="mt-3 text-xs text-positive">
+            Postup! Klub se vrací do nejvyšší soutěže.
+          </p>
+        )}
         <div className="mt-4 flex flex-wrap justify-center gap-2">
-          <button
-            type="button"
-            onClick={onContinue}
-            className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
-          >
-            Pokračovat s klubem →
-          </button>
-          <button
-            type="button"
-            onClick={() => setJobs(true)}
-            className="rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-muted transition hover:text-foreground"
-          >
-            Změnit tým
-          </button>
+          {transition.type === "sacked" ? (
+            <button
+              type="button"
+              onClick={() => setJobs(true)}
+              className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+            >
+              Najít nový klub →
+            </button>
+          ) : (
+            <>
+              {transition.type === "stay" && (
+                <button
+                  type="button"
+                  onClick={onContinue}
+                  className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                >
+                  Pokračovat s klubem →
+                </button>
+              )}
+              {transition.type === "up" && (
+                <button
+                  type="button"
+                  disabled={moving}
+                  onClick={() => moveTo(transition.leagueId, transition.leagueName)}
+                  className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {moving ? "Načítá se…" : `Postup! Hrát ${transition.leagueName} →`}
+                </button>
+              )}
+              {transition.type === "down" && (
+                <button
+                  type="button"
+                  disabled={moving}
+                  onClick={() => moveTo(transition.leagueId, transition.leagueName)}
+                  className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+                >
+                  {moving ? "Načítá se…" : `Hrát 2. ligu (${transition.leagueName}) →`}
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={moving}
+                onClick={() => setJobs(true)}
+                className="rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-50"
+              >
+                Změnit tým
+              </button>
+            </>
+          )}
         </div>
       </div>
       <LeagueTable state={s} />
@@ -1687,6 +1778,7 @@ function HistoryView({ save }: { save: SaveState }) {
         <StatTile label="Sezón" value={stats.seasons} />
         <StatTile label="Titulů" value={stats.titles} accent />
         <StatTile label="Poháry" value={stats.europeanQualifs} />
+        <StatTile label="Postupy" value={stats.promotions} />
         <StatTile label="Sestupy" value={stats.relegations} />
         <StatTile label="Ø vstř." value={stats.avgGoalsFor.toFixed(2)} />
         <StatTile label="Ø obdr." value={stats.avgGoalsAgainst.toFixed(2)} />
@@ -1718,7 +1810,8 @@ function HistoryView({ save }: { save: SaveState }) {
               className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
             >
               <span className="w-8 shrink-0 text-xs text-muted">S{h.season}</span>
-              <span className="w-10 shrink-0 text-xs text-muted">{h.yourRank}.</span>
+              <span className="w-7 shrink-0 text-xs text-muted">{h.yourRank}.</span>
+              <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
               <span className="min-w-0 flex-1 truncate">
                 <span className="text-foreground">{h.yourName}</span>{" "}
                 <span className="text-xs text-muted">· {h.leagueName}</span>

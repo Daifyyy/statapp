@@ -419,6 +419,18 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (vč. bonusu za splněný cíl); pak **Pokračovat s klubem** (drift) nebo **Změnit tým** = job market
   (`isHireable`). **Start kariéry** je gated: nová kariéra startuje na `STARTING_REPUTATION` (~30) →
   první výběr klubu jde jen po `isHireable` (ne rovnou top klub).
+- **Sestup/postup mezi 1. a 2. ligou** (`nextTransition` v `leagues.ts`, čisté + testy): konec sezóny
+  vyhodnotí přechod — **nejvyšší liga Top-5 + sestup → reálná 2. liga** (`SECOND_TIERS`: Championship 40,
+  LaLiga 2 141, Serie B 136, 2.BL 79, Ligue 2 62; navázané na svou nejvyšší přes `firstTierId`,
+  `promoSpots=2`), **2. liga + postupová zóna (top 2) → zpět nahoru**, **2. liga/sestup nebo malá liga
+  bez modelu 2. ligy → vyhazov** (`sacked` → nucený job market, žádné „Pokračovat"). `evaluateSeason`
+  vrací i `promoted` (jen 2. liga; Evropa z 2. ligy = vždy `NONE`); `seasonObjective` ve 2. lize míří na
+  postup. Přechod nahoru/dolů dotáhne UI (`SeasonDone.moveTo` → `/api/game/league?id=` s 2. ligami v
+  allowlistu `SECOND_TIER_IDS`) a **vloží tvůj klub s jeho ratingy** do cílové ligy (`injectYourTeam` —
+  soupeři z reálné tabulky, tvůj tým bez přepočtu spreadem, sudý počet pro `roundRobin`). Tabulka
+  zvýrazňuje **postupovou zónu** (positive) vedle sestupové. **Pojistka proti uvíznutí kariéry:**
+  `isHireable` bere kluby s prestiží ≤ `MIN_HIREABLE_PRESTIGE` (40) **vždy** → po sérii sestupů existuje
+  klub k převzetí. Postup dá reputační bonus (`PROMOTION_REP`) + achievement „Návrat mezi elitu".
 - **Trvalý manažerský profil (síň slávy)** (`lib/game/profile.ts` + `lib/game/achievements.ts`,
   čisté + testy): profil (`ManagerProfile{allTime:AllTimeRecords, achievements}`) **přežívá „Novou
   kariéru"** (meta-progrese) — reset ukončí jen aktuální běh (`current:null`, `history:[]`, reputace),
@@ -439,9 +451,10 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab): hlavička + kariérní rekordy +
   **klub vs reprezentace** (reprezentace = placeholder „🔜 připravujeme", Phase 4) + `AchievementsGrid`
   (odemčené barevně dle tier, zamčené šedé). `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno").
-  Ligová tabulka **zvýrazňuje pohárové/sestupové zóny** (barevný okraj + legenda, přes `evaluateSeason`/
-  `EUROPE_LABEL`: LM=home, EL=away, KL=positive, sestup=negative). Historie kariéry ukazuje u sezóny
-  **reputační zisk/ztrátu** (`reputationDeltas`). Reálná loga přes `TeamLogo`. `app/hra/`, nav 🎮, sitemap.
+  Ligová tabulka **zvýrazňuje pohárové/postupové/sestupové zóny** (barevný okraj + legenda, přes
+  `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL/postup=positive, sestup=negative). Historie kariéry
+  ukazuje u sezóny **klub (logo `TeamLogo` + `SeasonSummary.yourLogo`)** i **reputační zisk/ztrátu**
+  (`reputationDeltas`). Kariérní statistiky mají i **Postupy**. `app/hra/`, nav 🎮, sitemap.
 - **Možná rozšíření (TODO):** Phase 3 (refaktor SaveState + klubový pohár/Liga mistrů) a Phase 4
   (reprezentační pohár Euro/MS) z roadmapy; dále rozpočet.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
