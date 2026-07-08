@@ -151,8 +151,12 @@ export interface RawStandingRow {
   homeGoalsFor?: number;
 }
 
-/** Shrink k ligovému průměru při malém vzorku (méně šumu na začátku sezóny). */
-function shrink(value: number, mean: number, n: number, k = SHRINK_K): number {
+/**
+ * Shrink k průměru populace při malém vzorku (méně šumu na začátku sezóny).
+ * Exportované – používá i `scripts/buildNationalTeams.ts` pro reprezentace, které mají
+ * často jen pár odehraných zápasů a jejich syrový průměr gólů je divoký.
+ */
+export function shrink(value: number, mean: number, n: number, k = SHRINK_K): number {
   return (value * n + mean * k) / (n + k);
 }
 

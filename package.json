@@ -15,6 +15,7 @@
     "calibrate": "node --env-file=.env --import tsx scripts/calibrate.ts",
     "audit-leagues": "node --env-file=.env --import tsx scripts/auditLeagueAccess.ts",
     "sim-game": "node --import tsx scripts/simGame.ts",
+    "build-national-teams": "node --env-file=.env --import tsx scripts/buildNationalTeams.ts",
     "import-transfers": "node --env-file=.env --import tsx scripts/importTransfers.ts",
     "refresh-transfers": "node --env-file=.env --import tsx scripts/refreshTransfers.ts",
     "postinstall": "prisma generate"
