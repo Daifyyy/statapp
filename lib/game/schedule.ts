@@ -19,38 +19,8 @@ import type { Fixture } from "./types";
  * prostředí (viz testy v `game.test.ts`).
  */
 export function roundRobin(teamIds: number[]): Fixture[][] {
-  const n = teamIds.length;
-  if (n < 2 || n % 2 !== 0) {
-    throw new Error(`roundRobin: potřebuje sudý počet týmů, dostal ${n}`);
-  }
-  const half = n / 2;
-  const roundsSingle = n - 1; // = počet rotujících týmů (fixní je teamIds[n-1])
-  const firstLeg: Fixture[][] = [];
-
-  for (let r = 0; r < roundsSingle; r++) {
-    const round: Fixture[] = [];
-    // Fixní tým vs rotující – jediná dvojice, která střídá prostředí dle parity kola.
-    const fixed = teamIds[n - 1];
-    const opp = teamIds[r % roundsSingle];
-    const fixedHome = r % 2 === 0;
-    round.push({
-      round: r,
-      homeId: fixedHome ? fixed : opp,
-      awayId: fixedHome ? opp : fixed,
-    });
-    // Zbylé dvojice: proti sobě týmy symetricky kolem `r` v kruhu rotujících.
-    for (let i = 1; i < half; i++) {
-      const a = teamIds[(r + i) % roundsSingle];
-      const b = teamIds[(r - i + roundsSingle) % roundsSingle];
-      const aHome = i % 2 === 0; // orientace dle indexu dvojice, ne dle čísla kola
-      round.push({
-        round: r,
-        homeId: aHome ? a : b,
-        awayId: aHome ? b : a,
-      });
-    }
-    firstLeg.push(round);
-  }
+  const firstLeg = singleRoundRobin(teamIds);
+  const roundsSingle = firstLeg.length;
 
   // Druhá polovina: stejné páry s prohozeným domácím prostředím. Když se prostředí
   // v první půlce střídá, je korektní i přechod mezi půlkami (…H|A…).
@@ -63,4 +33,49 @@ export function roundRobin(teamIds: number[]): Fixture[][] {
   );
 
   return [...firstLeg, ...secondLeg];
+}
+
+/**
+ * JEDNOKOLOVÝ rozpis: každý s každým právě jednou (`n-1` kol po `n/2` zápasech).
+ * Turnajová skupina 4 týmů → 3 kola po 2 zápasech, 6 zápasů. `roundRobin` z něj skládá
+ * dvoukolový rozpis přidáním zrcadla, takže logika kruhové metody žije jen tady.
+ *
+ * V turnaji na neutrální půdě je `homeId`/`awayId` jen **nominální** (kdo je vlevo na
+ * tabuli): s `homeBoost: 1` vrací `homeAdvantage` nulový bonus i postih, takže na výsledek
+ * nemá vliv. Stejný kompromis dělá i predikční pipeline u Ligy národů.
+ */
+export function singleRoundRobin(teamIds: number[]): Fixture[][] {
+  const n = teamIds.length;
+  if (n < 2 || n % 2 !== 0) {
+    throw new Error(`singleRoundRobin: potřebuje sudý počet týmů, dostal ${n}`);
+  }
+  const half = n / 2;
+  const rounds = n - 1; // = počet rotujících týmů (fixní je teamIds[n-1])
+  const out: Fixture[][] = [];
+
+  for (let r = 0; r < rounds; r++) {
+    const round: Fixture[] = [];
+    // Fixní tým vs rotující – jediná dvojice, která střídá prostředí dle parity kola.
+    const fixed = teamIds[n - 1];
+    const opp = teamIds[r % rounds];
+    const fixedHome = r % 2 === 0;
+    round.push({
+      round: r,
+      homeId: fixedHome ? fixed : opp,
+      awayId: fixedHome ? opp : fixed,
+    });
+    // Zbylé dvojice: proti sobě týmy symetricky kolem `r` v kruhu rotujících.
+    for (let i = 1; i < half; i++) {
+      const a = teamIds[(r + i) % rounds];
+      const b = teamIds[(r - i + rounds) % rounds];
+      const aHome = i % 2 === 0; // orientace dle indexu dvojice, ne dle čísla kola
+      round.push({
+        round: r,
+        homeId: aHome ? a : b,
+        awayId: aHome ? b : a,
+      });
+    }
+    out.push(round);
+  }
+  return out;
 }

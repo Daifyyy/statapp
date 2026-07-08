@@ -248,6 +248,27 @@ export const ADJUST_MAX = 1.4;
 /** Šance, že v kole nastane náhodný event (deterministicky dle seedu+kola). */
 export const EVENT_CHANCE = 0.3;
 
+// ───────────────────────── turnaj (Phase 4) ─────────────────────────
+
+// Pozn.: turnajové pole se ZÁMĚRNĚ neroztahuje `amplifySpread`. `SPREAD` (1.35) je
+// kalibrovaný pro 20týmovou ligu s velkým rozdílem mezi mistrem a dnem; pole reprezentací
+// je už shora seříznuté kvalifikací a jeho ratingy jdou z reálných dat, takže rozptyl v nich
+// je. Roztažení by z Brazílie udělalo nezastavitelný stroj a z Nového Zélandu terč.
+
+/**
+ * Prodloužení: 2×15 min z 90 → λ se násobí `30/90`. Škáluje se celá λ včetně domácího
+ * bonusu (`matchLambdas(…, lambdaScale)`), ne jen ratingy.
+ */
+export const EXTRA_TIME_LAMBDA = 30 / 90;
+
+/**
+ * Penaltový rozstřel: šance silnějšího týmu. `0.5` = čistý los, výš = útočná kvalita
+ * rozhoduje. Reálně je rozstřel skoro coin-flip, proto jen mírné vychýlení.
+ * `p(A) = 0.5 + PENALTY_ATTACK_WEIGHT × (attackA − attackB)`, clampnuto na `±PENALTY_MAX_EDGE`.
+ */
+export const PENALTY_ATTACK_WEIGHT = 0.08;
+export const PENALTY_MAX_EDGE = 0.1;
+
 // ───────────────────────── kariéra (Phase 1C) ─────────────────────────
 
 /** Reputace nového profilu na startu kariéry (gatuje výběr prvního klubu). */

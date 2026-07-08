@@ -594,8 +594,36 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `derby_motivation` A dával +5 morálky *i* +6 % útoku bez postihu, `captain_dispute` A a
   `fan_protest` A byly čistě ztrátové. Kryto testem („zisk bez ceny"). `events.ts` **nesmí
   importovat `analysis.ts`** (to importuje `engine.ts` → cyklus) – formu si počítá lokálně.
-- **Možná rozšíření (TODO):** Phase 3 (refaktor SaveState + klubový pohár/Liga mistrů) a Phase 4
-  (reprezentační pohár Euro/MS) z roadmapy.
+- **Turnajové jádro** (`lib/game/tournament.ts`, čisté + `tournament.test.ts`; sdílené pro
+  reprezentační turnaje i budoucí klubový pohár): skupiny + vyřazovací pavouk, deterministické
+  dle seedu, **offline**. Formáty `EURO_FORMAT` (6×4, top 2 + 4 nejlepší třetí = 16 → osmifinále)
+  a `WORLD_CUP_FORMAT` (12×4, top 2 + 8 třetích = 32 → šestnáctifinále). Agency (plán, counter,
+  instrukce, morálka, kondice, eventy) běží beze změny přes `AgencyState`; AI jede `NEUTRAL_ADJUST`.
+  - **Neutrální půda zadarmo:** `homeBoost: 1` → `homeAdvantage(1) === {0, 0}`, takže `homeId`/
+    `awayId` ve skupině je jen nominální. Pořadatel může mít `homeBoost > 1` a výhodu dostane.
+  - **`singleRoundRobin`** (`schedule.ts`) vytknuto z `roundRobin` – skupina 4 týmů = 3 kola po
+    2 zápasech. `roundRobin` z něj skládá dvoukolový rozpis přidáním zrcadla.
+  - **`groupTable`** (`standings.ts`): body → **vzájemné zápasy** → gólový rozdíl → vstřelené →
+    **seedovaný los**. Ligový `buildTable` řadí při shodě podle `teamId` — ve skupině o 3 kolech
+    by o postupu rozhodovalo databázové id. Řadí se **po blocích stejného počtu bodů**, ne jedním
+    komparátorem: minitabulka vzájemných zápasů nemusí být tranzitivní (trojitá shoda A>B>C>A)
+    a nekonzistentní komparátor by ve V8 vrátil libovolné pořadí. Los má klíč
+    `deriveSeed(deriveSeed(seed, salt), teamId)`, takže **nezávisí na pořadí vstupu**.
+  - **`bracketSeedOrder`**: rekurzivní klíč pavouka (`[1,2]` → `[1,4,2,3]` → `[1,8,4,5,2,7,3,6]`).
+    Naivní `1v16, 2v15, …` s párováním sousedních vítězů by poslalo jedničku na dvojku už ve
+    čtvrtfinále. `seedBracket` se navíc snaží vyhnout odvetě ze stejné skupiny v prvním kole.
+  - **`playKnockoutTie`** nikdy nevrátí remízu: 90 min → prodloužení (`matchLambdas(…, lambdaScale)`
+    škáluje **celou** λ včetně domácího bonusu, `EXTRA_TIME_LAMBDA = 30/90`) → penalty (vážený los,
+    `p = 0.5 + PENALTY_ATTACK_WEIGHT × Δútok`, clamp `±PENALTY_MAX_EDGE` — rozstřel kvalitou
+    rozhodnutý skoro není). Empiricky **~25 % KO zápasů do prodloužení, ~12 % na penalty** — sedí realitě.
+  - `yourStage` = „kam jsi to dotáhl" (mistr má `"final"`, ne `"done"`); titul se pozná
+    z `champion === yourTeamId`. Vypadnutí neukončí turnaj — dohraje se, aby byl znám mistr.
+  - **Pole se ZÁMĚRNĚ neroztahuje `amplifySpread`** — `SPREAD = 1.35` je kalibrovaný na 20týmovou
+    ligu; reprezentační pole je už seříznuté kvalifikací a ratingy jdou z reálných dat.
+  - `npm run sim-game` sekce 5 měří titul favorita (turnaj je loterie: Euro ~15–23 %, MS ~9 %)
+    a poměr prodloužení/penalt. Malý počet běhů = velký šum.
+- **Možná rozšíření (TODO):** reprezentační dataset + kvalifikace + UI (Phase 4, kroky T3–T6),
+  klubový pohár / Liga mistrů (znovupoužije `tournament.ts`).
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
 
 ## PWA (instalace na iOS/Android)

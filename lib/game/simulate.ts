@@ -51,15 +51,21 @@ export function matchLambdas(
   home: GameTeam,
   away: GameTeam,
   homeAdj: SideAdjust = NEUTRAL_ADJUST,
-  awayAdj: SideAdjust = NEUTRAL_ADJUST
+  awayAdj: SideAdjust = NEUTRAL_ADJUST,
+  /**
+   * Zkrácení hrací doby: λ se násobí podílem odehraných minut. Prodloužení 2×15 min
+   * = `30/90`. Škáluje se **celá** λ včetně domácího bonusu, ne jen ratingy – v kratším
+   * úseku se domácí výhoda realizuje úměrně méně.
+   */
+  lambdaScale = 1
 ): [number, number] {
   const { homeBonus, awayPenalty } = homeAdvantage(home.homeBoost);
   const homeAtk = home.attack * homeAdj.attack;
   const awayAtk = away.attack * awayAdj.attack;
   const homeConcede = home.defense * homeAdj.concede; // kolik domácí dostávají
   const awayConcede = away.defense * awayAdj.concede; // kolik hosté dostávají
-  const lh = clamp((homeAtk + awayConcede) / 2 + homeBonus, MIN_LAMBDA, MAX_LAMBDA);
-  const la = clamp((awayAtk + homeConcede) / 2 - awayPenalty, MIN_LAMBDA, MAX_LAMBDA);
+  const lh = clamp(((homeAtk + awayConcede) / 2 + homeBonus) * lambdaScale, MIN_LAMBDA, MAX_LAMBDA);
+  const la = clamp(((awayAtk + homeConcede) / 2 - awayPenalty) * lambdaScale, MIN_LAMBDA, MAX_LAMBDA);
   return [lh, la];
 }
 
@@ -140,9 +146,11 @@ export function simulateMatch(
   away: GameTeam,
   homeAdj: SideAdjust,
   awayAdj: SideAdjust,
-  rand: () => number
+  rand: () => number,
+  /** `30/90` pro prodloužení; 1 = plný zápas. Viz `matchLambdas`. */
+  lambdaScale = 1
 ): { homeGoals: number; awayGoals: number; probs: MatchProbs } {
-  const [lh, la] = matchLambdas(home, away, homeAdj, awayAdj);
+  const [lh, la] = matchLambdas(home, away, homeAdj, awayAdj, lambdaScale);
   const cells = grid(lh, la);
   const probs = outcomes(cells);
   const s = sample(cells, rand());

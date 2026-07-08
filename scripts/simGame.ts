@@ -2,15 +2,19 @@
 // Spuštění: npm run sim-game
 //           npm run sim-game -- --seasons=300 --careers=60 --maxSeasons=12
 //
-// Měří tři věci:
-//  1. LIGA – náročnost jedné sezóny (Ø body mistra/posledního, jak často vyhraje favorit).
-//     Referenční hodnoty z CLAUDE.md: mistr ~80 b, poslední ~26 b, titul nejsilnějšího ~30 %.
+// Měří pět věcí:
+//  1. LIGA – náročnost jedné sezóny (Ø body mistra/posledního, jak často vyhraje favorit,
+//     rozklad 1X2 a ⌀ góly). Reference: mistr ~80 b, poslední ~26 b, favorit ~30 %, 45/25/30.
 //  2. ROZVOJ – kolik sezón trvá vytáhnout klub ze středu tabulky nahoru. Cílová křivka:
 //     do Evropy (top 4) kolem 5.–6. sezóny, medián prvního titulu 6.–8. sezóna. Když je
 //     titul do 3. sezóny, rozvoj je overpowered; když nad 10, je k ničemu. Kontrolní běh
 //     BEZ rozvoje musí zůstat placatý (~10. místo napořád) – jinak měříme něco jiného.
 //  3. CLAMP – jak často kombinace plán × counter × instrukce × morálka × kondice × eventy
 //     narazí na `ADJUST_MIN/MAX`. Za stropem přestanou být volby cítit → má být vzácné.
+//  4. INVESTICE – kam se vyplatí dávat rozvojové body. Žádná oblast nesmí ostatní dominovat.
+//  5. TURNAJ – Euro/MS: jak často vyhraje favorit (turnaj je loterie), kolik vyřazovacích
+//     zápasů jde do prodloužení (~25 %) a na penalty (~12 %). Malý počet běhů = velký šum:
+//     u MS se titul nejsilnějšího čeká jen ~9 %, takže 0/40 není chyba.
 
 import { generateLeague } from "../lib/game/teams.ts";
 import {
@@ -30,8 +34,14 @@ import { scoutOpponent } from "../lib/game/scouting.ts";
 import { developmentPoints } from "../lib/game/development.ts";
 import type { DevSpend } from "../lib/game/development.ts";
 import { teamStrengthScore } from "../lib/game/leagues.ts";
+import {
+  EURO_FORMAT,
+  WORLD_CUP_FORMAT,
+  newTournament,
+  simulateTournamentToEnd,
+} from "../lib/game/tournament.ts";
 import { ADJUST_MAX, ADJUST_MIN, STARTING_REPUTATION } from "../lib/game/balance.ts";
-import type { Plan, SeasonState } from "../lib/game/types.ts";
+import type { GameTeam, Plan, SeasonState } from "../lib/game/types.ts";
 
 function arg(name: string, dflt: number): number {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -227,6 +237,69 @@ function areaValue() {
   }
 }
 
+// ───────────────── 5) turnajové jádro (Phase 4) ─────────────────
+//
+// Turnaj je loterie: nejsilnější tým vyhraje řádově v jednotkách až nižších desítkách procent.
+// Kontrolní čísla proti realitě: do prodloužení jde ~čtvrtina vyřazovacích zápasů a z toho
+// zhruba polovina na penalty. Pole tady jen recykluje generovanou ligu (`homeBoost: 1` =
+// neutrální půda) – reálné ratingy reprezentací dodá až `nationalTeams.ts` (T3).
+
+/** Turnajové pole: přečísluje generovanou ligu a nastaví neutrální půdu. */
+function tournamentField(n: number, seed: number): GameTeam[] {
+  const out: GameTeam[] = [];
+  let s = seed;
+  while (out.length < n) {
+    for (const t of generateLeague(s)) {
+      if (out.length >= n) break;
+      out.push({ ...t, id: out.length + 1, name: `N${out.length + 1}`, homeBoost: 1 });
+    }
+    s++;
+  }
+  return out;
+}
+
+function tournaments() {
+  console.log(`\n── 5) Turnajové jádro ──`);
+  for (const [format, size, runs] of [
+    [EURO_FORMAT, 24, Math.max(60, Math.round(SEASONS / 2))],
+    [WORLD_CUP_FORMAT, 48, Math.max(40, Math.round(SEASONS / 3))],
+  ] as const) {
+    let strongestTitles = 0;
+    let top4Titles = 0;
+    let champRankSum = 0;
+    let extraTime = 0;
+    let penalties = 0;
+    let koMatches = 0;
+
+    for (let i = 0; i < runs; i++) {
+      const teams = tournamentField(size, 1000 + i * 7);
+      const ranked = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+      const done = simulateTournamentToEnd(
+        newTournament(9000 + i, teams[0].id, teams, format),
+        format
+      );
+      const rank = ranked.findIndex((t) => t.id === done.champion) + 1;
+      champRankSum += rank;
+      if (rank === 1) strongestTitles++;
+      if (rank <= 4) top4Titles++;
+      extraTime += done.knockout.filter((k) => k.afterExtraTime).length;
+      penalties += done.knockout.filter((k) => k.penalties).length;
+      koMatches += done.knockout.length;
+    }
+
+    console.log(`   ${format.name} (${size} týmů, ${runs} turnajů)`);
+    console.log(
+      `     titul nejsilnějšího ${((100 * strongestTitles) / runs).toFixed(1).padStart(5)} %` +
+        `   z top 4 ${((100 * top4Titles) / runs).toFixed(1).padStart(5)} %` +
+        `   Ø síla mistra ${(champRankSum / runs).toFixed(1)}. z ${size}`
+    );
+    console.log(
+      `     KO do prodloužení ${((100 * extraTime) / koMatches).toFixed(1).padStart(5)} % (ref ~25 %)` +
+        `   na penalty ${((100 * penalties) / koMatches).toFixed(1).padStart(5)} % (ref ~12 %)`
+    );
+  }
+}
+
 // ───────────────────────── main ─────────────────────────
 
 leagueDifficulty();
@@ -239,3 +312,4 @@ console.log(
   `   dotčeno ${clampHits}/${clampChecks} zápasů (${((clampHits / clampChecks) * 100).toFixed(2)} %) — má být vzácné`
 );
 areaValue();
+tournaments();
