@@ -5,10 +5,13 @@
 // Klíčový návrhový požadavek: **jedna dobrá sezóna nesmí udělat top tým.** Drží to tři
 // nezávislé stropy:
 //   1. `MAX_DEV_POINTS` (6) na sezónu – strop na to, kolik vůbec můžeš investovat,
-//   2. malý zisk na bod (`DEV_ATTACK_STEP` = 0.03) – 6 bodů do útoku = +0.18,
+//   2. malý zisk na bod (`DEV_ATTACK_STEP` = 0.08) – 6 bodů do útoku = +0.48,
 //   3. `DEV_LEAGUE_CEILING` – nesmíš přeskočit špičku ligy o víc než 5 %.
-// Z čistého středu tabulky na titul to dělá zhruba 4–6 sezón konzistentního přeplňování
-// cíle (ověřeno `npm run sim-game`).
+// Ze středu tabulky do Evropy kolem 5.–6. sezóny, medián titulu 7. (`npm run sim-game`).
+//
+// Čtyři oblasti se liší i TRVANLIVOSTÍ, ne jen výnosem. Útok a obrana mezisezónní drift
+// částečně smyje (regrese k průměru ligy), mládež ten propad tlumí, a `stadion` neregreduje
+// vůbec – proto má nejnižší okamžitý výnos na bod a společný strop `HOME_BOOST_CAP`.
 
 import {
   DEV_ATTACK_STEP,
@@ -19,12 +22,12 @@ import {
   DEV_RANK_POINTS,
   DEV_RELEGATION_POINTS,
   DEV_REPUTATION_THRESHOLD,
-  DEV_STADIUM_MAX,
   DEV_STADIUM_STEP,
   DEV_TITLE_POINTS,
   DEV_YOUTH_MAX,
   DEV_YOUTH_REGRESSION_CUT,
   DRIFT_REGRESSION,
+  HOME_BOOST_CAP,
   MAX_DEV_POINTS,
 } from "./balance";
 import type { GameTeam, SeasonSummary } from "./types";
@@ -50,7 +53,7 @@ export const DEV_AREA_HINT: Record<keyof DevSpend, string> = {
   attack: "Vyšší očekávané góly tvého týmu.",
   defense: "Nižší očekávané obdržené góly.",
   youth: "Menší mezisezónní propad ratingu — udrží, co jsi vydřel.",
-  stadium: "Silnější domácí prostředí (homeBoost).",
+  stadium: "Silnější domácí prostředí. Roste pomalu, ale nikdy neklesne.",
 };
 
 /** Kolik bodů je celkem rozděleno. */
@@ -118,7 +121,7 @@ export function applyDevelopment(
     attack: round2(Math.min(rawAttack, Math.max(attackCap, team.attack))),
     defense: round2(Math.max(rawDefense, Math.min(defenseFloor, team.defense))),
     homeBoost: round2(
-      Math.min(DEV_STADIUM_MAX, team.homeBoost + spend.stadium * DEV_STADIUM_STEP)
+      Math.min(HOME_BOOST_CAP, team.homeBoost + spend.stadium * DEV_STADIUM_STEP)
     ),
   };
 }

@@ -58,7 +58,13 @@ import { emptyProfile, startCareer, foldSeason } from "@/lib/game/profile";
 import { ACHIEVEMENTS, newlyEarned } from "@/lib/game/achievements";
 import type { AchievementTier } from "@/lib/game/achievements";
 import { SAVE_VERSION } from "@/lib/game/types";
-import { DEV_YOUTH_MAX, STARTING_FITNESS, STARTING_REPUTATION } from "@/lib/game/balance";
+import {
+  DEV_STADIUM_STEP,
+  DEV_YOUTH_MAX,
+  HOME_BOOST_CAP,
+  STARTING_FITNESS,
+  STARTING_REPUTATION,
+} from "@/lib/game/balance";
 import { leagueName as leagueNameFor } from "@/lib/game/leagues";
 import type {
   EarnedAchievement,
@@ -1637,12 +1643,14 @@ function DevelopmentPanel({
   spend,
   left,
   youth,
+  homeBoost,
   onChange,
 }: {
   points: number;
   spend: DevSpend;
   left: number;
   youth: number;
+  homeBoost: number;
   onChange: (s: DevSpend) => void;
 }) {
   if (points <= 0) {
@@ -1652,12 +1660,20 @@ function DevelopmentPanel({
       </p>
     );
   }
+  // Kolik bodů do stadionu má ještě smysl (`homeBoost` je stropovaný `HOME_BOOST_CAP`).
+  const stadiumRoom = Math.max(
+    0,
+    Math.round((HOME_BOOST_CAP - homeBoost) / DEV_STADIUM_STEP)
+  );
+
   const bump = (area: keyof DevSpend, delta: number) => {
     const next = { ...spend, [area]: Math.max(0, spend[area] + delta) };
     // Nepřekroč přidělený rozpočet.
     if (spendTotal(next) > points) return;
-    // Mládež má vlastní strop (kumulativní napříč sezónami).
+    // Mládež i stadion mají vlastní strop (kumulativní napříč sezónami) – bod nad strop
+    // by se tiše ztratil (`applyDevelopment` ho ořízne), tak ho radši nejde ani přidat.
     if (area === "youth" && youth + next.youth > DEV_YOUTH_MAX) return;
+    if (area === "stadium" && next.stadium > stadiumRoom) return;
     onChange(next);
   };
 
@@ -1677,14 +1693,19 @@ function DevelopmentPanel({
       <div className="mt-2 space-y-1.5">
         {DEV_AREAS.map((area) => {
           const atYouthCap = area === "youth" && youth + spend.youth >= DEV_YOUTH_MAX;
+          const atStadiumCap = area === "stadium" && spend.stadium >= stadiumRoom;
+          const atCap = atYouthCap || atStadiumCap;
+          const hint = atYouthCap
+            ? "Akademie na maximu"
+            : atStadiumCap
+              ? "Stadion na maximu"
+              : DEV_AREA_HINT[area];
           return (
             <div key={area} className="flex items-center gap-2">
               <span className="w-20 shrink-0 text-xs text-foreground" title={DEV_AREA_HINT[area]}>
                 {DEV_AREA_LABEL[area]}
               </span>
-              <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
-                {area === "youth" && atYouthCap ? "Akademie na maximu" : DEV_AREA_HINT[area]}
-              </span>
+              <span className="min-w-0 flex-1 truncate text-[10px] text-muted">{hint}</span>
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
@@ -1701,7 +1722,7 @@ function DevelopmentPanel({
                 <button
                   type="button"
                   aria-label={`Přidat bod: ${DEV_AREA_LABEL[area]}`}
-                  disabled={left === 0 || atYouthCap}
+                  disabled={left === 0 || atCap}
                   onClick={() => bump(area, 1)}
                   className="h-7 w-7 rounded-lg border border-border bg-surface text-sm font-bold text-muted transition hover:text-foreground disabled:opacity-30"
                 >
@@ -1853,6 +1874,7 @@ function SeasonDone({
             spend={spend}
             left={left}
             youth={s.youth}
+            homeBoost={teamById(s.teams, s.yourTeamId).homeBoost}
             onChange={setSpend}
           />
         )}

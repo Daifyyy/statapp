@@ -5,6 +5,7 @@ import {
   standingsToTeams,
   amplifySpread,
   injectYourTeam,
+  teamById,
 } from "./teams";
 import {
   evaluateSeason,
@@ -23,7 +24,13 @@ import { teamSeasonStats } from "./analysis";
 import { cleanSheetsOf } from "./career";
 import { roundRobin } from "./schedule";
 import { buildTable } from "./standings";
-import { matchLambdas, predictProbs, simulateMatch, NEUTRAL_ADJUST } from "./simulate";
+import {
+  matchLambdas,
+  predictProbs,
+  simulateMatch,
+  homeAdvantage,
+  NEUTRAL_ADJUST,
+} from "./simulate";
 import {
   newSeason,
   playRound,
@@ -50,6 +57,7 @@ import { INSTRUCTIONS, resolveInstruction } from "./instructions";
 import {
   COUNTER_BONUS,
   DRIFT_REGRESSION,
+  HOME_BOOST_CAP,
   MAX_DEV_POINTS,
   SCOUT_CONFIDENCE,
   SCOUT_CONFIDENCE_BOOSTED,
@@ -1169,6 +1177,102 @@ describe("development", () => {
     const next = startNextSeason(s, { attack: 0, defense: 0, youth: 2, stadium: 0 });
     expect(next.leagueAccess).toEqual(access);
     expect(next.youth).toBe(2);
+  });
+});
+
+describe("domácí výhoda", () => {
+  const T = (attack: number, defense: number, homeBoost: number, id: number): GameTeam => ({
+    id,
+    name: `T${id}`,
+    short: "T",
+    color: "#000",
+    attack,
+    defense,
+    homeBoost,
+  });
+
+  it("homeBoost zvedá útok domácích A snižuje, kolik dostanou", () => {
+    const home = T(1.65, 1.3, 1.15, 1);
+    const away = T(1.65, 1.3, 1.15, 2);
+    const [lh, la] = matchLambdas(home, away);
+    const [lhFlat, laFlat] = matchLambdas({ ...home, homeBoost: 1 }, away);
+    expect(lh).toBeGreaterThan(lhFlat); // domácí dají víc
+    expect(la).toBeLessThan(laFlat); // a zároveň dostanou míň
+  });
+
+  it("hosté nemají žádný postih – celá výhoda je na straně domácích", () => {
+    const a = T(1.65, 1.3, 1.05, 1);
+    const b = T(1.65, 1.3, 1.25, 2);
+    // Hostův útok do λ vstupuje bez ohledu na to, jak silné je domácí prostředí.
+    const weakHome = matchLambdas(a, b);
+    const strongHome = matchLambdas({ ...a, homeBoost: 1.25 }, b);
+    const awayAttackTerm = (l: number, homeDefense: number, defenseMult: number) =>
+      2 * l - homeDefense / defenseMult;
+    expect(awayAttackTerm(weakHome[1], a.defense, homeAdvantage(1.05).defenseMult)).toBeCloseTo(
+      awayAttackTerm(strongHome[1], a.defense, homeAdvantage(1.25).defenseMult)
+    );
+  });
+
+  it("identické týmy: domácí mají výhodu, ale ne drtivou", () => {
+    const p = predictProbs(T(1.65, 1.3, 1.1, 1), T(1.65, 1.3, 1.1, 2));
+    expect(p.homeWin).toBeGreaterThan(p.awayWin);
+    expect(p.homeWin).toBeGreaterThan(0.4);
+    expect(p.homeWin).toBeLessThan(0.55);
+  });
+
+  it("homeAdvantage je stropovaná HOME_BOOST_CAP i pro absurdní vstup", () => {
+    const capped = homeAdvantage(HOME_BOOST_CAP);
+    expect(homeAdvantage(5)).toEqual(capped);
+    expect(homeAdvantage(0.5)).toEqual({ attackMult: 1, defenseMult: 1 }); // pod 1 = neutrál
+    // Obrana dostává menší podíl výhody než útok.
+    expect(capped.defenseMult).toBeLessThan(capped.attackMult);
+  });
+
+  // Regrese: `homeBoost` se dřív dělil PRE-spread útokem, jenže model počítá
+  // `attack × homeBoost` s post-spread útokem → silné týmy doma přestřelovaly (+9 %)
+  // a slabé podstřelovaly (−18 %) svoje skutečné domácí góly na zápas.
+  it("standingsToTeams kalibruje homeBoost proti FINÁLNÍMU útoku", () => {
+    const rows = Array.from({ length: 20 }, (_, i) => {
+      const gpg = 2.3 - i * 0.07;
+      return {
+        teamId: i + 1,
+        name: `T${i + 1}`,
+        played: 38,
+        goalsFor: Math.round(gpg * 38),
+        goalsAgainst: Math.round((0.8 + i * 0.05) * 38),
+        homePlayed: 19,
+        homeGoalsFor: Math.round(gpg * 1.18 * 19), // doma o 18 % víc
+      };
+    });
+    const teams = standingsToTeams(rows, { goalsFor: 1.35, goalsAgainst: 1.35 });
+    for (const [idx, t] of teams.entries()) {
+      const realHomeGpg = rows[idx].homeGoalsFor / rows[idx].homePlayed;
+      const modeled = t.attack * t.homeBoost;
+      const atCap = t.homeBoost >= HOME_BOOST_CAP - 1e-9 || t.homeBoost <= 1 + 1e-9;
+      if (atCap) continue; // u stropu vítězí `HOME_BOOST_CAP` nad kalibrací (vědomě)
+      expect(Math.abs(modeled / realHomeGpg - 1), `${t.name}`).toBeLessThan(0.01);
+    }
+    // Slabé týmy narazí na strop: `amplifySpread` jim útok stlačí tak, že by na svoje
+    // domácí góly potřebovaly homeBoost > CAP. Strop je důležitější než přesnost.
+    expect(teams[teams.length - 1].homeBoost).toBeCloseTo(HOME_BOOST_CAP);
+  });
+
+  it("investice do stadionu nepřekročí HOME_BOOST_CAP ani po mnoha sezónách", () => {
+    const league = generateLeague(3);
+    let me = { ...league[0], homeBoost: 1.1 };
+    for (let season = 0; season < 30; season++) {
+      me = applyDevelopment(me, { attack: 0, defense: 0, youth: 0, stadium: 6 }, league);
+    }
+    expect(me.homeBoost).toBeLessThanOrEqual(HOME_BOOST_CAP);
+    expect(me.homeBoost).toBeCloseTo(HOME_BOOST_CAP);
+  });
+
+  it("stadion na rozdíl od útoku/obrany neregreduje mezi sezónami", () => {
+    const teams = generateLeague(21);
+    let s = newSeason(21, teams[5].id, { teams });
+    const before = teamById(s.teams, s.yourTeamId).homeBoost;
+    s = startNextSeason(simulateToEnd(s));
+    expect(teamById(s.teams, s.yourTeamId).homeBoost).toBe(before);
   });
 });
 

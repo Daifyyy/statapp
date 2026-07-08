@@ -4,7 +4,14 @@
 // display „co říká model" před odehráním).
 
 import { poissonVector, drawTau } from "@/lib/stats/predict";
-import { DC_RHO, MAX_LAMBDA, MIN_LAMBDA } from "./balance";
+import {
+  DC_RHO,
+  HOME_ADV_SCALE,
+  HOME_BOOST_CAP,
+  HOME_DEFENSE_SHARE,
+  MAX_LAMBDA,
+  MIN_LAMBDA,
+} from "./balance";
 import type { GameTeam, MatchProbs } from "./types";
 
 const MAX_GOALS = 10; // stejná mřížka 0..10 jako predict.ts
@@ -26,20 +33,41 @@ interface Cell {
   p: number;
 }
 
-/** Očekávané góly obou týmů z ratingů + úprav (domácí výhoda = homeBoost na útoku). */
+/**
+ * Očekávané góly obou týmů z ratingů + úprav. Domácí výhoda (`homeBoost`) jde do λ dvěma
+ * kanály: zvedá útok domácích a **snižuje, kolik domácí dostávají** (`HOME_DEFENSE_SHARE`).
+ * `HOME_ADV_SCALE` kompenzuje `/2` níž – λ je průměr „co jeden dá" a „co druhý dostane",
+ * takže násobič na jednom sčítanci se v λ projeví jen zhruba půlkou.
+ * Hosté nemají žádný postih; celá výhoda je vyjádřená na straně domácích.
+ */
 export function matchLambdas(
   home: GameTeam,
   away: GameTeam,
   homeAdj: SideAdjust = NEUTRAL_ADJUST,
   awayAdj: SideAdjust = NEUTRAL_ADJUST
 ): [number, number] {
-  const homeAtk = home.attack * home.homeBoost * homeAdj.attack;
+  const { attackMult, defenseMult } = homeAdvantage(home.homeBoost);
+  const homeAtk = home.attack * attackMult * homeAdj.attack;
   const awayAtk = away.attack * awayAdj.attack;
-  const homeConcede = home.defense * homeAdj.concede; // kolik domácí dostávají
+  const homeConcede = (home.defense * homeAdj.concede) / defenseMult; // domácí dostávají míň
   const awayConcede = away.defense * awayAdj.concede; // kolik hosté dostávají
   const lh = clamp((homeAtk + awayConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
   const la = clamp((awayAtk + homeConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
   return [lh, la];
+}
+
+/**
+ * Rozklad `homeBoost` na násobič útoku a obrany domácích. `homeBoost` je stropovaný
+ * (`HOME_BOOST_CAP`) i tady – kdyby ho někdy nějaká cesta (investice do stadionu, migrace
+ * starého save, ručně upravená data) vyhnala výš, model se nesmí utrhnout.
+ */
+export function homeAdvantage(homeBoost: number): {
+  attackMult: number;
+  defenseMult: number;
+} {
+  const hb = clamp(homeBoost, 1, HOME_BOOST_CAP);
+  const edge = (hb - 1) * HOME_ADV_SCALE;
+  return { attackMult: 1 + edge, defenseMult: 1 + edge * HOME_DEFENSE_SHARE };
 }
 
 /** Normalizovaná mřížka skóre (Dixon–Coles korekce nízkých skóre). */

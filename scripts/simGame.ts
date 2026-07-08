@@ -47,20 +47,36 @@ function leagueDifficulty() {
   let champPts = 0;
   let lastPts = 0;
   let strongestTitles = 0;
+  let h = 0;
+  let d = 0;
+  let a = 0;
+  let goals = 0;
   for (let i = 0; i < SEASONS; i++) {
     const teams = generateLeague(1000 + i);
-    const strongest = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a))[0];
-    const table = currentTable(simulateToEnd(newSeason(1000 + i, teams[0].id, { teams })));
+    const strongest = [...teams].sort((x, y) => teamStrengthScore(y) - teamStrengthScore(x))[0];
+    const state = simulateToEnd(newSeason(1000 + i, teams[0].id, { teams }));
+    const table = currentTable(state);
     champPts += table[0].points;
     lastPts += table[table.length - 1].points;
     if (table[0].teamId === strongest.id) strongestTitles++;
+    for (const r of state.results) {
+      goals += r.homeGoals + r.awayGoals;
+      if (r.homeGoals > r.awayGoals) h++;
+      else if (r.homeGoals < r.awayGoals) a++;
+      else d++;
+    }
   }
+  const n = h + d + a;
   console.log(`\n── 1) Náročnost ligy (${SEASONS} sezón, hráč nezasahuje) ──`);
   console.log(`   Ø mistr              ${(champPts / SEASONS).toFixed(1)} b   (ref ~80)`);
   console.log(`   Ø poslední           ${(lastPts / SEASONS).toFixed(1)} b   (ref ~26)`);
   console.log(
     `   titul nejsilnějšího  ${((strongestTitles / SEASONS) * 100).toFixed(1)} %   (ref ~30 %)`
   );
+  console.log(
+    `   domácí/remíza/hosté  ${((100 * h) / n).toFixed(1)} / ${((100 * d) / n).toFixed(1)} / ${((100 * a) / n).toFixed(1)} %   (reálný fotbal ~45/25/30)`
+  );
+  console.log(`   Ø gólů na zápas      ${(goals / n).toFixed(2)}   (ref ~2.7–3.1)`);
 }
 
 // ───────────────────────── hráčská strategie ─────────────────────────
@@ -168,6 +184,49 @@ function development(withDev: boolean) {
   console.log(`   bez titulu do ${MAX_SEASONS}. sezóny: ${neverWon}/${CAREERS}`);
 }
 
+// ───────────────── 4) kam se vyplatí investovat ─────────────────
+//
+// Stadion (`homeBoost`) NEREGREDUJE mezi sezónami, kdežto útok/obranu drift částečně smyje.
+// Čistá „mezní hodnota bodu" ho proto podceňuje – tohle měří skutečný výsledek po N sezónách
+// při strategii „všechno do jedné oblasti". Žádná oblast nesmí ostatní jasně dominovat.
+
+function areaValue() {
+  const areas: (keyof DevSpend)[] = ["attack", "defense", "youth", "stadium"];
+  console.log(
+    `\n── 4) Kam investovat? ${CAREERS} kariér ze středu, ${MAX_SEASONS} sezón, vše do jedné oblasti ──`
+  );
+  for (const area of areas) {
+    let sumRank = 0;
+    let sumPts = 0;
+    let titles = 0;
+    for (let c = 0; c < CAREERS; c++) {
+      const seed = 700000 + c;
+      const teams = generateLeague(seed);
+      const byStrength = [...teams].sort((x, y) => teamStrengthScore(y) - teamStrengthScore(x));
+      let s = newSeason(seed, byStrength[Math.floor(teams.length / 2)].id, { teams });
+      let reputation = STARTING_REPUTATION;
+      for (let season = 1; season <= MAX_SEASONS; season++) {
+        s = playSeason(s);
+        const summary = summarizeSeason(s);
+        if (summary.champion) titles++;
+        if (season === MAX_SEASONS) {
+          sumRank += summary.yourRank;
+          sumPts += summary.yourPoints;
+        }
+        reputation = updateReputation(reputation, summary);
+        const pts = developmentPoints(summary, reputation, s.teams.length, s.devBonus);
+        const spend: DevSpend = { attack: 0, defense: 0, youth: 0, stadium: 0 };
+        spend[area] = pts;
+        s = startNextSeason(s, spend);
+      }
+    }
+    console.log(
+      `   ${area.padEnd(8)} → po ${MAX_SEASONS}. sezóně Ø ${(sumRank / CAREERS).toFixed(1)}. místo, ` +
+        `Ø ${(sumPts / CAREERS).toFixed(1)} b, titulů celkem ${titles}`
+    );
+  }
+}
+
 // ───────────────────────── main ─────────────────────────
 
 leagueDifficulty();
@@ -179,3 +238,4 @@ console.log(`\n── 3) Clamp ADJUST_MIN/MAX ──`);
 console.log(
   `   dotčeno ${clampHits}/${clampChecks} zápasů (${((clampHits / clampChecks) * 100).toFixed(2)} %) — má být vzácné`
 );
+areaValue();
