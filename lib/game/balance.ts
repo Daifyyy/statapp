@@ -46,11 +46,83 @@ export const SPREAD_DEFENSE_MAX = 3.2;
 export const SHRINK_K = 3;
 
 /**
- * Mezisezónní drift ratingu (`driftTeams` v career.ts): regrese ke středu ligy +
- * náhodný šum, ať pořadí sil mezi sezónami mírně kolísá.
+ * Mezisezónní drift ratingu (`driftTeams` v career.ts): regrese ke skutečnému průměru
+ * ligy + náhodný šum, ať pořadí sil mezi sezónami mírně kolísá. Drift **zachovává
+ * rozptyl** ligy (renormalizace) – nesmí volat `amplifySpread`, ten je jen pro čerstvě
+ * postavenou ligu. Dřív se spread násobil 1.35× každou sezónu, regrese ho vracela jen
+ * 0.9× → liga se za ~10 sezón polarizovala do clampů (std útoku 0.56 → 0.91).
  */
 export const DRIFT_REGRESSION = 0.1;
 export const DRIFT_NOISE = 0.25;
+
+/**
+ * Výkonová zpětná vazba AI týmů mezi sezónami: kdo přeplnil očekávání, mírně posílí,
+ * kdo podlezl, oslabí. Násobí normalizovanou odchylku (očekávaná − skutečná příčka).
+ */
+export const DRIFT_PERFORMANCE = 0.06;
+
+// ───────────────────────── rozvoj klubu (Phase B) ─────────────────────────
+
+/** Strop rozvojových bodů za sezónu (`developmentPoints`). */
+export const MAX_DEV_POINTS = 6;
+/** Kolik bodů max. dá samotné umístění v tabulce (percentil × tohle). */
+export const DEV_RANK_POINTS = 3;
+export const DEV_OBJECTIVE_POINTS = 1;
+export const DEV_TITLE_POINTS = 2;
+export const DEV_EUROPE_POINTS = 1;
+export const DEV_RELEGATION_POINTS = -2;
+/** Reputace, od které klub přitahuje investory (+1 bod). */
+export const DEV_REPUTATION_THRESHOLD = 65;
+
+/**
+ * Zisk za 1 bod investice. Laděno `npm run sim-game` (60 kariér ze středu 20týmové ligy):
+ *   0.03 / 0.025 → Ø příčka po 10 sezónách 3.1, medián titulu 10. sezóna (moc pomalé –
+ *                  mezisezónní regrese sežrala skoro celý roční zisk),
+ *   0.08 / 0.065 → Ø příčka 9.5 → 5.9 (S5) → 3.0 (S8), do Evropy kolem 5.–6. sezóny,
+ *                  medián prvního titulu 7. sezóna. 50 z 60 kariér titul dá.
+ * Výš už nejít: 6 bodů (strop) čistě do útoku je +0.48, tj. skoro celá směrodatná odchylka
+ * ligy — a to má být „silná sezóna", ne „z průměru rovnou top tým". Průměrná sezóna dá 3–4
+ * body, takže reálný roční posun je ~+0.15 na skóre síly.
+ */
+export const DEV_ATTACK_STEP = 0.08;
+export const DEV_DEFENSE_STEP = 0.065; // obrana: nižší = lepší, odečítá se
+export const DEV_STADIUM_STEP = 0.02; // homeBoost
+export const DEV_STADIUM_MAX = 1.3; // stejný strop jako `standingsToTeams`
+/** Mládež: každý bod ubere z mezisezónní regrese tvého klubu (drží dosažený zisk). */
+export const DEV_YOUTH_MAX = 5;
+export const DEV_YOUTH_REGRESSION_CUT = 0.015;
+
+/**
+ * Strop vůči lize: tvůj rating nesmí jednou investicí přeskočit špičku ligy o víc než
+ * tenhle poměr. Bez toho by šlo z průměru udělat superklub za pár sezón.
+ */
+export const DEV_LEAGUE_CEILING = 1.05;
+
+// ───────────────────────── kondice (Phase B) ─────────────────────────
+
+/** Kondice 0–100, start 100. Náročné plány unavují, pasivní regenerují. */
+export const STARTING_FITNESS = 100;
+export const FITNESS_RECOVERY = 5;
+export const PLAN_FATIGUE: Record<Plan, number> = {
+  balanced: 3,
+  open: 8,
+  low_block: 0,
+  press: 8,
+  counter: 2,
+};
+/** Maximální postih λ při nulové kondici (plná kondice = bez postihu, nikdy bonus). */
+export const FITNESS_PENALTY = 0.1;
+
+// ───────────────────────── scouting / instrukce (Phase B) ─────────────────────────
+
+/** Pravděpodobnost, že scout nahlásí SKUTEČNÝ styl soupeře (jinak se splete). */
+export const SCOUT_CONFIDENCE = 0.75;
+/** Konfidence po investici do skautingu (event). */
+export const SCOUT_CONFIDENCE_BOOSTED = 0.95;
+
+/** Efekt vedlejší instrukce – záměrně menší než counter plánu (±10 %). */
+export const INSTRUCTION_BONUS = 0.05;
+export const INSTRUCTION_PENALTY = 0.02;
 
 // ───────────────────────── manažerská agency (Phase 2) ─────────────────────────
 
@@ -144,3 +216,9 @@ export const MIN_HIREABLE_PRESTIGE = 40;
 /** Posun/rozsah prestiže týmu v rámci ligy (`teamPrestige` v leagues.ts). */
 export const PRESTIGE_SHIFT = -18;
 export const PRESTIGE_SCALE = 34;
+
+/**
+ * O kolik příček pod postupovou zónou 2. ligy ještě zní sezónní cíl jako „zabojuj
+ * o postup" (`seasonObjective`). Dál už je to jen potvrzení síly.
+ */
+export const PROMOTION_PUSH_GAP = 4;

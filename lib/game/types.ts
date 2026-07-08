@@ -7,6 +7,17 @@
  */
 export type Plan = "balanced" | "open" | "low_block" | "press" | "counter";
 
+/**
+ * Vedlejší instrukce vedle plánu. Na rozdíl od plánu (counter proti STYLU soupeře) míří
+ * na konkrétní **traity** ze scout reportu. Efekt je záměrně menší než u plánu.
+ */
+export type Instruction =
+  | "none"
+  | "man_mark" // osobní obrana na jejich hvězdu
+  | "wing_play" // hra po křídlech
+  | "set_pieces" // důraz na standardky
+  | "high_line"; // vysoká obranná linie
+
 /** Sezónní cíl vedení klubu (dle očekávaného umístění). Splnění → bonus k reputaci. */
 export interface Objective {
   kind: "title" | "europe" | "midtable" | "survival" | "promotion";
@@ -106,8 +117,13 @@ export type EuropeSpot =
 export interface LeagueAccess {
   /** Umístění → evropská příčka (jen místa, která do Evropy vedou). */
   slots: { rank: number; spot: EuropeSpot }[];
-  /** Kolik posledních míst sestupuje. */
-  relegBottom: number;
+  /**
+   * Kolik posledních míst sestupuje. `null` = z dat neodvoditelné (typicky ligy
+   * s nadstavbou, kde API značí spodní skupinu jako fázi "Relegation Round", ne jako
+   * sestupovou příčku) → volající spadne na kurátorovanou hodnotu (`accessFor`).
+   * Nikdy ne `0`: nula by znamenala "liga bez sestupu" a zkratovala by fallback.
+   */
+  relegBottom: number | null;
 }
 
 /** Kompaktní souhrn dohrané sezóny (do historie kariéry – ne všech ~380 zápasů). */
@@ -162,12 +178,32 @@ export interface SeasonState {
   round: number;
   /** Zvolený zápasový plán pro nejbližší zápas tvého týmu. */
   plan: Plan;
+  /** Vedlejší instrukce k plánu – funguje proti konkrétním traitům soupeře. */
+  instruction: Instruction;
   /** Morálka/momentum týmu 0–100 (start 50) – ovlivňuje λ. */
   morale: number;
+  /**
+   * Kondice týmu 0–100 (start 100). Náročné plány (`press`/`open`) ji ubírají rychleji,
+   * než ji regenerace doplní → „vždycky presuj" přestane být zadarmo. Jen postih λ.
+   */
+  fitness: number;
+  /**
+   * Investice do mládeže (0–`DEV_YOUTH_MAX`), kumulativně napříč sezónami U TOHOTO KLUBU.
+   * Snižuje mezisezónní regresi tvého klubu (drží vydřený rating). Při převzetí jiného
+   * klubu se ztrácí – patří klubu, ne trenérovi.
+   */
+  youth: number;
+  /** Bonus/malus k rozvojovým bodům na konci sezóny (z eventů). */
+  devBonus: number;
   /** Sezónní cíl vedení (fixní pro celou sezónu). */
   objective: Objective;
   /** Aktivní dočasné modifikátory z eventů. */
   modifiers: Modifier[];
+  /**
+   * Do kterého kola (včetně) má scouting zvýšenou spolehlivost (investice z eventu).
+   * `null` = běžná `SCOUT_CONFIDENCE`.
+   */
+  scoutBoostUntilRound: number | null;
   /** Nevyřešený event pro aktuální kolo (nutno zvolit před odehráním), nebo null. */
   pendingEvent: PendingEvent | null;
   /**
@@ -229,7 +265,7 @@ export interface ManagerProfile {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {
@@ -248,6 +284,8 @@ export interface LeagueInfo {
   name: string;
   country: string;
   logo?: string;
+  /** 1 = nejvyšší soutěž, 2 = druhá liga. Chybí u starších odpovědí → ber jako 1. */
+  tier?: number;
 }
 
 /** Kandidát na trénování v job marketu (tým + zda je dostupný dle reputace). */

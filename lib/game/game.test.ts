@@ -26,10 +26,12 @@ import { buildTable } from "./standings";
 import { matchLambdas, predictProbs, simulateMatch, NEUTRAL_ADJUST } from "./simulate";
 import {
   newSeason,
+  playRound,
   simulateToEnd,
   isSeasonOver,
   currentTable,
   setPlan,
+  setInstruction,
   yourNextMatch,
   resolveAdjust,
 } from "./engine";
@@ -38,6 +40,20 @@ import { resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
 import { mulberry32, randomSeed, deriveSeed } from "./rng";
+import {
+  applyDevelopment,
+  developmentPoints,
+  youthRegression,
+} from "./development";
+import { fitnessDelta, fitnessFactor, updateFitness } from "./fitness";
+import { INSTRUCTIONS, resolveInstruction } from "./instructions";
+import {
+  COUNTER_BONUS,
+  DRIFT_REGRESSION,
+  MAX_DEV_POINTS,
+  SCOUT_CONFIDENCE,
+  SCOUT_CONFIDENCE_BOOSTED,
+} from "./balance";
 import { ADJUST_MAX, ADJUST_MIN } from "./balance";
 import { scoutOpponent } from "./scouting";
 import { emptyProfile, foldSeason, coachedAllTop5, startCareer, TOP5_LEAGUE_IDS } from "./profile";
@@ -96,6 +112,52 @@ describe("roundRobin", () => {
   it("odmítne lichý počet týmů", () => {
     expect(() => roundRobin([1, 2, 3])).toThrow();
   });
+
+  // Regrese: dřívější orientace `(r + i) % 2` byla invariantní vůči rotaci kruhové
+  // metody → 15 z 16 týmů odehrálo 15 zápasů v kuse doma nebo venku.
+  it.each([14, 16, 18, 20])(
+    "%i týmů: vyvážený rozpis bez dlouhých sérií doma/venku",
+    (n) => {
+      const ids = Array.from({ length: n }, (_, i) => i + 1);
+      const schedule = roundRobin(ids);
+      expect(schedule).toHaveLength(2 * (n - 1));
+
+      // Sekvence prostředí každého týmu v pořadí kol.
+      const venues = new Map<number, string[]>(ids.map((id) => [id, []]));
+      const ordered = new Set<string>();
+      for (const round of schedule) {
+        expect(round).toHaveLength(n / 2);
+        const seen = new Set<number>();
+        for (const f of round) {
+          expect(seen.has(f.homeId)).toBe(false);
+          expect(seen.has(f.awayId)).toBe(false);
+          seen.add(f.homeId);
+          seen.add(f.awayId);
+          venues.get(f.homeId)!.push("H");
+          venues.get(f.awayId)!.push("A");
+          ordered.add(`${f.homeId}v${f.awayId}`);
+        }
+        // Každý tým hraje v každém kole právě jednou.
+        expect(seen.size).toBe(n);
+      }
+      // Každá uspořádaná dvojice právě jednou → n*(n-1) zápasů.
+      expect(ordered.size).toBe(n * (n - 1));
+
+      for (const [id, seq] of venues) {
+        expect(seq).toHaveLength(2 * (n - 1));
+        // Přesně půl doma, půl venku.
+        expect(seq.filter((v) => v === "H")).toHaveLength(n - 1);
+        // Nejdelší série stejného prostředí ≤ 3.
+        let max = 1;
+        let cur = 1;
+        for (let i = 1; i < seq.length; i++) {
+          cur = seq[i] === seq[i - 1] ? cur + 1 : 1;
+          if (cur > max) max = cur;
+        }
+        expect(max, `tým ${id}: série ${max} (${seq.join("")})`).toBeLessThanOrEqual(3);
+      }
+    }
+  );
 });
 
 describe("buildTable", () => {
@@ -266,14 +328,14 @@ describe("resolveAdjust – stohování plán×counter×morálka×eventy", () =>
     };
     // "open" proti "attacking" soupeři = counter navíc nahoru → bez clampu by attack
     // vyšlo výrazně nad 1.4 (PLAN_BASE≈1.15 × counter≈1.1 × morálka≈1.06 × 1.3 × 1.3 ≈ 2.3).
-    const adj = resolveAdjust(s, 2, "open");
+    const adj = resolveAdjust(s, 2, "open", "none");
     expect(adj.attack).toBeLessThanOrEqual(ADJUST_MAX);
     expect(adj.concede).toBeGreaterThanOrEqual(ADJUST_MIN);
   });
 
   it("bez extrémního stohování zůstává v mezích i naprosto neutrální kombinace", () => {
     const s = newSeason(1, 1, { teams });
-    const adj = resolveAdjust(s, 2, "balanced");
+    const adj = resolveAdjust(s, 2, "balanced", "none");
     expect(adj.attack).toBeGreaterThanOrEqual(ADJUST_MIN);
     expect(adj.attack).toBeLessThanOrEqual(ADJUST_MAX);
     expect(adj.concede).toBeGreaterThanOrEqual(ADJUST_MIN);
@@ -408,6 +470,26 @@ describe("leagues – hodnocení sezóny", () => {
     expect(evaluateSeason(19, 20, 39, override).relegated).toBe(false);
   });
 
+  // Regrese: ligy s nadstavbou dávají odvoditelné evropské sloty, ale NE sestup.
+  // Dřív takový override (relegBottom: 0) zkratoval fallback → nikdo nesestoupil.
+  it("override bez sestupu (relegBottom null) vezme sloty z dat a sestup z kurátorované tabulky", () => {
+    const override = {
+      slots: [{ rank: 1, spot: "UECL_Q" as const }],
+      relegBottom: null,
+    };
+    // Fortuna liga (345, 16 týmů): kurátorovaný relegBottom = 1 → poslední sestupuje.
+    expect(evaluateSeason(1, 16, 345, override).europe).toBe("UECL_Q"); // sloty z dat
+    expect(evaluateSeason(16, 16, 345, override).relegated).toBe(true); // sestup z fallbacku
+    expect(evaluateSeason(15, 16, 345, override).relegated).toBe(false);
+  });
+
+  it("override s prázdnými sloty vezme sloty z kurátorované tabulky, sestup z dat", () => {
+    const override = { slots: [], relegBottom: 4 };
+    expect(evaluateSeason(1, 20, 39, override).europe).toBe("UCL"); // sloty z fallbacku
+    expect(evaluateSeason(17, 20, 39, override).relegated).toBe(true); // sestup z dat (4)
+    expect(evaluateSeason(16, 20, 39, override).relegated).toBe(false);
+  });
+
   it("evaluateSeason bez override se chová beze změny (fallback na LEAGUE_ACCESS)", () => {
     expect(evaluateSeason(1, 20, 39, null).europe).toBe("UCL");
     expect(evaluateSeason(1, 20, 39, undefined).europe).toBe("UCL");
@@ -490,6 +572,29 @@ describe("sestup/postup mezi 1. a 2. ligou", () => {
     )[0];
     const obj = seasonObjective(strongest, league, 40, null);
     expect(obj.kind).toBe("promotion");
+  });
+
+  // Kariéru lze ve 2. lize i ZAČÍT (slabý klub) → outsider nesmí dostat cíl
+  // „Zabojuj o postup — skonči do 21. místa", ale záchranu.
+  it("seasonObjective ve 2. lize dá outsiderovi záchranu, ne postup", () => {
+    const league = standingsToTeams(
+      Array.from({ length: 24 }, (_, i) => ({
+        teamId: i + 1,
+        name: `T${i + 1}`,
+        played: 10,
+        goalsFor: 20 - i * 0.5,
+        goalsAgainst: 5 + i * 0.5,
+      }))
+    );
+    const byStrength = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    // Championship (40): relegBottom 3 → bezpečné je 21. místo, poslední tři padají.
+    expect(seasonObjective(byStrength[23], league, 40, null).kind).toBe("survival");
+    // Těsně pod postupovou zónou → pořád „zabojuj o postup".
+    expect(seasonObjective(byStrength[3], league, 40, null).text).toContain("postup");
+    // Střed tabulky → ani postup, ani záchrana.
+    const mid = seasonObjective(byStrength[11], league, 40, null);
+    expect(mid.kind).toBe("midtable");
+    expect(mid.text).toContain("Potvrď sílu");
   });
 
   it("seasonHeadline hlásí postup", () => {
@@ -758,15 +863,56 @@ describe("morale", () => {
 });
 
 describe("events", () => {
-  it("maybeEvent je deterministický dle seedu+kola", () => {
-    expect(maybeEvent(123, 4)).toEqual(maybeEvent(123, 4));
+  it("maybeEvent je deterministický dle seedu+kola a losuje jen z eventů se splněnou podmínkou", () => {
+    const base = newSeason(123, 1);
+    expect(maybeEvent(base)).toEqual(maybeEvent(base));
     // Napříč koly aspoň někdy event nastane
     let hits = 0;
-    for (let r = 0; r < 38; r++) if (maybeEvent(123, r)) hits++;
+    for (let r = 0; r < 38; r++) if (maybeEvent({ ...base, round: r })) hits++;
     expect(hits).toBeGreaterThan(0);
-    // Vrácené id existuje v registru
-    const ev = maybeEvent(123, 4);
-    if (ev) expect(getEvent(ev.id)).toBeDefined();
+    // Vrácené id existuje v registru a jeho podmínka na daný stav sedí
+    const ev = maybeEvent(base);
+    if (ev) {
+      const def = getEvent(ev.id);
+      expect(def).toBeDefined();
+      expect(def!.condition?.(base) ?? true).toBe(true);
+    }
+  });
+
+  it("state-blind eventy zmizely: krizová porada nepadne s vysokou morálkou", () => {
+    const happy = { ...newSeason(1, 1), morale: 90 };
+    const crisis = getEvent("losing_streak_crisis")!;
+    expect(crisis.condition!(happy)).toBe(false);
+    expect(crisis.condition!({ ...happy, morale: 20 })).toBe(true);
+  });
+
+  it("žádná volba eventu není zadarmo lepší (každá má cenu v nějaké měně)", () => {
+    for (const ev of EVENTS) {
+      for (const c of ev.choices) {
+        const e = c.effect;
+        const gains =
+          (e.moraleDelta ?? 0) > 0 ||
+          (e.fitnessDelta ?? 0) > 0 ||
+          (e.devBonus ?? 0) > 0 ||
+          (e.scoutBoostRounds ?? 0) > 0 ||
+          (e.modifier?.attack ?? 1) > 1 ||
+          (e.modifier?.concede ?? 1) < 1;
+        const costs =
+          (e.moraleDelta ?? 0) < 0 ||
+          (e.fitnessDelta ?? 0) < 0 ||
+          (e.devBonus ?? 0) < 0 ||
+          (e.modifier?.attack ?? 1) < 1 ||
+          (e.modifier?.concede ?? 1) > 1;
+        // Volba smí být čistě neutrální/opatrná, ale nesmí být čistý zisk bez ceny…
+        if (gains && !costs) {
+          // …s výjimkou drobného morálkového zisku bez λ efektu (bezpečná varianta).
+          expect(
+            e.modifier === undefined && (e.moraleDelta ?? 0) <= 7,
+            `${ev.id} / ${c.label}: zisk bez ceny`
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   it("applyEventChoice mění morálku/modifikátory a čistí pendingEvent", () => {
@@ -896,5 +1042,258 @@ describe("achievements", () => {
   it("registr má unikátní id", () => {
     const ids = ACHIEVEMENTS.map((a) => a.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ───────────────────────── Phase B: rozvoj klubu ─────────────────────────
+
+describe("development", () => {
+  const league = generateLeague(3);
+  const mid = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a))[10];
+
+  function summary(over: Partial<SeasonSummary>): SeasonSummary {
+    return {
+      season: 1,
+      leagueId: 0,
+      leagueName: "L",
+      yourTeamId: mid.id,
+      yourName: mid.name,
+      yourRank: 10,
+      expectedRank: 10,
+      yourPoints: 50,
+      win: 14,
+      draw: 8,
+      loss: 16,
+      goalsFor: 45,
+      goalsAgainst: 45,
+      cleanSheets: 8,
+      champion: false,
+      europe: "NONE",
+      relegated: false,
+      promoted: false,
+      championId: league[0].id,
+      championName: league[0].name,
+      objectiveMet: false,
+      ...over,
+    };
+  }
+
+  it("developmentPoints nikdy nepřekročí strop ani neklesne pod nulu", () => {
+    const best = developmentPoints(
+      summary({ yourRank: 1, champion: true, europe: "UCL", objectiveMet: true }),
+      100,
+      20,
+      5
+    );
+    expect(best).toBe(MAX_DEV_POINTS);
+    const worst = developmentPoints(
+      summary({ yourRank: 20, relegated: true, objectiveMet: false }),
+      10,
+      20,
+      -5
+    );
+    expect(worst).toBe(0);
+  });
+
+  it("developmentPoints odměňuje lepší sezónu", () => {
+    const weak = developmentPoints(summary({ yourRank: 15 }), 40, 20);
+    const strong = developmentPoints(
+      summary({ yourRank: 3, europe: "UCL", objectiveMet: true }),
+      40,
+      20
+    );
+    expect(strong).toBeGreaterThan(weak);
+  });
+
+  it("applyDevelopment nepřeskočí špičku ligy (DEV_LEAGUE_CEILING)", () => {
+    const best = Math.max(...league.filter((t) => t.id !== mid.id).map((t) => t.attack));
+    const boosted = applyDevelopment(mid, { attack: 6, defense: 0, youth: 0, stadium: 0 }, league);
+    expect(boosted.attack).toBeLessThanOrEqual(best * 1.05 + 1e-9);
+    expect(boosted.attack).toBeGreaterThan(mid.attack); // a přesto se posunul nahoru
+  });
+
+  it("applyDevelopment: obrana klesá (nižší = lepší), stadion má strop", () => {
+    const d = applyDevelopment(mid, { attack: 0, defense: 3, youth: 0, stadium: 0 }, league);
+    expect(d.defense).toBeLessThan(mid.defense);
+    const st = applyDevelopment(mid, { attack: 0, defense: 0, youth: 0, stadium: 99 }, league);
+    expect(st.homeBoost).toBeLessThanOrEqual(1.3);
+  });
+
+  it("youthRegression tlumí regresi, nikdy pod nulu", () => {
+    expect(youthRegression(0)).toBeCloseTo(DRIFT_REGRESSION);
+    expect(youthRegression(3)).toBeLessThan(DRIFT_REGRESSION);
+    expect(youthRegression(99)).toBeGreaterThanOrEqual(0);
+  });
+
+  // Přímý požadavek na balanc: progrese ano, superklub za rok ne.
+  it("jedna maximální sezóna z průměru neudělá nejsilnější tým", () => {
+    const teams = generateLeague(42);
+    const you = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a))[10];
+    let s = newSeason(42, you.id, { teams });
+    s = simulateToEnd(s);
+    s = startNextSeason(s, { attack: MAX_DEV_POINTS, defense: 0, youth: 0, stadium: 0 });
+    const ranked = [...s.teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    expect(ranked[0].id).not.toBe(you.id);
+  });
+
+  // Regrese: dřív `driftTeams` volal `amplifySpread` každou sezónu (×1.35) a regrese
+  // vracela jen ×0.9 → liga se za ~10 sezón polarizovala do clampů (std 0.56 → 0.91).
+  it("drift zachovává rozptyl ligy napříč sezónami", () => {
+    const sd = (xs: number[]) => {
+      const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+      return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
+    };
+    let s = newSeason(7, generateLeague(7)[0].id, { teams: generateLeague(7) });
+    const before = sd(s.teams.map((t) => t.attack));
+    for (let i = 0; i < 10; i++) {
+      s = simulateToEnd(s);
+      s = startNextSeason(s);
+    }
+    const after = sd(s.teams.map((t) => t.attack));
+    expect(after / before).toBeGreaterThan(0.8);
+    expect(after / before).toBeLessThan(1.2);
+  });
+
+  // Regrese: `startNextSeason` dřív `leagueAccess` do další sezóny vůbec nepředal
+  // → od 2. sezóny se tiše přepnulo na kurátorovaný fallback.
+  it("startNextSeason přenáší leagueAccess i mládež", () => {
+    const teams = generateLeague(11);
+    const access = { slots: [{ rank: 1, spot: "UECL_Q" as const }], relegBottom: null };
+    let s = newSeason(11, teams[3].id, {
+      teams,
+      leagueId: 345,
+      leagueName: "FL",
+      leagueAccess: access,
+    });
+    s = simulateToEnd(s);
+    const next = startNextSeason(s, { attack: 0, defense: 0, youth: 2, stadium: 0 });
+    expect(next.leagueAccess).toEqual(access);
+    expect(next.youth).toBe(2);
+  });
+});
+
+describe("fitness", () => {
+  it("fitnessFactor je monotónní, plná kondice = bez postihu, nikdy bonus", () => {
+    expect(fitnessFactor(100)).toBe(1);
+    expect(fitnessFactor(50)).toBeLessThan(1);
+    expect(fitnessFactor(0)).toBeLessThan(fitnessFactor(50));
+  });
+
+  it("press/open unavují, low_block regeneruje", () => {
+    expect(fitnessDelta("press")).toBeLessThan(0);
+    expect(fitnessDelta("open")).toBeLessThan(0);
+    expect(fitnessDelta("low_block")).toBeGreaterThan(0);
+    expect(updateFitness(100, "press")).toBeLessThan(100);
+    expect(updateFitness(50, "low_block")).toBeGreaterThan(50);
+    expect(updateFitness(0, "press")).toBeGreaterThanOrEqual(0);
+    expect(updateFitness(100, "low_block")).toBeLessThanOrEqual(100);
+  });
+
+  it("pořád presovat se nevyplatí – kondice dlouhodobě klesá a bere λ", () => {
+    let f = 100;
+    for (let i = 0; i < 20; i++) f = updateFitness(f, "press");
+    expect(f).toBeLessThan(50);
+    expect(fitnessFactor(f)).toBeLessThan(0.96);
+  });
+});
+
+describe("instructions", () => {
+  it("správná instrukce proti traitu pomáhá, špatná škodí, jinak nic", () => {
+    const hit = resolveInstruction("wing_play", ["weakDefense"]);
+    expect(hit.attack).toBeGreaterThan(1);
+    const miss = resolveInstruction("wing_play", ["solidDefense"]);
+    expect(miss.attack).toBeLessThan(1);
+    expect(resolveInstruction("wing_play", ["inForm"])).toEqual({ attack: 1, concede: 1 });
+    expect(resolveInstruction("none", ["weakDefense"])).toEqual({ attack: 1, concede: 1 });
+  });
+
+  it("oba traity zároveň se vyruší", () => {
+    expect(resolveInstruction("wing_play", ["weakDefense", "solidDefense"])).toEqual({
+      attack: 1,
+      concede: 1,
+    });
+  });
+
+  it("efekt instrukce nikdy nepřebije counter plánu", () => {
+    for (const i of INSTRUCTIONS) {
+      const r = resolveInstruction(i, ["strongAttack", "poorForm"]);
+      expect(Math.abs(r.attack - 1)).toBeLessThanOrEqual(COUNTER_BONUS);
+      expect(Math.abs(r.concede - 1)).toBeLessThanOrEqual(COUNTER_BONUS);
+    }
+  });
+
+  // `man_mark` měl původně rewards=strongAttack a punishedBy=solidDefense. Špičkové týmy
+  // mají oba traity → vyrušily se a instrukce byla k něčemu jen v 8 % zápasů. Bonusový
+  // a postihový trait spolu proto nesmí korelovat: musí jít potkat každý zvlášť.
+  // Vlastnost je statistická (jedna sezóna nemusí potkat všechny traity) → víc seedů.
+  it("každá instrukce je v reálných sezónách opravdu k něčemu (bonus i postih nastanou)", () => {
+    const hits: Record<string, { bonus: number; malus: number }> = {};
+    for (const i of INSTRUCTIONS) hits[i] = { bonus: 0, malus: 0 };
+
+    for (let seed = 300; seed < 305; seed++) {
+      const teams = generateLeague(seed);
+      let s = newSeason(seed, teams[8].id, { teams });
+      while (!isSeasonOver(s)) {
+        const f = s.schedule[s.round].find(
+          (x) => x.homeId === s.yourTeamId || x.awayId === s.yourTeamId
+        );
+        if (f) {
+          const oppId = f.homeId === s.yourTeamId ? f.awayId : f.homeId;
+          const { traits } = scoutOpponent(s, oppId);
+          for (const i of INSTRUCTIONS) {
+            if (i === "none") continue;
+            const r = resolveInstruction(i, traits);
+            const gain = r.attack - 1 + (1 - r.concede);
+            if (gain > 1e-9) hits[i].bonus++;
+            else if (gain < -1e-9) hits[i].malus++;
+          }
+        }
+        s = playRound(s);
+      }
+    }
+    for (const i of INSTRUCTIONS) {
+      if (i === "none") continue;
+      expect(hits[i].bonus, `${i}: nikdy nedal bonus`).toBeGreaterThan(0);
+      expect(hits[i].malus, `${i}: nikdy nedal postih`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("scouting – nejistota", () => {
+  const teams = generateLeague(5);
+
+  it("hlášený styl je stabilní přes rendery a někdy se liší od pravdy", () => {
+    const s = newSeason(5, teams[0].id, { teams });
+    const a = scoutOpponent(s, teams[1].id);
+    const b = scoutOpponent(s, teams[1].id);
+    expect(a.reportedStyle).toBe(b.reportedStyle);
+    expect(a.confidence).toBeCloseTo(SCOUT_CONFIDENCE);
+
+    let wrong = 0;
+    let total = 0;
+    for (let round = 0; round < 30; round++) {
+      for (const t of teams.slice(1)) {
+        const r = scoutOpponent({ ...s, round }, t.id);
+        total++;
+        if (r.reportedStyle !== r.style) wrong++;
+      }
+    }
+    expect(wrong).toBeGreaterThan(0); // counter není jistota
+    expect(wrong / total).toBeLessThan(0.45); // ale ani ruleta
+  });
+
+  it("investice do skautingu zvedne konfidenci", () => {
+    const s = newSeason(5, teams[0].id, { teams });
+    const boosted = scoutOpponent({ ...s, scoutBoostUntilRound: s.round + 2 }, teams[1].id);
+    expect(boosted.confidence).toBeCloseTo(SCOUT_CONFIDENCE_BOOSTED);
+  });
+
+  it("náhled predikce neprozradí plán ani instrukci (nejde proklikat nejlepší %)", () => {
+    const base = newSeason(5, teams[0].id, { teams });
+    const a = yourNextMatch(setPlan(base, "open"));
+    const b = yourNextMatch(setPlan(base, "low_block"));
+    expect(a!.probs).toEqual(b!.probs);
+    const c = yourNextMatch(setInstruction(base, "wing_play"));
+    expect(a!.probs).toEqual(c!.probs);
   });
 });

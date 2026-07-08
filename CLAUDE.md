@@ -26,6 +26,10 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npx prisma db push   # promítnout změnu schématu do Neonu (+ regeneruje klienta)
 npm run probe        # živá sonda API (status, kvóta, tvary odpovědí); též: discover, limits
+npm run audit-leagues      # herní ligy: odvozené vs. kurátorované pohárové/sestupové příčky
+npm run audit-leagues -- 345 39   # jen vybraná liga (id)
+npm run sim-game     # balanc Manažera (náročnost ligy, křivka rozvoje, clamp) – bez API/DB
+npm run sim-game -- --seasons=250 --careers=60 --maxSeasons=10
 ```
 **Pozn. (tento Windows stroj):** odchozí TLS na api-sports i `npm`/`prisma generate`
 vyžaduje `NODE_OPTIONS=--use-system-ca` (firemní/AV TLS proxy). Na Vercelu netřeba.
@@ -396,20 +400,44 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `standings:` cache). **Mezisezóna** (0 odehraných) → fallback na **předchozí sezónu**. Mock/bez API
   → fiktivní `generateLeague`. Pool lig = `GAME_LEAGUES` (`lib/game/leagues.ts`, Top-5 + Portugalsko/
   Nizozemsko/**Belgie/Skotsko/Rakousko/Řecko**/Česko; malé ligy = předkola v `LEAGUE_ACCESS`).
+  Výběr kariéry nabízí **i 2. ligy** (`SECOND_TIERS`, `tier: 2` z `/api/game/leagues`) – nízká
+  prestiž → projdou `isHireable` na startovní reputaci = kariéra „zdola nahoru".
+- **Pohárové/sestupové příčky** (`deriveLeagueAccess` v `lib/data/standings.ts`): odvozují se ze
+  sloupce `description` reálné tabulky, kurátorovaná `LEAGUE_ACCESS` je jen **fallback** (mock /
+  výpadek dat). `accessFor` je slučuje **po polích** (sloty z dat, sestup z curated když v datech
+  není) – ne all-or-nothing. Tři pasti, na které to naráželo (všechny pokryté testy + `npm run
+  audit-leagues`, který tiskne odvozené vs. kurátorované per liga):
+  1. **`relegBottom: null` ≠ `0`.** Ligy s nadstavbou značí spodní skupinu jen fázově
+     („Relegation Round/Group") → sestup z dat neodvodíš. Nula by znamenala „liga bez sestupu"
+     a zkratovala fallback → *nikdo nikdy nesestoupil* (ČR/Skotsko/Belgie/Rakousko).
+  2. **Baráž není jistý sestup.** Jistý pád popisek **začíná** slovem `Relegation`
+     („Relegation - Championship"); baráž má tvar `"<Liga> (Relegation)"` nebo
+     `"Relegation Play-offs"`, fázový split `"Relegation Round"`.
+  3. **Soutěž se hledá jen PŘED závorkou** + sloty se ořežou na **souvislou řadu od 1. místa**.
+     Jinak `"Promotion - Eredivisie (Conference League - Play Offs)"` (domácí play-off o Evropu)
+     dá Nizozemsku 9 evropských míst z 18, a `15.→UEL` (vítěz FA Cupu) rozsvítí evropský pruh
+     u 15. místa Premier League. Hra domácí pohár nemodeluje.
 - **Čisté jádro `lib/game/`** (na zdroji nezávislé jako `lib/picks/`, testy `game.test.ts`):
   `simulate.ts` (`matchLambdas`/`predictProbs`/`simulateMatch` staví normalizovanou mřížku z
   **reused** `poissonVector`+`drawTau`; přijímá per-stranu `SideAdjust{attack,concede}`, AI =
   `NEUTRAL_ADJUST`), `teams.ts` (`generateLeague`+`standingsToTeams`+`amplifySpread`), `schedule.ts`
-  (`roundRobin`), `standings.ts` (`buildTable`), `engine.ts` (`newSeason`/`setPlan`/`playRound`/
-  `simulateToEnd`/`yourNextMatch`+`resolveYourAdjust` = plán×counter×morálka×eventy, **per-kolo RNG**
-  `deriveSeed(seed,round)`), `career.ts` (`summarizeSeason` vč. `objectiveMet`, `startNextSeason`
-  s driftem, `careerStats`), `leagues.ts` (prestiž, `evaluateSeason`, `LEAGUE_ACCESS`, `leagueStars`,
-  `seasonObjective`), `reputation.ts` (`updateReputation` dle příčky+over/under-performance+**cíle**,
-  `isHireable`/`expectedRank`/`HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats`), `balance.ts`
-  (**laditelné konstanty**).
+  (`roundRobin` – **Bergerova orientace**: prostředí se bere z indexu dvojice v kole, ne z čísla
+  kola; rotace kruhové metody by `(r+i)` vyrušila a tým by hrál celou půlsezónu jen doma/jen venku.
+  Každý tým `n-1`× doma i venku, max. **3 zápasy v kuse** ve stejném prostředí. `newSeason` navíc
+  **míchá pořadí id seedem**, jinak by `injectYourTeam` (index 0) dal hráči privilegovanou pozici
+  fixního týmu a každá sezóna kariéry by měla identický rozpis kol),
+  `standings.ts` (`buildTable`), `engine.ts` (`newSeason`/`setPlan`/`setInstruction`/`playRound`/
+  `simulateToEnd`/`yourNextMatch`+`resolveYourAdjust` = plán×counter×**instrukce**×morálka×**kondice**
+  ×eventy, **per-kolo RNG** `deriveSeed(seed,round)`), `career.ts` (`summarizeSeason` vč.
+  `objectiveMet`, `startNextSeason` s driftem+investicemi, `careerStats`), `leagues.ts` (prestiž,
+  `evaluateSeason`, `LEAGUE_ACCESS`, `leagueStars`, `seasonObjective`), `reputation.ts`
+  (`updateReputation` dle příčky+over/under-performance+**cíle**, `isHireable`/`expectedRank`/
+  `HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats`), `development.ts`/`fitness.ts`/`instructions.ts`
+  (Phase B, viz níže), `balance.ts` (**laditelné konstanty**).
 - **Manažerská agency (Phase 2):** `scouting.ts` (`scoutOpponent` → styl attacking/defensive/balanced
-  + traity + CZ popis), `plans.ts` (5 plánů `balanced/open/low_block/press/counter`, `resolvePlan(plan,
-  oppStyle)` = base × counter; správný protitah = výhoda, špatný = postih, ±`COUNTER_*`), `morale.ts`
+  + traity + CZ popis; od Phase B hlásí styl **s konfidencí**), `plans.ts` (5 plánů
+  `balanced/open/low_block/press/counter`, `resolvePlan(plan, oppStyle)` = base × counter; správný
+  protitah = výhoda, špatný = postih, ±`COUNTER_*`), `morale.ts`
   (`moraleFactor` ±6 % λ, `updateMorale` po kole dle výsledku+překvapení), `events.ts` (deterministické
   eventy dle `(seed,round)`, `maybeEvent`/`applyEventChoice` → morálka / dočasný `Modifier{untilRound}`).
   `SeasonState` nese `plan`/`morale`/`objective`/`modifiers`/`pendingEvent`. Empiricky: adaptivní plán
@@ -425,7 +453,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `promoSpots=2`), **2. liga + postupová zóna (top 2) → zpět nahoru**, **2. liga/sestup nebo malá liga
   bez modelu 2. ligy → vyhazov** (`sacked` → nucený job market, žádné „Pokračovat"). `evaluateSeason`
   vrací i `promoted` (jen 2. liga; Evropa z 2. ligy = vždy `NONE`); `seasonObjective` ve 2. lize míří na
-  postup. Přechod nahoru/dolů dotáhne UI (`SeasonDone.moveTo` → `/api/game/league?id=` s 2. ligami v
+  postup, ale zná i **záchranu** (kariéru lze ve 2. lize začít se slabým klubem → outsider nesmí
+  dostat cíl „zabojuj o postup — skonči 21."). Přechod nahoru/dolů dotáhne UI (`SeasonDone.moveTo` → `/api/game/league?id=` s 2. ligami v
   allowlistu `SECOND_TIER_IDS`) a **vloží tvůj klub s jeho ratingy** do cílové ligy (`injectYourTeam` —
   soupeři z reálné tabulky, tvůj tým bez přepočtu spreadem, sudý počet pro `roundRobin`). Tabulka
   zvýrazňuje **postupovou zónu** (positive) vedle sestupové. **Pojistka proti uvíznutí kariéry:**
@@ -440,23 +469,78 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   bronze/silver/gold) se vyhodnocují na konci sezóny nad `allTime`+poslední sezónou+reputací a ukládají
   trvale. Reputace zůstává **per-kariéra** (žádné lifetime skóre).
 - **Perzistence = profil (DB), přihlášení povinné.** Tabulka `GameSave` (`userId @id`, `state Json`).
-  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `profile`/`plan`/`morale`/… +
-  `current` nullable + size cap 512 KB + rate-limit; ukládá **původní** objekt)/`DELETE`.
-  `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version, profile:ManagerProfile,
-  manager:{reputation}, current:SeasonState|null, history[]}`; `SAVE_VERSION` bump = zahodit
-  nekompatibilní save (aktuálně **5**). „Nová kariéra" už nemaže profil (jen `current:null`).
+  API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `profile`/`plan`/`instruction`/
+  `morale`/`fitness`/… + `current` nullable + size cap 512 KB + rate-limit; ukládá **původní**
+  objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version,
+  profile:ManagerProfile, manager:{reputation}, current:SeasonState|null, history[]}`;
+  `SAVE_VERSION` = **7**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
+  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7) a jen doplní nová pole; teprve neznámá verze se
+  zahodí. „Nová kariéra" nemaže profil (jen `current:null`).
 - **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; **bez aktivní kariéry → `ManagerHub`**
-  (profil + „Začni kariéru" → gated výběr ligy→klubu); s kariérou → sezóna (predikce + **scouting** +
-  **morálka** + analýza + **plán** + **event karta**, popup `MatchResultToast`, tabulka, forma, cíl) +
+  (profil + „Začni kariéru" → gated výběr ligy→klubu, sekce „Nejvyšší ligy" / „2. ligy"); s kariérou →
+  sezóna (predikce + **scouting** (hlášený styl + konfidence) + **morálka** + **kondice** (`FitnessBar`,
+  ukazuje i posun kondice za kolo dle plánu) + analýza + **plán** + **vedlejší instrukce**
+  (`InstructionPicker`) + **event karta**, popup `MatchResultToast`, tabulka, forma, cíl) +
   taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab): hlavička + kariérní rekordy +
   **klub vs reprezentace** (reprezentace = placeholder „🔜 připravujeme", Phase 4) + `AchievementsGrid`
-  (odemčené barevně dle tier, zamčené šedé). `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno").
+  (odemčené barevně dle tier, zamčené šedé). `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno") a
+  **`DevelopmentPanel`** (rozdělení rozvojových bodů před „Pokračovat"/postupem/sestupem).
   Ligová tabulka **zvýrazňuje pohárové/postupové/sestupové zóny** (barevný okraj + legenda, přes
-  `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL/postup=positive, sestup=negative). Historie kariéry
-  ukazuje u sezóny **klub (logo `TeamLogo` + `SeasonSummary.yourLogo`)** i **reputační zisk/ztrátu**
-  (`reputationDeltas`). Kariérní statistiky mají i **Postupy**. `app/hra/`, nav 🎮, sitemap.
+  `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL/postup=positive, sestup=negative; legenda
+  dedupuje podle **popisku**, ne klíče – Francie má 1.–2. „LM" a 3. „LM (předkolo)" pod týmž klíčem).
+  Historie kariéry ukazuje u sezóny **jen logo klubu** (`TeamLogo`, název v `title`) + ligu +
+  **reputační zisk/ztrátu** (`reputationDeltas`). Kariérní statistiky mají i **Postupy**.
+  `app/hra/`, nav 🎮, sitemap.
+- **Rozvoj klubu mezi sezónami** (`lib/game/development.ts`, čisté + testy; laděno `npm run sim-game`):
+  za dohranou sezónu dostaneš **rozvojové body** (`developmentPoints`: percentil umístění + splněný
+  cíl + titul/Evropa/postup + reputace ≥ 65, sestup ubírá, `devBonus` z eventů) a rozdělíš je mezi
+  **útok / obranu / mládež / stadion** (`DevSpend`, UI `DevelopmentPanel` v `SeasonDone`).
+  Progrese je záměrně pomalá — **jedna dobrá sezóna nesmí udělat top tým**. Drží to tři stropy:
+  `MAX_DEV_POINTS` (6/sezónu), malý zisk na bod (`DEV_ATTACK_STEP` 0.08) a `DEV_LEAGUE_CEILING`
+  (nesmíš přeskočit špičku ligy o víc než 5 %). Empiricky: ze středu 20týmové ligy do Evropy kolem
+  5.–6. sezóny, medián prvního titulu 7. sezóna; **bez rozvoje** tým visí na ~10. místě napořád.
+  `mládež` tlumí mezisezónní regresi tvého klubu (`youthRegression`), `stadion` zvedá `homeBoost`
+  (cap 1.30). Nevyužité body propadají; při **změně klubu** se ztrácí i mládež (patří klubu).
+  Postup/sestup si klub bereš s sebou → investice i mládež jdou s ním.
+- **`driftTeams` (`career.ts`) — tři opravené chyby.** Mezisezónní drift teď regreduje ke
+  **skutečnému průměru ligy** (dřív ke konstantě 1.65 = středu generovaného rozsahu, což reálným
+  ligám s průměrem ~1.35 každou sezónu nafukovalo útok), **nevolá `amplifySpread`** (ten patří jen
+  na čerstvě postavenou ligu; ×1.35 každou sezónu proti regresi ×0.9 = net ×1.215 → liga se za
+  ~10 sezón polarizovala do clampů, std útoku 0.56 → 0.91) a clampuje na `SPREAD_*` meze místo
+  `ATTACK_MIN/MAX` (ty ořezávaly reálné špičky nad 2.35). Místo re-amplifikace se po driftu
+  **renormalizuje na původní průměr a rozptyl**; teprve pak se aplikují tvoje investice (ty mají
+  rozptyl posunout). AI týmy dostaly výkonovou zpětnou vazbu (`DRIFT_PERFORMANCE`).
+  `startNextSeason` navíc **předává `leagueAccess`** — dřív ho zahodil, takže od 2. sezóny se
+  tiše přepnulo na kurátorovaný fallback (odtud „jedna sezóna vypadala správně, další ne").
+- **Tři páky navíc k zápasovému plánu** (všechny míří na to, aby nebyl zjevně nejlepší tah):
+  - **Kondice** (`fitness.ts`, `SeasonState.fitness` 0–100, start 100): `press`/`open` unavují víc
+    (`PLAN_FATIGUE` 8), než stihne `FITNESS_RECOVERY` (5) doplnit; `low_block` regeneruje.
+    `fitnessFactor` = **jen postih** (plná kondice 1.0, nula 0.9), skládá se jako morálka
+    (útok ×, obdržené ÷). „Vždycky presuj" tím přestane být zadarmo.
+  - **Nejistý scouting** (`scoutOpponent` vrací `style` = pravda, `reportedStyle` + `confidence`
+    = co vidí hráč, `SCOUT_CONFIDENCE` 0.75). `resolvePlan` countruje podle **pravdy**, UI ukazuje
+    jen hlášení → protitah přestal být jistota. Deterministické dle `(seed, kolo, soupeř)`
+    (vlastní RNG stream, salt 70000) → stabilní přes rendery i reload. Event „Nabídka skautského
+    týmu" konfidenci dočasně zvedne (`scoutBoostUntilRound`).
+  - **Vedlejší instrukce** (`instructions.ts`, `Instruction`): druhá volba vedle plánu, která čte
+    **dřív mechanicky mrtvé `scout.traits`** (do `resolvePlan` šel jen `style`). Správná instrukce
+    proti odpovídajícímu traitu = bonus, špatná = postih; efekt ±5 % (menší než ±10 % u counteru).
+  - **Anti-exploit:** `yourNextMatch` počítá náhled predikce s `("balanced", "none")` → plán ani
+    instrukci nejde proklikat a vzít nejvyšší %. Morálka/kondice/eventové modifikátory se ukázat
+    smí (hráč je v tu chvíli nezmění). Kryto testem.
+  - **Pozor na stropy:** `ADJUST_MIN/MAX = 0.7/1.4` je dosažitelný už při plán × counter × morálka
+    × 2 eventy. Přidávání dalších násobících pák tlačí kombinace do clampu, kde volby přestanou být
+    cítit → držet efekty malé, **neroztahovat clamp**. `npm run sim-game` clamp měří (dnes ~0.1 %).
+- **Eventy** (`events.ts`, 15): `EVENT_CHANCE = 0.3` na kolo, losuje se **jen z eventů se splněnou
+  `condition`** (dřív uniformně ze všech → „Krizová porada" padala i ve vítězné sérii). Volba dá
+  morálku / kondici / `devBonus` / scout boost a/nebo `Modifier{attack?, concede?, untilRound}` =
+  násobič λ na 1–3 kola (multiplikativně s plánem, counterem, instrukcí, morálkou i kondicí;
+  prořezává se v `playRound`). Sada je vyvážená tak, že **žádná volba není zadarmo lepší** — dřív
+  `derby_motivation` A dával +5 morálky *i* +6 % útoku bez postihu, `captain_dispute` A a
+  `fan_protest` A byly čistě ztrátové. Kryto testem („zisk bez ceny"). `events.ts` **nesmí
+  importovat `analysis.ts`** (to importuje `engine.ts` → cyklus) – formu si počítá lokálně.
 - **Možná rozšíření (TODO):** Phase 3 (refaktor SaveState + klubový pohár/Liga mistrů) a Phase 4
-  (reprezentační pohár Euro/MS) z roadmapy; dále rozpočet.
+  (reprezentační pohár Euro/MS) z roadmapy.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
 
 ## PWA (instalace na iOS/Android)

@@ -13,6 +13,7 @@ import {
   isSeasonOver,
   currentTable,
   setPlan,
+  setInstruction,
   yourNextMatch,
   yourResults,
 } from "@/lib/game/engine";
@@ -33,18 +34,36 @@ import {
   EUROPE_LABEL,
 } from "@/lib/game/leagues";
 import { PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
+import {
+  INSTRUCTIONS,
+  INSTRUCTION_HINT,
+  INSTRUCTION_LABEL,
+} from "@/lib/game/instructions";
 import { getEvent, applyEventChoice } from "@/lib/game/events";
+import { fitnessDelta, fitnessLabel } from "@/lib/game/fitness";
+import {
+  DEV_AREA_HINT,
+  DEV_AREA_LABEL,
+  EMPTY_SPEND,
+  applyDevelopment,
+  developmentPoints,
+  nextYouth,
+  spendTotal,
+} from "@/lib/game/development";
+import type { DevSpend } from "@/lib/game/development";
 import { teamSeasonStats } from "@/lib/game/analysis";
+import { STYLE_LABEL } from "@/lib/game/scouting";
 import type { ScoutReport } from "@/lib/game/scouting";
 import { emptyProfile, startCareer, foldSeason } from "@/lib/game/profile";
 import { ACHIEVEMENTS, newlyEarned } from "@/lib/game/achievements";
 import type { AchievementTier } from "@/lib/game/achievements";
 import { SAVE_VERSION } from "@/lib/game/types";
-import { STARTING_REPUTATION } from "@/lib/game/balance";
+import { DEV_YOUTH_MAX, STARTING_FITNESS, STARTING_REPUTATION } from "@/lib/game/balance";
 import { leagueName as leagueNameFor } from "@/lib/game/leagues";
 import type {
   EarnedAchievement,
   GameTeam,
+  Instruction,
   LeagueAccess,
   LeagueInfo,
   ManagerProfile,
@@ -97,16 +116,34 @@ async function saveEndpoint(next: SaveState): Promise<boolean> {
  * Neznámá/nižší než migrovaná verze → zahodit (nekompatibilní tvar).
  */
 function migrateSave(raw: unknown): SaveState | null {
-  const save = raw as (SaveState & { version: number }) | null | undefined;
+  let save = raw as (SaveState & { version: number }) | null | undefined;
   if (!save) return null;
-  if (save.version === SAVE_VERSION) return save;
+  // Migrace se řetězí (5 → 6 → 7), ať starý save nezůstane viset na mezikroku.
   if (save.version === 5) {
-    return {
+    save = {
       ...save,
       version: 6,
       current: save.current ? { ...save.current, leagueAccess: null } : null,
     };
   }
+  if (save.version === 6) {
+    // v7 přidal kondici, vedlejší instrukci, mládež, rozvojový bonus a scout boost.
+    save = {
+      ...save,
+      version: 7,
+      current: save.current
+        ? {
+            ...save.current,
+            instruction: "none",
+            fitness: STARTING_FITNESS,
+            youth: 0,
+            devBonus: 0,
+            scoutBoostUntilRound: null,
+          }
+        : null,
+    };
+  }
+  if (save.version === SAVE_VERSION) return save;
   return null;
 }
 
@@ -246,6 +283,11 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     [mutateSeason]
   );
 
+  const onInstruction = useCallback(
+    (i: Instruction) => mutateSeason((s) => setInstruction(s, i)),
+    [mutateSeason]
+  );
+
   const onEventChoice = useCallback(
     (choiceIndex: number) =>
       mutateSeason((s) => applyEventChoice(s, choiceIndex)),
@@ -290,7 +332,8 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   );
 
   const onContinue = useCallback(
-    () => finishAndAdvance((_prev, current) => startNextSeason(current)),
+    (spend: DevSpend) =>
+      finishAndAdvance((_prev, current) => startNextSeason(current, spend)),
     [finishAndAdvance]
   );
 
@@ -300,7 +343,9 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       leagueName: string,
       teams: GameTeam[],
       teamId: number,
-      leagueAccess: LeagueAccess | null
+      leagueAccess: LeagueAccess | null,
+      // Postup/sestup si klub bereš s sebou → mládež jde s ním. Job market = nový klub → 0.
+      youth = 0
     ) =>
       finishAndAdvance((_prev, current) =>
         newSeason(randomSeed(), teamId, {
@@ -309,6 +354,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           leagueName,
           leagueAccess,
           season: current.season + 1,
+          youth,
         })
       ),
     [finishAndAdvance]
@@ -385,6 +431,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           onPlayRound={onPlayRound}
           onSimulateToEnd={onSimulateToEnd}
           onPlan={onPlan}
+          onInstruction={onInstruction}
           onEventChoice={onEventChoice}
           onContinue={onContinue}
           onSwitch={onSwitch}
@@ -581,18 +628,41 @@ function LeagueList({
   leagues: LeagueInfo[];
   onPick: (l: LeagueInfo) => void;
 }) {
+  // Nejvyšší soutěže a 2. ligy odděleně – ve 2. lize začíná kariéra „zdola nahoru".
+  // Sekce se vykreslí jen když v ní něco je (mock režim má jedinou fiktivní ligu).
+  const groups: { label: string; hint?: string; items: LeagueInfo[] }[] = [
+    { label: "Nejvyšší ligy", items: leagues.filter((l) => (l.tier ?? 1) === 1) },
+    {
+      label: "2. ligy",
+      hint: "Nižší prestiž — start kariéry s cílem postoupit",
+      items: leagues.filter((l) => l.tier === 2),
+    },
+  ].filter((g) => g.items.length > 0);
+
   return (
-    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {leagues.map((l) => (
-        <button
-          key={l.id}
-          type="button"
-          onClick={() => onPick(l)}
-          className="flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-sm transition hover:border-foreground/30"
-        >
-          <span className="text-sm font-medium text-foreground">{l.name}</span>
-          <span className="text-xs text-muted">{l.country}</span>
-        </button>
+    <div className="mt-3 space-y-4">
+      {groups.map((g) => (
+        <div key={g.label}>
+          {groups.length > 1 && (
+            <div className="mb-2">
+              <h4 className="text-xs font-semibold text-foreground">{g.label}</h4>
+              {g.hint && <p className="text-[11px] text-muted">{g.hint}</p>}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {g.items.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                onClick={() => onPick(l)}
+                className="flex items-center justify-between rounded-xl border border-border bg-surface px-3 py-3 text-left shadow-sm transition hover:border-foreground/30"
+              >
+                <span className="text-sm font-medium text-foreground">{l.name}</span>
+                <span className="text-xs text-muted">{l.country}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -701,6 +771,7 @@ function GameView({
   onPlayRound,
   onSimulateToEnd,
   onPlan,
+  onInstruction,
   onEventChoice,
   onContinue,
   onSwitch,
@@ -717,14 +788,16 @@ function GameView({
   onPlayRound: () => void;
   onSimulateToEnd: () => void;
   onPlan: (p: Plan) => void;
+  onInstruction: (i: Instruction) => void;
   onEventChoice: (choiceIndex: number) => void;
-  onContinue: () => void;
+  onContinue: (spend: DevSpend) => void;
   onSwitch: (
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
     teamId: number,
-    leagueAccess: LeagueAccess | null
+    leagueAccess: LeagueAccess | null,
+    youth?: number
   ) => void;
   onReset: () => void;
   onError: (e: string | null) => void;
@@ -806,7 +879,7 @@ function GameView({
           {s.pendingEvent && (
             <EventCard event={s.pendingEvent} onChoice={onEventChoice} />
           )}
-          <NextMatch state={s} onPlan={onPlan} />
+          <NextMatch state={s} onPlan={onPlan} onInstruction={onInstruction} />
           <div className="mt-3 flex gap-2">
             <button
               type="button"
@@ -961,9 +1034,11 @@ function RoleNote({ save }: { save: SaveState }) {
 function NextMatch({
   state,
   onPlan,
+  onInstruction,
 }: {
   state: SeasonState;
   onPlan: (p: Plan) => void;
+  onInstruction: (i: Instruction) => void;
 }) {
   const next = yourNextMatch(state);
   if (!next) return null;
@@ -1025,8 +1100,9 @@ function NextMatch({
       {/* Scouting soupeře */}
       <ScoutCard scout={next.scout} oppName={next.opponent.name} />
 
-      {/* Morálka */}
+      {/* Morálka + kondice */}
       <MoraleBar morale={state.morale} />
+      <FitnessBar fitness={state.fitness} plan={state.plan} />
 
       {/* Aktivní dočasné efekty z eventů – jinak jsou pro hráče neviditelné */}
       <ActiveModifiers state={state} />
@@ -1058,25 +1134,43 @@ function NextMatch({
         <p className="mt-1.5 text-center text-[11px] text-muted">
           {PLAN_HINT[state.plan]}
         </p>
+
+        {/* Vedlejší instrukce – míří na traity soupeře, ne na jeho styl */}
+        <InstructionPicker
+          value={state.instruction}
+          onPick={onInstruction}
+          disabled={false}
+        />
       </div>
     </div>
   );
 }
 
-const STYLE_LABEL: Record<ScoutReport["style"], string> = {
-  attacking: "Ofenzivní",
-  defensive: "Defenzivní",
-  balanced: "Vyvážený",
-};
-
-/** Scouting karta soupeře: styl + krátký popis (traity). */
+/**
+ * Scouting karta soupeře: HLÁŠENÝ styl + konfidence + traity.
+ * Pozor: `scout.style` (pravda) se sem nesmí dostat – protitah by pak byl jistota.
+ */
 function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) {
+  const pct = Math.round(scout.confidence * 100);
+  const sure = scout.confidence >= 0.9;
   return (
     <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-foreground">🔍 Scouting</span>
-        <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted">
-          {STYLE_LABEL[scout.style]}
+        <span className="flex items-center gap-1.5">
+          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted">
+            {sure ? "" : "spíš "}
+            {STYLE_LABEL[scout.reportedStyle]}
+          </span>
+          <span
+            className={
+              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold " +
+              (sure ? "bg-positive/15 text-positive" : "bg-warning/15 text-warning")
+            }
+            title="Spolehlivost hlášení skautů. Zbytek času se mohou splést."
+          >
+            {pct} %
+          </span>
         </span>
       </div>
       <p className="mt-1 text-[11px] text-muted">
@@ -1099,6 +1193,75 @@ function MoraleBar({ morale }: { morale: number }) {
         <div className={"bar-fill h-full rounded-full " + tone} style={{ width: `${m}%` }} />
       </div>
       <span className="tabular-nums font-semibold text-foreground">{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Ukazatel kondice. Vedle stavu ukazuje i to, jak ji zvolený plán posune za kolo –
+ * bez toho by hráč netušil, že `press`/`open` tým dlouhodobě uběhá.
+ */
+function FitnessBar({ fitness, plan }: { fitness: number; plan: Plan }) {
+  const f = Math.round(fitness);
+  const tone = f >= 85 ? "bg-positive" : f >= 65 ? "bg-warning" : "bg-negative";
+  const delta = fitnessDelta(plan);
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs">
+      <span className="text-muted">Kondice</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
+        <div className={"bar-fill h-full rounded-full " + tone} style={{ width: `${f}%` }} />
+      </div>
+      <span
+        className={
+          "tabular-nums text-[10px] font-medium " +
+          (delta > 0 ? "text-positive" : delta < 0 ? "text-negative" : "text-muted")
+        }
+        title={`Zvolený plán mění kondici o ${delta > 0 ? "+" : ""}${delta} za kolo.`}
+      >
+        {delta > 0 ? "+" : ""}
+        {delta}/kolo
+      </span>
+      <span className="tabular-nums font-semibold text-foreground">{fitnessLabel(f)}</span>
+    </div>
+  );
+}
+
+/** Výběr vedlejší instrukce – funguje proti konkrétním traitům soupeře. */
+function InstructionPicker({
+  value,
+  onPick,
+  disabled,
+}: {
+  value: Instruction;
+  onPick: (i: Instruction) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="mt-3">
+      <div className="text-[11px] font-semibold text-foreground">Vedlejší instrukce</div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {INSTRUCTIONS.map((i) => {
+          const active = i === value;
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={disabled}
+              onClick={() => onPick(i)}
+              title={INSTRUCTION_HINT[i]}
+              className={
+                "rounded-full border px-2.5 py-1 text-[11px] font-medium transition disabled:opacity-50 " +
+                (active
+                  ? "border-foreground/40 bg-foreground/10 text-foreground"
+                  : "border-border bg-surface text-muted hover:text-foreground")
+              }
+            >
+              {INSTRUCTION_LABEL[i]}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-[10px] text-muted">{INSTRUCTION_HINT[value]}</p>
     </div>
   );
 }
@@ -1318,10 +1481,12 @@ function LeagueTable({ state }: { state: SeasonState }) {
   const zones = table.map((row) =>
     rankZone(row.rank, size, state.leagueId, state.leagueAccess)
   );
-  // Legenda jen pro zóny, které v této lize reálně existují (podle klíče, ne popisku).
+  // Legenda jen pro zóny, které v této lize reálně existují. Dedup podle POPISKU, ne
+  // klíče: Francie má 1.–2. „Liga mistrů" a 3. „Liga mistrů (předkolo)" – oboje `key: ucl`,
+  // takže dedup podle klíče by druhý popisek zahodil.
   const legend = zones
     .filter((z): z is RankZone => Boolean(z))
-    .filter((z, i, arr) => arr.findIndex((x) => x.key === z.key) === i);
+    .filter((z, i, arr) => arr.findIndex((x) => x.label === z.label) === i);
 
   return (
     <div className="mt-4">
@@ -1386,7 +1551,7 @@ function LeagueTable({ state }: { state: SeasonState }) {
       {legend.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">
           {legend.map((z) => (
-            <span key={z.key} className="flex items-center gap-1">
+            <span key={z.label} className="flex items-center gap-1">
               <span className={"inline-block h-2 w-2 rounded-sm " + z.dot} />
               {z.label}
             </span>
@@ -1460,6 +1625,102 @@ async function fetchGameLeagueTeams(
   };
 }
 
+const DEV_AREAS: (keyof DevSpend)[] = ["attack", "defense", "youth", "stadium"];
+
+/**
+ * Rozdělení rozvojových bodů mezi sezónami. Body dává výsledek sezóny (umístění, cíl,
+ * titul/Evropa, reputace) – strop je `MAX_DEV_POINTS`, takže jedna sezóna z průměrného
+ * klubu top tým neudělá. Nevyužité body propadají (nepřenášejí se).
+ */
+function DevelopmentPanel({
+  points,
+  spend,
+  left,
+  youth,
+  onChange,
+}: {
+  points: number;
+  spend: DevSpend;
+  left: number;
+  youth: number;
+  onChange: (s: DevSpend) => void;
+}) {
+  if (points <= 0) {
+    return (
+      <p className="mt-3 rounded-xl border border-border bg-background/40 px-3 py-2 text-xs text-muted">
+        Za tuhle sezónu nemáš žádné rozvojové body. Lepší umístění a splněný cíl je příště přinesou.
+      </p>
+    );
+  }
+  const bump = (area: keyof DevSpend, delta: number) => {
+    const next = { ...spend, [area]: Math.max(0, spend[area] + delta) };
+    // Nepřekroč přidělený rozpočet.
+    if (spendTotal(next) > points) return;
+    // Mládež má vlastní strop (kumulativní napříč sezónami).
+    if (area === "youth" && youth + next.youth > DEV_YOUTH_MAX) return;
+    onChange(next);
+  };
+
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-background/40 p-3 text-left">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-foreground">🏗️ Rozvoj klubu</span>
+        <span
+          className={
+            "rounded-full px-2 py-0.5 text-[11px] font-semibold " +
+            (left > 0 ? "bg-warning/15 text-warning" : "bg-positive/15 text-positive")
+          }
+        >
+          {left} / {points} bodů
+        </span>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {DEV_AREAS.map((area) => {
+          const atYouthCap = area === "youth" && youth + spend.youth >= DEV_YOUTH_MAX;
+          return (
+            <div key={area} className="flex items-center gap-2">
+              <span className="w-20 shrink-0 text-xs text-foreground" title={DEV_AREA_HINT[area]}>
+                {DEV_AREA_LABEL[area]}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[10px] text-muted">
+                {area === "youth" && atYouthCap ? "Akademie na maximu" : DEV_AREA_HINT[area]}
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  aria-label={`Ubrat bod: ${DEV_AREA_LABEL[area]}`}
+                  disabled={spend[area] === 0}
+                  onClick={() => bump(area, -1)}
+                  className="h-7 w-7 rounded-lg border border-border bg-surface text-sm font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+                >
+                  −
+                </button>
+                <span className="w-5 text-center text-sm font-semibold tabular-nums text-foreground">
+                  {spend[area]}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Přidat bod: ${DEV_AREA_LABEL[area]}`}
+                  disabled={left === 0 || atYouthCap}
+                  onClick={() => bump(area, 1)}
+                  className="h-7 w-7 rounded-lg border border-border bg-surface text-sm font-bold text-muted transition hover:text-foreground disabled:opacity-30"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[10px] text-muted">
+        {left > 0
+          ? "Nerozdělené body propadají. Při změně týmu se ztrácí i akademie — patří klubu."
+          : "Investice se projeví hned v příští sezóně."}
+      </p>
+    </div>
+  );
+}
+
 function SeasonDone({
   save,
   onContinue,
@@ -1467,18 +1728,20 @@ function SeasonDone({
   onError,
 }: {
   save: SaveState;
-  onContinue: () => void;
+  onContinue: (spend: DevSpend) => void;
   onSwitch: (
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
     teamId: number,
-    leagueAccess: LeagueAccess | null
+    leagueAccess: LeagueAccess | null,
+    youth?: number
   ) => void;
   onError: (e: string | null) => void;
 }) {
   const [jobs, setJobs] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [spend, setSpend] = useState<DevSpend>(EMPTY_SPEND);
   const s = save.current;
   if (!s) return null;
   const summary = summarizeSeason(s);
@@ -1487,16 +1750,22 @@ function SeasonDone({
   const champ = teamById(s.teams, summary.championId);
   const tone = seasonTone(summary);
   const transition = nextTransition(summary, s.leagueId);
+  // Rozvojové body za sezónu (vč. bonusů/malusů z eventů).
+  const devPoints = developmentPoints(summary, projectedRep, s.teams.length, s.devBonus);
+  const left = devPoints - spendTotal(spend);
 
   // Přechod do vyšší/nižší ligy: dotáhni cílovou ligu a vlož svůj klub, pak spusť sezónu.
+  // Klub jde s tebou → investice i mládež se přenesou (na rozdíl od „Změnit tým").
   async function moveTo(targetId: number, targetName: string) {
     if (!s) return;
     setMoving(true);
     onError(null);
     try {
       const { teams, leagueAccess } = await fetchGameLeagueTeams(targetId);
-      const roster = injectYourTeam(teams, teamById(s.teams, s.yourTeamId));
-      onSwitch(targetId, targetName, roster, s.yourTeamId, leagueAccess);
+      // Investice se počítá vůči LIZE, ve které jsi ji vydělal (strop `DEV_LEAGUE_CEILING`).
+      const developed = applyDevelopment(teamById(s.teams, s.yourTeamId), spend, s.teams);
+      const roster = injectYourTeam(teams, developed);
+      onSwitch(targetId, targetName, roster, s.yourTeamId, leagueAccess, nextYouth(s.youth, spend));
     } catch (e) {
       onError(e instanceof Error ? e.message : "Nepodařilo se načíst ligu.");
       setMoving(false);
@@ -1577,6 +1846,16 @@ function SeasonDone({
             </div>
           </div>
         )}
+        {/* Rozvoj klubu – body dle výsledku sezóny. Po vyhazovu nemá kam jít. */}
+        {transition.type !== "sacked" && (
+          <DevelopmentPanel
+            points={devPoints}
+            spend={spend}
+            left={left}
+            youth={s.youth}
+            onChange={setSpend}
+          />
+        )}
         {transition.type === "sacked" && (
           <p className="mt-3 rounded-xl border border-negative/30 bg-negative/10 px-3 py-2 text-xs text-negative">
             Vedení tě po sestupu odvolalo. Najdi si nový klub — se sníženou reputací tě vezmou
@@ -1608,7 +1887,7 @@ function SeasonDone({
               {transition.type === "stay" && (
                 <button
                   type="button"
-                  onClick={onContinue}
+                  onClick={() => onContinue(spend)}
                   className="rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
                 >
                   Pokračovat s klubem →
@@ -1806,16 +2085,16 @@ function HistoryView({ save }: { save: SaveState }) {
           const delta = repDeltas[save.history.length - 1 - i];
           return (
             <div
-              key={i}
+              key={`${h.season}-${h.leagueId}-${h.yourTeamId}`}
               className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
             >
               <span className="w-8 shrink-0 text-xs text-muted">S{h.season}</span>
               <span className="w-7 shrink-0 text-xs text-muted">{h.yourRank}.</span>
-              <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
-              <span className="min-w-0 flex-1 truncate">
-                <span className="text-foreground">{h.yourName}</span>{" "}
-                <span className="text-xs text-muted">· {h.leagueName}</span>
+              {/* Klub jen logem – název je v title/alt, řádek zůstane úzký i na mobilu. */}
+              <span className="shrink-0" title={h.yourName}>
+                <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
               </span>
+              <span className="min-w-0 flex-1 truncate text-xs text-muted">{h.leagueName}</span>
               <span className="shrink-0 text-xs tabular-nums text-muted" title="Body na zápas">
                 {(h.yourPoints / (h.win + h.draw + h.loss)).toFixed(2)} PPG
               </span>

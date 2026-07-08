@@ -36,9 +36,14 @@ const seasonSchema = z
     results: z.array(z.object({}).passthrough()).max(2000),
     round: z.number().int().min(0).max(60),
     plan: z.enum(["balanced", "open", "low_block", "press", "counter"]),
+    instruction: z.enum(["none", "man_mark", "wing_play", "set_pieces", "high_line"]),
     morale: z.number(),
+    fitness: z.number().min(0).max(100),
+    youth: z.number().int().min(0).max(20),
+    devBonus: z.number().int().min(-20).max(20),
     objective: z.object({}).passthrough(),
     modifiers: z.array(z.object({}).passthrough()).max(50),
+    scoutBoostUntilRound: z.number().int().nullable(),
     pendingEvent: z.object({}).passthrough().nullable(),
   })
   .passthrough();

@@ -32,27 +32,60 @@ export function pickTeamStanding(
  * náhrada za ručně udržovanou `LEAGUE_ACCESS` v lib/game/leagues.ts, sezónně přesná bez
  * ruční údržby. Vrací `null`, pokud žádný řádek nemá rozpoznatelný popis (chybějící
  * data / neznámá soutěž) → volající pak spadne na kurátorovaný fallback.
+ *
+ * Sestup = **počet řádků s jistým sestupem**. Nejde odvodit z ranků: ligy s nadstavbou
+ * vrací několik podtabulek za sebou (základní + evropská + sestupová) a `rank` se v každé
+ * počítá znovu od 1, takže `raw.length` není velikost ligy a ranky nejsou globální.
+ * Nepočítá se fázový split ("Relegation Round"/"Group") ani baráž ("Relegation Play-offs")
+ * – hra baráž nemodeluje, takže se do sestupové zóny počítají jen jisté pády.
+ * Když se nenajde žádná sestupová příčka, vrací `relegBottom: null` (= neznámo, **ne**
+ * "liga bez sestupu") → volající spadne na kurátorovanou hodnotu. Dřív se vracela `0`,
+ * což u lig s nadstavbou znamenalo, že nikdo nikdy nesestoupil.
  */
 export function deriveLeagueAccess(raw: ApiStandingRow[]): LeagueAccess | null {
   const slots: { rank: number; spot: EuropeSpot }[] = [];
-  let relegBottom = 0;
+  let relegCount = 0;
   for (const row of raw) {
     const desc = row.description?.toLowerCase() ?? "";
     if (!desc) continue;
+    // Soutěž se hledá jen PŘED závorkou. Reálný evropský slot pojmenuje soutěž rovnou
+    // ("Promotion - Europa League (Qualification)"), kdežto domácí play-off o Evropu má
+    // v hlavičce vlastní ligu ("Promotion - Eredivisie (Conference League - Play Offs)")
+    // – ten do Evropy teprve hraje, není to postupové místo (jinak by Eredivisie měla
+    // 9 evropských míst z 18). Fáze (kvalifikace/předkolo) se čte z celého popisku.
+    const head = desc.split("(")[0];
     const isQualifier = /qualif|play.?off|preliminary/.test(desc);
     let spot: EuropeSpot | null = null;
-    if (desc.includes("champions league")) spot = isQualifier ? "UCL_Q" : "UCL";
-    else if (desc.includes("europa league")) spot = isQualifier ? "UEL_Q" : "UEL";
-    else if (desc.includes("conference league")) spot = isQualifier ? "UECL_Q" : "UECL";
+    if (head.includes("champions league")) spot = isQualifier ? "UCL_Q" : "UCL";
+    else if (head.includes("europa league")) spot = isQualifier ? "UEL_Q" : "UEL";
+    else if (head.includes("conference league")) spot = isQualifier ? "UECL_Q" : "UECL";
     if (spot) slots.push({ rank: row.rank, spot });
-    // Skutečný sestup, ne fázový split. Ligy s nadstavbou (ČR/Skotsko/Belgie/…) značí
-    // spodní skupinu jako "Relegation Round"/"Relegation Group" – to je jen fáze sezóny,
-    // ne sestupová příčka. Počítej jen řádky bez "round"/"group".
-    if (desc.includes("relegation") && !/round|group/.test(desc)) relegBottom++;
+    // Jistý sestup popisek ZAČÍNÁ slovem "relegation" ("Relegation - Championship",
+    // "Relegation"). Baráž má tvar "<Liga> (Relegation)" nebo "Relegation Play-offs",
+    // fázový split nadstavby "Relegation Round"/"Group" – nic z toho není jistý pád.
+    if (desc.startsWith("relegation") && !/round|group|play.?off/.test(desc)) relegCount++;
   }
-  if (slots.length === 0 && relegBottom === 0) return null;
-  slots.sort((a, b) => a.rank - b.rank);
-  return { slots, relegBottom };
+  const relegBottom = relegCount > 0 ? relegCount : null;
+  const prefix = contiguousPrefix(slots);
+  if (prefix.length === 0 && relegBottom === null) return null;
+  return { slots: prefix, relegBottom };
+}
+
+/**
+ * Ponechá jen souvislou řadu evropských míst od 1. příčky dolů (a dedupuje ranky, které se
+ * u nadstavbových podtabulek opakují). Reálná tabulka totiž nese i místa vysoutěžená
+ * **domácím pohárem** – např. Premier League 2025/26 má `15.→UEL` (vítěz FA Cupu). Hra
+ * domácí pohár nemodeluje, takže by se v tabulce rozsvítil evropský pruh u 15. místa
+ * a `seasonObjective` by jako cíl „Evropa" nabídl 15. místo.
+ */
+function contiguousPrefix(
+  slots: { rank: number; spot: EuropeSpot }[]
+): { rank: number; spot: EuropeSpot }[] {
+  const byRank = new Map<number, EuropeSpot>();
+  for (const s of slots) if (!byRank.has(s.rank)) byRank.set(s.rank, s.spot);
+  const out: { rank: number; spot: EuropeSpot }[] = [];
+  for (let rank = 1; byRank.has(rank); rank++) out.push({ rank, spot: byRank.get(rank)! });
+  return out;
 }
 
 /** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */

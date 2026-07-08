@@ -8,7 +8,7 @@
 // split-formát nemodeluje, jen vyhodnotí finální pořadí ploché tabulky přes
 // evaluateSeason/deriveLeagueAccess. Vědomý kompromis pro jednoduchost, ne bug.
 
-import { PRESTIGE_SCALE, PRESTIGE_SHIFT } from "./balance";
+import { PRESTIGE_SCALE, PRESTIGE_SHIFT, PROMOTION_PUSH_GAP } from "./balance";
 import type { EuropeSpot, GameTeam, LeagueAccess, Objective } from "./types";
 
 /** Ligy nabízené ve hře (Top-5 + pár dalších). id = reálné league id z katalogu. */
@@ -52,7 +52,7 @@ export interface SecondTier {
   firstTierId: number;
 }
 
-const SECOND_TIERS: SecondTier[] = [
+export const SECOND_TIERS: SecondTier[] = [
   { id: 40, name: "Championship", country: "Anglie", prestige: 62, promoSpots: 2, firstTierId: 39 },
   { id: 141, name: "LaLiga 2", country: "Španělsko", prestige: 56, promoSpots: 2, firstTierId: 140 },
   { id: 136, name: "Serie B", country: "Itálie", prestige: 54, promoSpots: 2, firstTierId: 135 },
@@ -106,28 +106,40 @@ export function leagueName(leagueId: number): string {
  * mění → tahle tabulka je jen přibližná snímek (~2025/26), ne zdroj pravdy.
  */
 const LEAGUE_ACCESS: Record<number, LeagueAccess> = {
-  // Top-4 koeficientové ligy: 1.–4. rovnou do ligové fáze LM.
+  // Top-4 koeficientové ligy: 1.–4. rovnou do ligové fáze LM. Sestup 3 přímo (20 týmů).
   39: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 }, // Anglie
   140: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 }, // Španělsko
   135: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 }, // Itálie
-  78: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 }, // Německo
-  // Francie: 1.–2. do ligové fáze, 3. předkolo LM, 4. EL, 5. EKL.
-  61: { slots: euro([["UCL", 2], ["UCL_Q", 1], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 },
-  // Portugalsko: mistr do ligové fáze, 2. předkolo LM, 3. EL, 4. EKL předkolo.
+  // Německo (18): 2 přímo, 16. baráž → baráž nepočítáme jako jistý sestup.
+  78: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 2 },
+  // Francie (18): 1.–2. do ligové fáze, 3. předkolo LM, 4. EL, 5. EKL. Sestup 2 + baráž.
+  61: { slots: euro([["UCL", 2], ["UCL_Q", 1], ["UEL", 1], ["UECL", 1]]), relegBottom: 2 },
+  // Portugalsko (18): mistr do ligové fáze, 2. předkolo LM, 3. EL, 4. EKL předkolo.
   94: { slots: euro([["UCL", 1], ["UCL_Q", 1], ["UEL", 1], ["UECL_Q", 1]]), relegBottom: 2 },
-  // Nizozemsko: mistr do ligové fáze, 2. předkolo LM, 3. EL předkolo, 4. EKL předkolo.
+  // Nizozemsko (18): mistr do ligové fáze, 2. předkolo LM, 3. EL předkolo, 4. EKL předkolo.
+  // Sestup: 17.–18. přímo, 16. baráž (ověřeno `npm run audit-leagues`).
   88: { slots: euro([["UCL", 1], ["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
-  // Belgie: mistr do předkola LM, 2. předkolo EL, 3. předkolo EKL.
-  144: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 3 },
-  // Skotsko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
+  // Belgie (16, nadstavba): mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL. Sestup 1 + baráž.
+  144: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 1 },
+  // Skotsko (12, nadstavba): mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL. 12. přímo, 11. baráž.
   179: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 1 },
-  // Rakousko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
-  218: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
-  // Řecko: mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
+  // Rakousko (12, nadstavba): mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL. Poslední přímo.
+  218: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 1 },
+  // Řecko (14, nadstavba): mistr předkolo LM, 2. předkolo EL, 3. předkolo EKL.
   197: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
-  // Česko (Fortuna liga): mistr PŘEDKOLO LM, 2. předkolo EL, 3. předkolo EKL.
-  345: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 2 },
-  // Fiktivní liga (mock): jednoduchý generický klíč.
+  // Česko (16, nadstavba): mistr PŘEDKOLO LM, 2. předkolo EL, 3. předkolo EKL.
+  // Sestup: poslední přímo, 15. baráž → 1.
+  345: { slots: euro([["UCL_Q", 1], ["UEL_Q", 1], ["UECL_Q", 1]]), relegBottom: 1 },
+
+  // ── 2. ligy (evropské sloty se u nich stejně vynucují na NONE v `evaluateSeason`;
+  // podstatný je jen `relegBottom`, postup řeší `promoSpots` v SECOND_TIERS). ──
+  40: { slots: [], relegBottom: 3 }, // Championship (24)
+  141: { slots: [], relegBottom: 4 }, // LaLiga 2 (22)
+  136: { slots: [], relegBottom: 3 }, // Serie B (20)
+  79: { slots: [], relegBottom: 2 }, // 2. Bundesliga (18): 2 přímo + baráž
+  62: { slots: [], relegBottom: 2 }, // Ligue 2 (18): 2 přímo + baráž
+
+  // Fiktivní liga (mock, 20 týmů): jednoduchý generický klíč.
   0: { slots: euro([["UCL", 4], ["UEL", 1], ["UECL", 1]]), relegBottom: 3 },
 };
 
@@ -141,14 +153,35 @@ function euro(spec: [EuropeSpot, number][]): { rank: number; spot: EuropeSpot }[
   return out;
 }
 
-function accessFor(leagueId: number, size: number, override?: LeagueAccess | null): LeagueAccess {
-  if (override) return override;
-  return (
-    LEAGUE_ACCESS[leagueId] ?? {
-      slots: euro([["UCL", 1], ["UECL_Q", 2]]),
-      relegBottom: size >= 18 ? 3 : 2,
-    }
-  );
+/** Kurátorovaný klíč ligy (bez slučování s odvozeným) – pro audit skript. */
+export function curatedAccess(leagueId: number): LeagueAccess | null {
+  return LEAGUE_ACCESS[leagueId] ?? null;
+}
+
+/** Access key s jistotou, že `relegBottom` je číslo (po sloučení s fallbackem). */
+type ResolvedAccess = { slots: { rank: number; spot: EuropeSpot }[]; relegBottom: number };
+
+/**
+ * Sloučí odvozený klíč (z reálné sezóny) s kurátorovaným fallbackem **po polích**, ne
+ * all-or-nothing. Ligy s nadstavbou dají odvodit evropské sloty, ale ne sestup
+ * (`relegBottom: null`) – dřív takový override zkratoval fallback a nikdo nesestupoval.
+ */
+function accessFor(
+  leagueId: number,
+  size: number,
+  override?: LeagueAccess | null
+): ResolvedAccess {
+  const curated: ResolvedAccess = LEAGUE_ACCESS[leagueId]
+    ? {
+        slots: LEAGUE_ACCESS[leagueId].slots,
+        relegBottom: LEAGUE_ACCESS[leagueId].relegBottom ?? (size >= 18 ? 3 : 2),
+      }
+    : { slots: euro([["UCL", 1], ["UECL_Q", 2]]), relegBottom: size >= 18 ? 3 : 2 };
+  if (!override) return curated;
+  return {
+    slots: override.slots.length ? override.slots : curated.slots,
+    relegBottom: override.relegBottom ?? curated.relegBottom,
+  };
 }
 
 /**
@@ -274,15 +307,30 @@ export function seasonObjective(
   const sorted = [...league].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
   const exp = sorted.findIndex((t) => t.id === team.id) + 1;
   const a = accessFor(leagueId, size, leagueAccess);
-  // Ve 2. lize je celý smysl sezóny postup zpět do nejvyšší soutěže.
+  // Ve 2. lize je smysl sezóny postup nahoru – ale jen pro klub, který na to má.
+  // Kariéru lze ve 2. lize i ZAČÍT (slabý klub), takže musí existovat i cíl záchrany;
+  // jinak by outsider dostal „Zabojuj o postup — skonči do 21. místa".
   if (isSecondTier(leagueId)) {
     const spots = promoSpotsOf(leagueId);
-    const target = exp <= spots ? spots : Math.max(spots + 1, exp);
-    return exp <= spots
-      ? { kind: "promotion", targetRank: spots, text: `Postup do nejvyšší ligy (do ${spots}. místa)` }
-      : { kind: "midtable", targetRank: target, text: `Zabojuj o postup — skonči do ${target}. místa` };
+    const safeRank = size - a.relegBottom;
+    if (exp <= spots)
+      return {
+        kind: "promotion",
+        targetRank: spots,
+        text: `Postup do nejvyšší ligy (do ${spots}. místa)`,
+      };
+    if (exp > safeRank)
+      return { kind: "survival", targetRank: safeRank, text: "Zachraň se — vyhni se sestupu" };
+    // Blízko postupové zóny → tlač na postup; jinak prostě potvrď sílu.
+    const target = Math.max(spots + 1, exp);
+    return exp <= spots + PROMOTION_PUSH_GAP
+      ? { kind: "midtable", targetRank: target, text: `Zabojuj o postup — skonči do ${target}. místa` }
+      : { kind: "midtable", targetRank: target, text: `Potvrď sílu — skonči do ${target}. místa` };
   }
-  const euroSlots = Math.max(1, a.slots.length);
+  // Nejnižší příčka, která ještě vede do Evropy. Kurátorované i odvozené sloty jsou
+  // souvislé od 1. místa (`euro()` / `contiguousPrefix`), ale bereme maximum ranku
+  // místo `slots.length` – nespoléhá to na tu invariantu.
+  const euroSlots = a.slots.length ? Math.max(...a.slots.map((s) => s.rank)) : 1;
   const safe = size - a.relegBottom; // poslední bezpečné místo
   if (exp === 1) return { kind: "title", targetRank: 1, text: "Vyhraj ligu 🏆" };
   if (exp <= euroSlots)

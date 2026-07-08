@@ -3,16 +3,19 @@
 
 import { deriveSeed, mulberry32 } from "./rng";
 import { newSeason, currentTable } from "./engine";
-import { teamById, amplifySpread } from "./teams";
+import { teamById } from "./teams";
 import { evaluateSeason } from "./leagues";
 import { expectedRank } from "./reputation";
+import { applyDevelopment, nextYouth, youthRegression, EMPTY_SPEND } from "./development";
+import type { DevSpend } from "./development";
 import {
-  ATTACK_MAX,
-  ATTACK_MIN,
-  DEFENSE_BEST,
-  DEFENSE_WORST,
   DRIFT_NOISE,
+  DRIFT_PERFORMANCE,
   DRIFT_REGRESSION,
+  SPREAD_ATTACK_MAX,
+  SPREAD_ATTACK_MIN,
+  SPREAD_DEFENSE_MAX,
+  SPREAD_DEFENSE_MIN,
 } from "./balance";
 import type { GameTeam, MatchResult, SeasonState, SeasonSummary } from "./types";
 
@@ -59,41 +62,120 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
   };
 }
 
-/**
- * Lehký drift ratingu mezi sezónami: regrese ke středu ligy + malý šum. Drží týmy
- * v realistickém rozsahu, ale pořadí sil se mezi sezónami mírně mění.
- */
-function driftTeams(teams: GameTeam[], seed: number): GameTeam[] {
-  const rand = mulberry32(seed);
-  const midAttack = (ATTACK_MIN + ATTACK_MAX) / 2;
-  const midDefense = (DEFENSE_BEST + DEFENSE_WORST) / 2;
-  const drifted = teams.map((t) => {
-    const attack = clamp(
-      t.attack + (midAttack - t.attack) * DRIFT_REGRESSION + (rand() - 0.5) * DRIFT_NOISE,
-      ATTACK_MIN,
-      ATTACK_MAX
-    );
-    const defense = clamp(
-      t.defense + (midDefense - t.defense) * DRIFT_REGRESSION + (rand() - 0.5) * DRIFT_NOISE,
-      DEFENSE_BEST,
-      DEFENSE_WORST
-    );
-    return { ...t, attack: round2(attack), defense: round2(defense) };
-  });
-  // Znovu roztáhnout rozptyl, aby regrese ke středu mezisezónně nesmyla rozdíly sil.
-  return amplifySpread(drifted);
+/** Kontext driftu: co se v minulé sezóně stalo (výkon týmů) a co jsi investoval. */
+export interface DriftContext {
+  yourTeamId: number;
+  /** Finální tabulka minulé sezóny (pro výkonovou zpětnou vazbu AI týmů). */
+  table: { teamId: number; rank: number }[];
+  /** Tvoje investice rozvojových bodů. */
+  spend: DevSpend;
+  /** Kumulativní investice do mládeže (tlumí regresi tvého klubu). */
+  youth: number;
 }
 
-/** Spustí další sezónu se STEJNÝM týmem i ligou (driftnuté ratingy, nový rozpis). */
-export function startNextSeason(state: SeasonState): SeasonState {
+/**
+ * Drift ratingů mezi sezónami:
+ *  1. regrese ke **skutečnému průměru ligy** + šum (u tvého klubu tlumená mládeží),
+ *  2. výkonová zpětná vazba: kdo přeplnil očekávání, mírně posílí; kdo podlezl, oslabí,
+ *  3. **renormalizace na původní průměr a rozptyl** ligy,
+ *  4. teprve pak tvoje investice (`applyDevelopment`) – ta má rozptyl posunout.
+ *
+ * Krok 3 nahradil dřívější `amplifySpread`. Ten roztahoval odchylky 1.35× KAŽDOU sezónu,
+ * zatímco regrese je vracela jen 0.9× → net 1.215×/sezónu a liga se za ~10 sezón
+ * polarizovala do clampů (std útoku 0.56 → 0.91). `amplifySpread` patří jen na čerstvě
+ * postavenou ligu (`generateLeague`/`standingsToTeams`), ne do mezisezónního driftu.
+ * Regrese se navíc dřív počítala ke KONSTANTĚ 1.65 (střed generovaného rozsahu), ne
+ * k průměru ligy → reálným ligám (průměr ~1.35) to každou sezónu nafukovalo útok, a
+ * clampy `ATTACK_MIN/MAX` (0.95–2.35) ořezávaly reálné špičky.
+ */
+function driftTeams(teams: GameTeam[], seed: number, ctx: DriftContext): GameTeam[] {
+  if (teams.length === 0) return teams;
+  const rand = mulberry32(seed);
+  const size = teams.length;
+  const rankOf = new Map(ctx.table.map((r) => [r.teamId, r.rank]));
+  const expectedOf = new Map(
+    [...teams]
+      .sort((a, b) => b.attack - b.defense - (a.attack - a.defense))
+      .map((t, i) => [t.id, i + 1] as const)
+  );
+
+  const meanAtk = mean(teams.map((t) => t.attack));
+  const meanDef = mean(teams.map((t) => t.defense));
+  const stdAtk = std(teams.map((t) => t.attack), meanAtk);
+  const stdDef = std(teams.map((t) => t.defense), meanDef);
+
+  const drifted = teams.map((t) => {
+    // Tvůj klub regreduje pomaleji podle investic do mládeže.
+    const reg = t.id === ctx.yourTeamId ? youthRegression(ctx.youth) : DRIFT_REGRESSION;
+    // Přeplněné očekávání → posílí (kladné `perf`), podlezené → oslabí.
+    const rank = rankOf.get(t.id) ?? Math.round(size / 2);
+    const exp = expectedOf.get(t.id) ?? Math.round(size / 2);
+    const perf = size > 1 ? (exp - rank) / (size - 1) : 0; // −1 .. 1
+    const nudge = perf * DRIFT_PERFORMANCE;
+    return {
+      ...t,
+      attack: t.attack + (meanAtk - t.attack) * reg + (rand() - 0.5) * DRIFT_NOISE + nudge,
+      // Obrana: nižší = lepší, takže dobrý výkon ji SNIŽUJE.
+      defense: t.defense + (meanDef - t.defense) * reg + (rand() - 0.5) * DRIFT_NOISE - nudge,
+    };
+  });
+
+  // Renormalizace: vrať lize původní průměr i rozptyl (drift jen promíchá pořadí sil).
+  const renorm = renormalize(drifted, meanAtk, stdAtk, meanDef, stdDef);
+  const you = renorm.find((t) => t.id === ctx.yourTeamId);
+  if (!you) return renorm;
+  const developed = applyDevelopment(you, ctx.spend, renorm);
+  return renorm.map((t) => (t.id === ctx.yourTeamId ? developed : t));
+}
+
+function renormalize(
+  teams: GameTeam[],
+  meanAtk: number,
+  stdAtk: number,
+  meanDef: number,
+  stdDef: number
+): GameTeam[] {
+  const mA = mean(teams.map((t) => t.attack));
+  const mD = mean(teams.map((t) => t.defense));
+  const sA = std(teams.map((t) => t.attack), mA);
+  const sD = std(teams.map((t) => t.defense), mD);
+  const kA = sA > 1e-6 ? stdAtk / sA : 1;
+  const kD = sD > 1e-6 ? stdDef / sD : 1;
+  return teams.map((t) => ({
+    ...t,
+    attack: round2(clamp(meanAtk + (t.attack - mA) * kA, SPREAD_ATTACK_MIN, SPREAD_ATTACK_MAX)),
+    defense: round2(clamp(meanDef + (t.defense - mD) * kD, SPREAD_DEFENSE_MIN, SPREAD_DEFENSE_MAX)),
+  }));
+}
+
+/**
+ * Spustí další sezónu se STEJNÝM týmem i ligou (driftnuté ratingy, investice, nový rozpis).
+ * `spend` = rozdělení rozvojových bodů (bez něj se jen driftuje).
+ */
+export function startNextSeason(state: SeasonState, spend: DevSpend = EMPTY_SPEND): SeasonState {
   const nextSeed = deriveSeed(state.seed, 1000 + state.season);
-  const teams = driftTeams(state.teams, nextSeed);
+  const table = currentTable(state);
+  const teams = driftTeams(state.teams, nextSeed, {
+    yourTeamId: state.yourTeamId,
+    table,
+    spend,
+    youth: state.youth,
+  });
   return newSeason(nextSeed, state.yourTeamId, {
     season: state.season + 1,
     teams,
     leagueId: state.leagueId,
     leagueName: state.leagueName,
+    leagueAccess: state.leagueAccess,
+    youth: nextYouth(state.youth, spend),
   });
+}
+
+function mean(xs: number[]): number {
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+function std(xs: number[], m: number): number {
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
 }
 
 /** Agregované kariérní statistiky napříč historií. */

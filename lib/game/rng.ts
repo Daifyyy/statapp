@@ -18,6 +18,16 @@ export function randomSeed(): number {
   return (Math.random() * 0x100000000) >>> 0;
 }
 
+/** Fisher–Yates s daným RNG (deterministické). */
+export function shuffle<T>(arr: T[], rand: () => number): T[] {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /**
  * Seed odvozený z (base, index) – každé kolo dostane vlastní deterministický RNG,
  * takže výsledky nezávisí na tom, kolik kol se odehrálo v jedné session (odolné vůči

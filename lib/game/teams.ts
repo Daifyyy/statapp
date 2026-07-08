@@ -1,7 +1,7 @@
 // Generace fiktivní ligy 20 týmů s ratingy útoku/obrany. Deterministické dle seedu
 // (stejný seed = stejná liga). Jména jsou vymyšlená (žádné reálné kluby → žádné TM).
 
-import { mulberry32 } from "./rng";
+import { mulberry32, shuffle } from "./rng";
 import {
   ATTACK_MAX,
   ATTACK_MIN,
@@ -72,16 +72,6 @@ const TEAM_META: { name: string; short: string; color: string }[] = [
   { name: "Granite City", short: "GRA", color: "#525252" },
   { name: "FC Meridian", short: "MER", color: "#2563eb" },
 ];
-
-/** Fisher–Yates s daným RNG (deterministické). */
-function shuffle<T>(arr: T[], rand: () => number): T[] {
-  const out = arr.slice();
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
 
 /**
  * Vygeneruje ligu 20 týmů. Síla se rozprostře od nejsilnějšího po nejslabší (lineární

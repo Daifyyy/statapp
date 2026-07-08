@@ -5,7 +5,10 @@
 import { teamById } from "./teams";
 import { teamStrengthScore } from "./leagues";
 import { teamSeasonStats } from "./analysis";
+import { deriveSeed, mulberry32 } from "./rng";
 import {
+  SCOUT_CONFIDENCE,
+  SCOUT_CONFIDENCE_BOOSTED,
   SCOUT_STRENGTH_GAP,
   SCOUT_STYLE_GAP,
   SCOUT_TRAIT_RATIO_HIGH,
@@ -26,7 +29,15 @@ export type Trait =
   | "underdog";
 
 export interface ScoutReport {
+  /**
+   * SKUTEČNÝ styl soupeře. Nikdy neukazovat v UI – jen `resolvePlan` podle něj počítá,
+   * jestli counter zabral. Hráč vidí `reportedStyle`.
+   */
   style: OppStyle;
+  /** Styl, jak ho hlásí skauti. S pravděpodobností `1 − confidence` je vedle. */
+  reportedStyle: OppStyle;
+  /** Spolehlivost hlášení (0–1). */
+  confidence: number;
   traits: Trait[];
   note: string;
 }
@@ -47,7 +58,36 @@ const STYLE_NOTE: Record<OppStyle, string> = {
   balanced: "Vyrovnaný tým bez výrazného extrému.",
 };
 
-/** Scout report soupeře z pohledu tvého týmu. */
+export const STYLE_LABEL: Record<OppStyle, string> = {
+  attacking: "útočný",
+  defensive: "defenzivní",
+  balanced: "vyrovnaný",
+};
+
+const ALL_STYLES: OppStyle[] = ["attacking", "defensive", "balanced"];
+
+/**
+ * Co skauti nahlásí. S pravděpodobností `confidence` sedí na pravdu, jinak ukážou jeden
+ * z ostatních stylů. Deterministické dle `(seed, kolo, soupeř)` – vlastní RNG stream
+ * (salt 70000), aby hlášení nekolísalo mezi rendery ani po reloadu a neposunulo RNG
+ * simulace zápasů (`deriveSeed(seed, round)`) ani eventů (salt 90000).
+ */
+function reportStyle(
+  state: SeasonState,
+  oppId: number,
+  trueStyle: OppStyle,
+  confidence: number
+): OppStyle {
+  const rand = mulberry32(deriveSeed(state.seed, 70000 + state.round * 101 + oppId));
+  if (rand() < confidence) return trueStyle;
+  const others = ALL_STYLES.filter((s) => s !== trueStyle);
+  return others[Math.floor(rand() * others.length)];
+}
+
+/**
+ * Scout report soupeře z pohledu tvého týmu. `style` je pravda (pro counter v
+ * `resolvePlan`), `reportedStyle` je to, co uvidí hráč – proto counter není jistota.
+ */
 export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
   const opp = teamById(state.teams, oppId);
   const you = teamById(state.teams, state.yourTeamId);
@@ -84,5 +124,19 @@ export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
   const traitText = traits.length
     ? traits.map((t) => TRAIT_LABEL[t]).join(", ")
     : "bez výrazných rysů";
-  return { style, traits, note: `${STYLE_NOTE[style]} (${traitText})` };
+
+  // Investice do skautingu (event) zvedne spolehlivost hlášení na pár kol.
+  const boosted =
+    state.scoutBoostUntilRound !== null && state.scoutBoostUntilRound >= state.round;
+  const confidence = boosted ? SCOUT_CONFIDENCE_BOOSTED : SCOUT_CONFIDENCE;
+  const reportedStyle = reportStyle(state, oppId, style, confidence);
+
+  return {
+    style,
+    reportedStyle,
+    confidence,
+    traits,
+    // Popis se řídí HLÁŠENÝM stylem – hráč nesmí z textu vyčíst pravdu.
+    note: `${STYLE_NOTE[reportedStyle]} (${traitText})`,
+  };
 }
