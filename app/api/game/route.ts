@@ -30,6 +30,7 @@ const seasonSchema = z
     leagueId: z.number().int(),
     leagueName: z.string().max(80),
     seed: z.number().int(),
+    rngSalt: z.number().int(),
     teams: z.array(teamSchema).min(2).max(40),
     yourTeamId: z.number().int(),
     schedule: z.array(z.array(z.object({}).passthrough())).max(60),

@@ -10,12 +10,14 @@
 //     porada" nemá padnout ve vítězné sérii. Bez toho jsou eventy jen barevný šum.
 //
 // Pozn.: nezávisí na `analysis.ts` (to importuje `engine.ts`, které importuje tenhle
-// soubor → cyklus). Formu si počítá lokálně ze `state.results`.
+// soubor → cyklus). Formu bere ze sdíleného `form.ts`, které neimportuje nic z jádra.
 
 import { mulberry32, deriveSeed } from "./rng";
 import { EVENT_CHANCE } from "./balance";
 import { teamStrengthScore } from "./leagues";
-import type { PendingEvent, SeasonState } from "./types";
+import { recentCleanSheets, teamForm, playedCount } from "./form";
+import type { AgencyState, EventContext } from "./agency";
+import type { PendingEvent } from "./types";
 
 interface EventChoiceEffect {
   /** Změna morálky (±). */
@@ -41,58 +43,26 @@ export interface GameEvent {
   title: string;
   text: string;
   /** Kdy event vůbec smí padnout. Bez podmínky = kdykoliv. */
-  condition?: (state: SeasonState) => boolean;
+  condition?: (ctx: EventContext) => boolean;
   choices: EventChoice[];
 }
 
 // ───────────────────────── predikáty pro `condition` ─────────────────────────
 
-/** Posledních `n` výsledků tvého týmu (nejstarší → nejnovější). */
-function yourForm(state: SeasonState, n: number): ("W" | "D" | "L")[] {
-  const out: ("W" | "D" | "L")[] = [];
-  for (const r of state.results) {
-    const isHome = r.homeId === state.yourTeamId;
-    const isAway = r.awayId === state.yourTeamId;
-    if (!isHome && !isAway) continue;
-    const forG = isHome ? r.homeGoals : r.awayGoals;
-    const agG = isHome ? r.awayGoals : r.homeGoals;
-    out.push(forG > agG ? "W" : forG < agG ? "L" : "D");
-  }
-  return out.slice(-n);
+/** Blíží se zápas se špičkou pole (top 3 dle síly)? Čte `nextOpponentId`, ne rozpis. */
+function bigMatchAhead(s: EventContext): boolean {
+  if (s.nextOpponentId === null) return false;
+  const ranked = [...s.teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+  return ranked.slice(0, 3).some((t) => t.id === s.nextOpponentId);
 }
 
-/** Kolik z posledních `n` zápasů tvůj tým udržel čisté konto. */
-function recentCleanSheets(state: SeasonState, n: number): number {
-  const mine = state.results.filter(
-    (r) => r.homeId === state.yourTeamId || r.awayId === state.yourTeamId
-  );
-  return mine.slice(-n).filter((r) => (r.homeId === state.yourTeamId ? r.awayGoals : r.homeGoals) === 0)
-    .length;
-}
-
-/** Soupeř v nejbližším kole (nebo null, když je sezóna dohraná). */
-function nextOpponentId(state: SeasonState): number | null {
-  const fixtures = state.schedule[state.round];
-  if (!fixtures) return null;
-  const f = fixtures.find(
-    (x) => x.homeId === state.yourTeamId || x.awayId === state.yourTeamId
-  );
-  if (!f) return null;
-  return f.homeId === state.yourTeamId ? f.awayId : f.homeId;
-}
-
-/** Blíží se zápas se špičkou ligy (top 3 dle síly)? */
-function bigMatchAhead(state: SeasonState): boolean {
-  const oppId = nextOpponentId(state);
-  if (oppId === null) return false;
-  const ranked = [...state.teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
-  return ranked.slice(0, 3).some((t) => t.id === oppId);
-}
-
-const inCrisis = (s: SeasonState) =>
-  s.morale < 40 || yourForm(s, 3).filter((f) => f === "L").length >= 2;
-const playedAtLeast = (n: number) => (s: SeasonState) => yourForm(s, 99).length >= n;
-const tired = (s: SeasonState) => s.fitness < 70;
+const inCrisis = (s: EventContext) =>
+  s.morale < 40 || teamForm(s.results, s.yourTeamId, 3).filter((f) => f === "L").length >= 2;
+const playedAtLeast = (n: number) => (s: EventContext) =>
+  playedCount(s.results, s.yourTeamId) >= n;
+const tired = (s: EventContext) => s.fitness < 70;
+/** Kariérní pole – v turnaji chybí, event pak prostě nepadne. */
+const investsInYouth = (s: EventContext) => (s.youth ?? 0) >= 1;
 
 /** Kurátorovaná sada eventů. */
 export const EVENTS: GameEvent[] = [
@@ -205,8 +175,8 @@ export const EVENTS: GameEvent[] = [
     id: "youth_spark",
     title: "Jiskra z akademie",
     text: "Mladík z akademie válí na tréninku.",
-    // Dává smysl jen když do mládeže vůbec investuješ.
-    condition: (s) => s.youth >= 1,
+    // Dává smysl jen když do mládeže vůbec investuješ (v turnaji `youth` chybí → nepadne).
+    condition: investsInYouth,
     choices: [
       {
         label: "Hodit ho do ohně",
@@ -295,7 +265,7 @@ export const EVENTS: GameEvent[] = [
     id: "clean_sheet_confidence",
     title: "Sebevědomí v obraně",
     text: "Obrana si v posledních zápasech věří jako nikdy — hráči chtějí risknout víc vepředu.",
-    condition: (s) => recentCleanSheets(s, 3) >= 2,
+    condition: (s) => recentCleanSheets(s.results, s.yourTeamId, 3) >= 2,
     choices: [
       {
         label: "Uvolnit obranu dopředu",
@@ -457,10 +427,14 @@ export function getEvent(id: string): GameEvent | undefined {
  * RNG od simulace zápasů (`deriveSeed(seed, round)`) i od scoutingu (salt 70000).
  * Stav je odvozený ze seedu, takže je to reprodukovatelné i po reloadu.
  */
-export function maybeEvent(state: SeasonState): PendingEvent | null {
-  const rand = mulberry32(deriveSeed(state.seed, 90000 + state.round));
+export function maybeEvent(
+  state: AgencyState,
+  nextOpponentId: number | null
+): PendingEvent | null {
+  const rand = mulberry32(deriveSeed(state.seed + state.rngSalt, 90000 + state.round));
   if (rand() >= EVENT_CHANCE) return null;
-  const eligible = EVENTS.filter((e) => !e.condition || e.condition(state));
+  const ctx: EventContext = { ...state, nextOpponentId };
+  const eligible = EVENTS.filter((e) => !e.condition || e.condition(ctx));
   if (eligible.length === 0) return null;
   const idx = Math.floor(rand() * eligible.length);
   return { id: eligible[idx].id, round: state.round };
@@ -471,7 +445,7 @@ export function maybeEvent(state: SeasonState): PendingEvent | null {
  * + případný dočasný modifikátor (platí `rounds` kol od aktuálního), a vyčistí pendingEvent.
  * Čistá funkce.
  */
-export function applyEventChoice(state: SeasonState, choiceIndex: number): SeasonState {
+export function applyEventChoice<T extends AgencyState>(state: T, choiceIndex: number): T {
   const pe = state.pendingEvent;
   if (!pe) return state;
   const ev = getEvent(pe.id);
@@ -481,7 +455,8 @@ export function applyEventChoice(state: SeasonState, choiceIndex: number): Seaso
 
   const morale = e.moraleDelta ? clamp(state.morale + e.moraleDelta, 0, 100) : state.morale;
   const fitness = e.fitnessDelta ? clamp(state.fitness + e.fitnessDelta, 0, 100) : state.fitness;
-  const devBonus = e.devBonus ? state.devBonus + e.devBonus : state.devBonus;
+  // `devBonus` je kariérní – v turnaji chybí, efekt se tam tiše zahodí.
+  const devBonus = e.devBonus ? (state.devBonus ?? 0) + e.devBonus : state.devBonus;
   const scoutBoostUntilRound = e.scoutBoostRounds
     ? state.round + e.scoutBoostRounds - 1
     : state.scoutBoostUntilRound;

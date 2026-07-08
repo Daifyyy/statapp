@@ -1,9 +1,14 @@
 // Předzápasová analýza ve stylu „Porovnání týmů" – ale z ODEHRANÉ simulované sezóny.
 // Čistá agregace výsledků (žádná nová data): průměr gólů (celkově/doma/venku), forma,
 // % čistých kont, pozice/body. Pohání panel u predikce nejbližšího zápasu.
+//
+// POZOR: tenhle modul je UI vrstva, ne agency. Importuje `engine.ts` (kvůli tabulce),
+// takže na něm NESMÍ stavět `scouting.ts` ani `events.ts` – jinak vznikne cyklus
+// `engine → scouting → analysis → engine`. Formu berou z `form.ts`.
 
 import { currentTable } from "./engine";
-import type { MatchResult, SeasonState } from "./types";
+import { teamForm } from "./form";
+import type { SeasonState } from "./types";
 
 export interface TeamSeasonStats {
   teamId: number;
@@ -43,13 +48,11 @@ export function teamSeasonStats(
   let awayGf = 0;
   let awayGa = 0;
   let awayN = 0;
-  const teamMatches: MatchResult[] = [];
 
   for (const r of state.results) {
     const isHome = r.homeId === teamId;
     const isAway = r.awayId === teamId;
     if (!isHome && !isAway) continue;
-    teamMatches.push(r);
     const forGoals = isHome ? r.homeGoals : r.awayGoals;
     const againstGoals = isHome ? r.awayGoals : r.homeGoals;
     played++;
@@ -67,12 +70,8 @@ export function teamSeasonStats(
     }
   }
 
-  const form: ("W" | "D" | "L")[] = teamMatches.slice(-5).map((r) => {
-    const isHome = r.homeId === teamId;
-    const forGoals = isHome ? r.homeGoals : r.awayGoals;
-    const againstGoals = isHome ? r.awayGoals : r.homeGoals;
-    return forGoals > againstGoals ? "W" : forGoals < againstGoals ? "L" : "D";
-  });
+  // Forma je sdílená se scoutingem i eventy (`form.ts`) – nepočítat ji potřetí.
+  const form = teamForm(state.results, teamId, 5);
 
   return {
     teamId,

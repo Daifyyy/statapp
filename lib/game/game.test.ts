@@ -41,11 +41,14 @@ import {
   setInstruction,
   yourNextMatch,
   resolveAdjust,
+  nextOpponentOf,
 } from "./engine";
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
 import { resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
+import { RNG_SALT_LEAGUE, RNG_SALT_TOURNAMENT } from "./agency";
+import type { AgencyState } from "./agency";
 import { mulberry32, randomSeed, deriveSeed } from "./rng";
 import {
   applyDevelopment,
@@ -873,22 +876,27 @@ describe("morale", () => {
 describe("events", () => {
   it("maybeEvent je deterministický dle seedu+kola a losuje jen z eventů se splněnou podmínkou", () => {
     const base = newSeason(123, 1);
-    expect(maybeEvent(base)).toEqual(maybeEvent(base));
+    const opp = () => nextOpponentOf(base);
+    expect(maybeEvent(base, opp())).toEqual(maybeEvent(base, opp()));
     // Napříč koly aspoň někdy event nastane
     let hits = 0;
-    for (let r = 0; r < 38; r++) if (maybeEvent({ ...base, round: r })) hits++;
+    for (let r = 0; r < 38; r++) {
+      const s = { ...base, round: r };
+      if (maybeEvent(s, nextOpponentOf(s))) hits++;
+    }
     expect(hits).toBeGreaterThan(0);
     // Vrácené id existuje v registru a jeho podmínka na daný stav sedí
-    const ev = maybeEvent(base);
+    const ev = maybeEvent(base, opp());
     if (ev) {
       const def = getEvent(ev.id);
       expect(def).toBeDefined();
-      expect(def!.condition?.(base) ?? true).toBe(true);
+      expect(def!.condition?.({ ...base, nextOpponentId: opp() }) ?? true).toBe(true);
     }
   });
 
   it("state-blind eventy zmizely: krizová porada nepadne s vysokou morálkou", () => {
-    const happy = { ...newSeason(1, 1), morale: 90 };
+    const season = newSeason(1, 1);
+    const happy = { ...season, morale: 90, nextOpponentId: nextOpponentOf(season) };
     const crisis = getEvent("losing_streak_crisis")!;
     expect(crisis.condition!(happy)).toBe(false);
     expect(crisis.condition!({ ...happy, morale: 20 })).toBe(true);
@@ -1177,6 +1185,91 @@ describe("development", () => {
     const next = startNextSeason(s, { attack: 0, defense: 0, youth: 2, stadium: 0 });
     expect(next.leagueAccess).toEqual(access);
     expect(next.youth).toBe(2);
+  });
+});
+
+// ───────────────────── T1: agency oddělená od ligy ─────────────────────
+
+describe("agency mimo ligu", () => {
+  const teams = generateLeague(77);
+
+  /** Minimální kontext bez rozpisu, tabulky a sezónního cíle – jako v turnaji. */
+  const bare = (over: Partial<AgencyState> = {}): AgencyState => ({
+    seed: 4242,
+    round: 0,
+    rngSalt: RNG_SALT_TOURNAMENT,
+    teams,
+    yourTeamId: teams[3].id,
+    results: [],
+    morale: 50,
+    fitness: 100,
+    modifiers: [],
+    scoutBoostUntilRound: null,
+    plan: "balanced",
+    instruction: "none",
+    pendingEvent: null,
+    ...over,
+  });
+
+  it("resolveAdjust a scoutOpponent běží bez rozpisu, tabulky i cíle", () => {
+    const ctx = bare();
+    const adj = resolveAdjust(ctx, teams[5].id, "counter", "man_mark");
+    expect(adj.attack).toBeGreaterThan(0);
+    const scout = scoutOpponent(ctx, teams[5].id);
+    expect(["attacking", "defensive", "balanced"]).toContain(scout.style);
+  });
+
+  it("maybeEvent bere příštího soupeře parametrem, ne z rozpisu", () => {
+    const ctx = bare();
+    // Deterministické a stabilní.
+    expect(maybeEvent(ctx, null)).toEqual(maybeEvent(ctx, null));
+    // Event „velký zápas" smí padnout jen když soupeř JE špička – bez soupeře nikdy.
+    const big = getEvent("derby_motivation")!;
+    const strongest = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a))[0];
+    expect(big.condition!({ ...ctx, nextOpponentId: null })).toBe(false);
+    expect(big.condition!({ ...ctx, nextOpponentId: strongest.id })).toBe(true);
+  });
+
+  it("kariérní eventy v turnaji nepadnou (youth chybí)", () => {
+    const ctx = bare(); // bez `youth`
+    expect(getEvent("youth_spark")!.condition!({ ...ctx, nextOpponentId: null })).toBe(false);
+    expect(
+      getEvent("youth_spark")!.condition!({ ...ctx, youth: 2, nextOpponentId: null })
+    ).toBe(true);
+  });
+
+  it("applyEventChoice funguje i bez devBonus (turnaj) a zachová tvar stavu", () => {
+    const ctx = bare({ pendingEvent: { id: "board_bonus", round: 0 } });
+    const after = applyEventChoice(ctx, 0); // volba s `devBonus: 1`
+    expect(after.pendingEvent).toBeNull();
+    expect(after.devBonus).toBe(1); // `?? 0` → nespadne na undefined
+    expect(after.morale).toBeLessThan(ctx.morale);
+  });
+
+  it("rngSalt odděluje turnaj od ligy – jiné eventy při stejném seedu i kole", () => {
+    const league = bare({ rngSalt: RNG_SALT_LEAGUE });
+    const cup = bare({ rngSalt: RNG_SALT_TOURNAMENT });
+    let differs = 0;
+    for (let r = 0; r < 40; r++) {
+      const a = maybeEvent({ ...league, round: r }, null);
+      const b = maybeEvent({ ...cup, round: r }, null);
+      if (JSON.stringify(a) !== JSON.stringify(b)) differs++;
+    }
+    expect(differs).toBeGreaterThan(0);
+  });
+
+  // Regrese: `deriveSeed(seed, 70000 + round*101 + oppId)` kolidovalo – reálná id týmů jdou
+  // do tisíců, takže (kolo 0, soupeř 101) dávalo stejný stream jako (kolo 1, soupeř 0).
+  // Ověřeno: 15 kolizí na mřížce 6 kol × 8 soupeřů; vnořený deriveSeed jich má 0.
+  it("scout RNG stream nekoliduje napříč koly a soupeři", () => {
+    const streams = new Set<string>();
+    const oppIds = [0, 33, 101, 202, 303, 1580, 2384, 5529];
+    for (let round = 0; round < 6; round++) {
+      for (const oppId of oppIds) {
+        streams.add(String(deriveSeed(deriveSeed(4242, 70000 + round), oppId)));
+      }
+    }
+    expect(streams.size).toBe(6 * oppIds.length);
   });
 });
 

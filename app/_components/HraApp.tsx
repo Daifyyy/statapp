@@ -6,6 +6,7 @@ import { TeamLogo } from "./TeamLogo";
 import type { SessionUser } from "./sessionUser";
 import { teamById, injectYourTeam } from "@/lib/game/teams";
 import { randomSeed } from "@/lib/game/rng";
+import { RNG_SALT_LEAGUE } from "@/lib/game/agency";
 import {
   newSeason,
   playRound,
@@ -124,7 +125,7 @@ async function saveEndpoint(next: SaveState): Promise<boolean> {
 function migrateSave(raw: unknown): SaveState | null {
   let save = raw as (SaveState & { version: number }) | null | undefined;
   if (!save) return null;
-  // Migrace se řetězí (5 → 6 → 7), ať starý save nezůstane viset na mezikroku.
+  // Migrace se řetězí (5 → 6 → 7 → 8), ať starý save nezůstane viset na mezikroku.
   if (save.version === 5) {
     save = {
       ...save,
@@ -147,6 +148,14 @@ function migrateSave(raw: unknown): SaveState | null {
             scoutBoostUntilRound: null,
           }
         : null,
+    };
+  }
+  if (save.version === 7) {
+    // v8 oddělil RNG proudy režimů (liga vs. reprezentační turnaj) – `agency.ts`.
+    save = {
+      ...save,
+      version: 8,
+      current: save.current ? { ...save.current, rngSalt: RNG_SALT_LEAGUE } : null,
     };
   }
   if (save.version === SAVE_VERSION) return save;

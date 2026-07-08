@@ -18,6 +18,8 @@ import { moraleFactor, updateMorale } from "./morale";
 import { fitnessFactor, updateFitness } from "./fitness";
 import { resolveInstruction } from "./instructions";
 import { maybeEvent } from "./events";
+import { RNG_SALT_LEAGUE } from "./agency";
+import type { AgencyState } from "./agency";
 import { STARTING_FITNESS, STARTING_MORALE } from "./balance";
 import type {
   Fixture,
@@ -68,6 +70,7 @@ export function newSeason(
     leagueId,
     leagueName: opts.leagueName ?? MOCK_LEAGUE.name,
     seed,
+    rngSalt: RNG_SALT_LEAGUE,
     teams: league,
     yourTeamId,
     schedule,
@@ -86,7 +89,22 @@ export function newSeason(
     leagueAccess,
   };
   // `maybeEvent` filtruje eventy podle stavu (podmínky), takže potřebuje hotový state.
-  return { ...state, pendingEvent: maybeEvent(state) };
+  return { ...state, pendingEvent: maybeEvent(state, nextOpponentOf(state)) };
+}
+
+/**
+ * Soupeř tvého týmu v aktuálním kole, nebo `null` (sezóna dohraná). Odvozené ze `schedule`,
+ * NEUKLÁDÁ se do stavu – uložená kopie by se mohla rozejít s rozpisem. Agency ho dostává
+ * jako parametr (`maybeEvent`).
+ */
+export function nextOpponentOf(state: SeasonState): number | null {
+  const fixtures = state.schedule[state.round];
+  if (!fixtures) return null;
+  const f = fixtures.find(
+    (x) => x.homeId === state.yourTeamId || x.awayId === state.yourTeamId
+  );
+  if (!f) return null;
+  return f.homeId === state.yourTeamId ? f.awayId : f.homeId;
 }
 
 /** Je sezóna dohraná? */
@@ -115,7 +133,7 @@ export function setInstruction(state: SeasonState, instruction: Instruction): Se
  * buď opravdu sedne, nebo ne, podle skutečnosti.
  */
 export function resolveAdjust(
-  state: SeasonState,
+  state: AgencyState,
   oppId: number,
   plan: Plan,
   instruction: Instruction
@@ -146,7 +164,7 @@ function clampAdjust(v: number): number {
 }
 
 /** Úprava λ tvého týmu se SKUTEČNĚ zvolenou taktikou – používá se při odehrání kola. */
-export function resolveYourAdjust(state: SeasonState, oppId: number): SideAdjust {
+export function resolveYourAdjust(state: AgencyState, oppId: number): SideAdjust {
   return resolveAdjust(state, oppId, state.plan, state.instruction);
 }
 
@@ -213,7 +231,8 @@ export function playRound(state: SeasonState): SeasonState {
   // Event se losuje z eventů, které pro NOVÝ stav splňují podmínku → potřebuje `next`.
   return {
     ...next,
-    pendingEvent: nextRound < state.schedule.length ? maybeEvent(next) : null,
+    pendingEvent:
+      nextRound < state.schedule.length ? maybeEvent(next, nextOpponentOf(next)) : null,
   };
 }
 

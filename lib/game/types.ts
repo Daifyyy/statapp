@@ -168,6 +168,8 @@ export interface SeasonState {
   leagueName: string;
   /** Seed pro rozpis (deterministický). */
   seed: number;
+  /** RNG proud režimu (`RNG_SALT_LEAGUE`) – odděluje ligu od turnaje. Viz `agency.ts`. */
+  rngSalt: number;
   teams: GameTeam[];
   yourTeamId: number;
   /** Rozpis po kolech (schedule[round] = zápasy kola). */
@@ -265,7 +267,7 @@ export interface ManagerProfile {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {

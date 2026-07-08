@@ -4,7 +4,9 @@
 
 import { teamById } from "./teams";
 import { teamStrengthScore } from "./leagues";
-import { teamSeasonStats } from "./analysis";
+// Formu ber z `form.ts`, ne z `analysis.ts` – to importuje `engine.ts` (tabulka) a vznikl
+// by cyklus. Ze `teamSeasonStats` se tu stejně používalo jen `.form`.
+import { teamForm } from "./form";
 import { deriveSeed, mulberry32 } from "./rng";
 import {
   SCOUT_CONFIDENCE,
@@ -14,7 +16,7 @@ import {
   SCOUT_TRAIT_RATIO_HIGH,
   SCOUT_TRAIT_RATIO_LOW,
 } from "./balance";
-import type { SeasonState } from "./types";
+import type { AgencyState } from "./agency";
 
 /** Herní styl soupeře – vstup pro counter logiku plánu. */
 export type OppStyle = "attacking" | "defensive" | "balanced";
@@ -68,17 +70,24 @@ const ALL_STYLES: OppStyle[] = ["attacking", "defensive", "balanced"];
 
 /**
  * Co skauti nahlásí. S pravděpodobností `confidence` sedí na pravdu, jinak ukážou jeden
- * z ostatních stylů. Deterministické dle `(seed, kolo, soupeř)` – vlastní RNG stream
+ * z ostatních stylů. Deterministické dle `(seed, salt, kolo, soupeř)` – vlastní RNG stream
  * (salt 70000), aby hlášení nekolísalo mezi rendery ani po reloadu a neposunulo RNG
  * simulace zápasů (`deriveSeed(seed, round)`) ani eventů (salt 90000).
+ *
+ * Seed se skládá VNOŘENĚ (`deriveSeed(deriveSeed(…, kolo), soupeř)`). Dřívější
+ * `70000 + round * 101 + oppId` kolidovalo: reálná id týmů jdou do tisíců, takže
+ * (kolo 0, soupeř 202) dávalo stejný stream jako (kolo 2, soupeř 0) – hlášení pak
+ * korelovala napříč koly.
  */
 function reportStyle(
-  state: SeasonState,
+  state: AgencyState,
   oppId: number,
   trueStyle: OppStyle,
   confidence: number
 ): OppStyle {
-  const rand = mulberry32(deriveSeed(state.seed, 70000 + state.round * 101 + oppId));
+  const rand = mulberry32(
+    deriveSeed(deriveSeed(state.seed + state.rngSalt, 70000 + state.round), oppId)
+  );
   if (rand() < confidence) return trueStyle;
   const others = ALL_STYLES.filter((s) => s !== trueStyle);
   return others[Math.floor(rand() * others.length)];
@@ -88,7 +97,7 @@ function reportStyle(
  * Scout report soupeře z pohledu tvého týmu. `style` je pravda (pro counter v
  * `resolvePlan`), `reportedStyle` je to, co uvidí hráč – proto counter není jistota.
  */
-export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
+export function scoutOpponent(state: AgencyState, oppId: number): ScoutReport {
   const opp = teamById(state.teams, oppId);
   const you = teamById(state.teams, state.yourTeamId);
   const meanAtk =
@@ -111,11 +120,11 @@ export function scoutOpponent(state: SeasonState, oppId: number): ScoutReport {
   if (opp.defense > meanDef * SCOUT_TRAIT_RATIO_HIGH) traits.push("weakDefense");
   if (opp.defense < meanDef * SCOUT_TRAIT_RATIO_LOW) traits.push("solidDefense");
 
-  const stats = teamSeasonStats(state, oppId);
-  const wins = stats.form.filter((f) => f === "W").length;
-  const losses = stats.form.filter((f) => f === "L").length;
-  if (stats.form.length >= 3 && wins >= 3) traits.push("inForm");
-  if (stats.form.length >= 3 && losses >= 3) traits.push("poorForm");
+  const form = teamForm(state.results, oppId, 5);
+  const wins = form.filter((f) => f === "W").length;
+  const losses = form.filter((f) => f === "L").length;
+  if (form.length >= 3 && wins >= 3) traits.push("inForm");
+  if (form.length >= 3 && losses >= 3) traits.push("poorForm");
 
   const diff = teamStrengthScore(opp) - teamStrengthScore(you);
   if (diff > SCOUT_STRENGTH_GAP) traits.push("favourite");

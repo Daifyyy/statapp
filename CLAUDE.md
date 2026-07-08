@@ -436,6 +436,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`updateReputation` dle příčky+over/under-performance+**cíle**, `isHireable`/`expectedRank`/
   `HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats`), `development.ts`/`fitness.ts`/`instructions.ts`
   (Phase B, viz níže), `balance.ts` (**laditelné konstanty**).
+- **Agency je oddělená od ligy** (`lib/game/agency.ts`, příprava na reprezentační turnaje):
+  `resolveAdjust`/`scoutOpponent`/`maybeEvent`/`applyEventChoice` berou **`AgencyState`** — 12 polí
+  bez rozpisu, tabulky, sezónního cíle i rozvoje klubu. `SeasonState` je jeho strukturální
+  nadmnožina, takže ligový kód se nemění. (`MatchContext` je obsazený v `lib/data/cache.ts`,
+  proto `Agency*`.) Tři místa, kde agency dřív sahala na ligu:
+  - **forma** — `scoutOpponent` volal `teamSeasonStats`, ale bral z něj jen `.form`; `analysis.ts`
+    přitom importuje `engine.ts` → existoval **skutečný cyklus** `engine → scouting → analysis →
+    engine`, který `events.ts` obcházel duplikací výpočtu. Vytknuto do **`form.ts`** (list bez
+    závislostí na jádru). `analysis.ts` zůstal čistě UI vrstva (tabulka/rank/body).
+  - **příští soupeř** — `events.ts` četlo `state.schedule[state.round]`. Teď ho `maybeEvent(state,
+    nextOpponentId)` dostává **parametrem**; `nextOpponentOf` (`engine.ts`) ho odvodí z rozpisu,
+    turnaj z pavouka. **Neukládá se do stavu** — odvozená kopie by se mohla rozejít.
+  - **kariérní pole** — `youth`/`devBonus` jsou na `AgencyState` volitelné (`?? 0`); v turnaji
+    chybí, takže `youth_spark` prostě nepadne. 14 ze 16 eventů jede v turnaji beze změny.
+  - **`rngSalt`** (`RNG_SALT_LEAGUE` 0 / `RNG_SALT_TOURNAMENT`) odděluje RNG proudy režimů —
+    jinak by turnaj se stejným `seed` a `round` dostal identické eventy i scoutské omyly jako liga.
+  - **Opravená kolize scout seedu:** `deriveSeed(seed, 70000 + round*101 + oppId)` kolidovalo
+    (reálná id týmů jdou do tisíců → kolo 0/soupeř 101 == kolo 1/soupeř 0; 15 kolizí na mřížce
+    6 kol × 8 soupeřů). Teď vnořeně `deriveSeed(deriveSeed(seed + rngSalt, 70000 + round), oppId)`,
+    0 kolizí. Mění to determinismus scoutských omylů (ne balanc — `sim-game` sekce 1 je bit-identická).
 - **Manažerská agency (Phase 2):** `scouting.ts` (`scoutOpponent` → styl attacking/defensive/balanced
   + traity + CZ popis; od Phase B hlásí styl **s konfidencí**), `plans.ts` (5 plánů
   `balanced/open/low_block/press/counter`, `resolvePlan(plan, oppStyle)` = base × counter; správný
@@ -475,8 +495,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `morale`/`fitness`/… + `current` nullable + size cap 512 KB + rate-limit; ukládá **původní**
   objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version,
   profile:ManagerProfile, manager:{reputation}, current:SeasonState|null, history[]}`;
-  `SAVE_VERSION` = **7**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
-  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7) a jen doplní nová pole; teprve neznámá verze se
+  `SAVE_VERSION` = **8**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
+  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7 → 8) a jen doplní nová pole; teprve neznámá verze se
   zahodí. „Nová kariéra" nemaže profil (jen `current:null`).
 - **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; **bez aktivní kariéry → `ManagerHub`**
   (profil + „Začni kariéru" → gated výběr ligy→klubu, sekce „Nejvyšší ligy" / „2. ligy"); s kariérou →
