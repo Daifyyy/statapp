@@ -34,11 +34,18 @@ interface Cell {
 }
 
 /**
- * Očekávané góly obou týmů z ratingů + úprav. Domácí výhoda (`homeBoost`) jde do λ dvěma
- * kanály: zvedá útok domácích a **snižuje, kolik domácí dostávají** (`HOME_DEFENSE_SHARE`).
- * `HOME_ADV_SCALE` kompenzuje `/2` níž – λ je průměr „co jeden dá" a „co druhý dostane",
- * takže násobič na jednom sčítanci se v λ projeví jen zhruba půlkou.
- * Hosté nemají žádný postih; celá výhoda je vyjádřená na straně domácích.
+ * Očekávané góly obou týmů z ratingů + úprav.
+ *
+ * **Domácí výhoda je ADITIVNÍ posun λ v gólech**, ne násobič ratingů. Přičte se domácím
+ * (`homeBonus`) a odečte hostům (`awayPenalty`); hosté jinak žádný postih nemají.
+ * Odpovídá to i tomu, jak se domácí výhoda reálně měří (~+0,35 gólu), místo tvrzení, že
+ * domácím zesílí útočníci o 30 %.
+ *
+ * Proč aditivně: v multiplikativní verzi se útok domácích NÁSOBIL a jejich obrana DĚLILA,
+ * takže `∂λ/∂útok` bylo doma zesílené a `∂λ/∂obrana` tlumené → investice do útoku byla
+ * strukturálně výnosnější než do obrany (+1.16 vs +0.84 bodu za sezónu) a žádná volba
+ * `DEV_DEFENSE_STEP` to nespravila. Aditivně je `∂λ/∂rating = 1/2` pro obě strany a pro
+ * oba typy zápasů → **parita** (+1.02 vs +0.95; zbytek je nelinearita Poissona).
  */
 export function matchLambdas(
   home: GameTeam,
@@ -46,28 +53,32 @@ export function matchLambdas(
   homeAdj: SideAdjust = NEUTRAL_ADJUST,
   awayAdj: SideAdjust = NEUTRAL_ADJUST
 ): [number, number] {
-  const { attackMult, defenseMult } = homeAdvantage(home.homeBoost);
-  const homeAtk = home.attack * attackMult * homeAdj.attack;
+  const { homeBonus, awayPenalty } = homeAdvantage(home.homeBoost);
+  const homeAtk = home.attack * homeAdj.attack;
   const awayAtk = away.attack * awayAdj.attack;
-  const homeConcede = (home.defense * homeAdj.concede) / defenseMult; // domácí dostávají míň
+  const homeConcede = home.defense * homeAdj.concede; // kolik domácí dostávají
   const awayConcede = away.defense * awayAdj.concede; // kolik hosté dostávají
-  const lh = clamp((homeAtk + awayConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
-  const la = clamp((awayAtk + homeConcede) / 2, MIN_LAMBDA, MAX_LAMBDA);
+  const lh = clamp((homeAtk + awayConcede) / 2 + homeBonus, MIN_LAMBDA, MAX_LAMBDA);
+  const la = clamp((awayAtk + homeConcede) / 2 - awayPenalty, MIN_LAMBDA, MAX_LAMBDA);
   return [lh, la];
 }
 
 /**
- * Rozklad `homeBoost` na násobič útoku a obrany domácích. `homeBoost` je stropovaný
- * (`HOME_BOOST_CAP`) i tady – kdyby ho někdy nějaká cesta (investice do stadionu, migrace
- * starého save, ručně upravená data) vyhnala výš, model se nesmí utrhnout.
+ * Domácí výhoda v GÓLECH: kolik se přičte λ domácích a kolik se odečte λ hostů.
+ * `homeBoost` je poměr „domácí góly na zápas / celkové góly na zápas" (reálná data), takže
+ * `hb − 1` je relativní domácí přírůstek; `HOME_ADV_SCALE` ho převede na góly.
+ *
+ * Bonus **záměrně nezávisí na ratingu týmu** – kdyby se násobil útokem, vrátila by se
+ * asymetrie `∂λ/∂útok > ∂λ/∂obrana`. Stropováno `HOME_BOOST_CAP` i tady, kdyby ho nějaká
+ * cesta (investice do stadionu, starý save, ručně upravená data) vyhnala výš.
  */
 export function homeAdvantage(homeBoost: number): {
-  attackMult: number;
-  defenseMult: number;
+  homeBonus: number;
+  awayPenalty: number;
 } {
   const hb = clamp(homeBoost, 1, HOME_BOOST_CAP);
   const edge = (hb - 1) * HOME_ADV_SCALE;
-  return { attackMult: 1 + edge, defenseMult: 1 + edge * HOME_DEFENSE_SHARE };
+  return { homeBonus: edge, awayPenalty: edge * HOME_DEFENSE_SHARE };
 }
 
 /** Normalizovaná mřížka skóre (Dixon–Coles korekce nízkých skóre). */

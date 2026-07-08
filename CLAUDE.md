@@ -494,18 +494,25 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   **reputační zisk/ztrátu** (`reputationDeltas`). Kariérní statistiky mají i **Postupy**.
   `app/hra/`, nav 🎮, sitemap.
 - **Domácí výhoda** (`homeBoost` na `GameTeam`, jediné místo použití = `matchLambdas`):
-  per-tým číslo (u reálné ligy z home splitu tabulky, u mocku náhodné `1.05–1.15`), **ne globální
-  konstanta a ne `SideAdjust`** — má ho i AI. Do λ jde **dvěma kanály** (`homeAdvantage`):
-  útok domácích `× (1 + (hb−1)·HOME_ADV_SCALE)`, obdržené domácími `÷ (1 + (hb−1)·HOME_ADV_SCALE·
-  HOME_DEFENSE_SHARE)`. Hosté nemají žádný postih. `HOME_ADV_SCALE=3` kompenzuje `/2` ve vzorci
-  λ (násobič na jednom sčítanci se v λ projeví půlkou). Bez obranného kanálu se na realistický
-  rozklad **nedá** dostat: i `scale 3.5, share 0` dá jen 43,7 % domácích výher a nafoukne góly
-  na 3,25. Dnes: **45,2/24,1/30,8 %** při ⌀ 3,10 gólu (dřív 38,6/25,3/36,1 → domácí měli jen
-  +2,5 p.b. místo reálných ~+15). Laděno gridem přes všechny uspořádané dvojice ligy.
-  - **`homeBoost` se kalibruje až PO `amplifySpread`** (`standingsToTeams`). Model počítá
-    `attack × homeBoost`, takže jmenovatel musí být ten `attack`, se kterým se pak reálně počítá.
-    Dřív se dělil pre-spread útokem → silní doma přestřelovali (+9 %), slabí podstřelovali (−18 %).
-    Teď je odchylka <1 %; zbytek je vědomé vítězství stropu `HOME_BOOST_CAP` nad přesností.
+  per-tým číslo, **ne globální konstanta a ne `SideAdjust`** — má ho i AI. Je to **poměr reálných
+  gólů** (domácí góly/zápas ÷ celkové góly/zápas; u mocku náhodné `1.05–1.15`), který
+  `homeAdvantage` převede na **aditivní posun λ v gólech**:
+  `λ_domácích += (hb−1)·HOME_ADV_SCALE`, `λ_hostů −= (hb−1)·HOME_ADV_SCALE·HOME_DEFENSE_SHARE`.
+  Typický tým (`hb` 1.10) → +0.20 gólu domácím, −0.14 hostům. Laděno gridem přes všechny
+  uspořádané dvojice ligy (= co dvoukolový round-robin odehraje). Dnes **44,8/24,3/30,9 %**
+  při ⌀ 3,03 gólu; dřív 38,6/25,3/36,1 → domácí měli jen +2,5 p.b. místo reálných ~+15.
+  - **Proč aditivně, ne násobičem ratingů.** Multiplikativní verze (útok ×mult, obdržené ÷mult)
+    sice 45/25/30 trefila, ale doma se útok NÁSOBIL a obrana DĚLILA → `∂λ/∂útok` zesílené,
+    `∂λ/∂obrana` tlumené. Investice do útoku byla proto strukturálně výnosnější (+1.16 vs +0.84
+    bodu za sezónu) a **žádná hodnota `DEV_DEFENSE_STEP` to nespravila** (ověřeno gridem
+    0.08/0.10/0.12). Aditivně je `∂λ/∂rating = 1/2` pro obě strany i oba typy zápasů → parita
+    (+1.02 vs +0.95, kryto testem „λ-parita"). Sedí to i na to, jak se domácí výhoda reálně
+    měří (~+0,35 gólu), a dá realističtější počet gólů.
+  - **Bonus nesmí záviset na ratingu týmu.** Kdyby se násobil útokem, asymetrie se vrátí.
+  - **`homeBoost` se počítá z hrubých gólů, ne z ratingů** (`standingsToTeams`) → `amplifySpread`
+    na něj nesmí sáhnout. Kdyby se dělil post-spread útokem, dostaly by slabé týmy (kterým spread
+    útok stlačí) nejvyšší poměr: v lize, kde všichni doma dávají +18 %, by nejlepší tým dostal
+    +0.26 gólu a nejhorší +0.50. Kryto testem („nekoreluje se silou týmu").
   - **`HOME_BOOST_CAP` (1.25) je jediný zdroj pravdy** — platí pro odvození z reálné tabulky,
     pro investice do stadionu i jako pojistka v `matchLambdas` (starý save / ručně upravená data).
 - **Rozvoj klubu mezi sezónami** (`lib/game/development.ts`, čisté + testy; laděno `npm run sim-game`):
@@ -519,16 +526,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   Nevyužité body propadají; při **změně klubu** se ztrácí i mládež (patří klubu).
   Postup/sestup si klub bereš s sebou → investice i mládež jdou s ním.
   - Oblasti se liší **výnosem i trvanlivostí** (mezní hodnota 1 bodu, průměrný tým, 19+19 zápasů):
-    útok **+1.16 b/sezónu**, obrana **+0.84**, stadion **+0.43 — zato navždy** (drift `homeBoost`
+    útok **+1.02 b/sezónu**, obrana **+0.95**, stadion **+0.43 — zato navždy** (drift `homeBoost`
     neregreduje, na rozdíl od útoku/obrany). Mládež (`youthRegression`) je podpůrná: sama o sobě
     nic nedá, jen tlumí mezisezónní propad. Stadion je **konečná** investice: 1.10 → `HOME_BOOST_CAP`
-    stojí 15 bodů (≈ 4 sezóny) a dá +5.7 b/sezónu natrvalo, pak je hotový (UI další body nepustí,
+    stojí 15 bodů (≈ 4 sezóny) a dá +6.2 b/sezónu natrvalo, pak je hotový (UI další body nepustí,
     jinak by je `applyDevelopment` tiše ořízl).
-  - **Známá zbytková nerovnováha:** útok zůstává výnosnější než obrana i po λ-paritě kroků
-    (`sim-game` sekce 4: útok Ø 4.1. místo / 67 titulů vs obrana Ø 6.4. / 22). Důvody jsou
-    strukturální, ne v kroku — doma se útok násobí, kdežto obrana dělí, a `DEV_LEAGUE_CEILING` dá
-    průměrnému týmu 14 bodů prostoru v útoku, ale jen 10 v obraně. Zvětšování `DEV_DEFENSE_STEP`
-    (grid 0.08/0.10/0.12) s tím pohne minimálně. TODO: sémantika stropu nebo λ vzorce.
+  - **Útok vs obrana:** λ-parita kroků (`DEV_ATTACK_STEP == DEV_DEFENSE_STEP`) sama nestačila —
+    dokud byla domácí výhoda multiplikativní, byl útok o ~38 % výnosnější bez ohledu na krok.
+    Rozhodla až **aditivní domácí výhoda**. Dnes `sim-game` sekce 4 (vše do jedné oblasti,
+    10 sezón): útok Ø 4.2. místo / 64 titulů, obrana Ø 5.5. / 37, stadion Ø 6.9. / 10.
+    Zbylý náskok útoku je **fyzikální**: `DEV_LEAGUE_CEILING` dá průměrnému týmu 14 bodů prostoru
+    v útoku, ale jen 10 v obraně — obranu zdola omezuje nula, útok shora nic.
 - **`driftTeams` (`career.ts`) — tři opravené chyby.** Mezisezónní drift teď regreduje ke
   **skutečnému průměru ligy** (dřív ke konstantě 1.65 = středu generovaného rozsahu, což reálným
   ligám s průměrem ~1.35 každou sezónu nafukovalo útok), **nevolá `amplifySpread`** (ten patří jen

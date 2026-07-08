@@ -27,13 +27,22 @@ export const DEFENSE_WORST = 1.85; // nejhorší obrana
 
 // ───────────────────────── domácí výhoda ─────────────────────────
 //
-// `homeBoost` je per-tým „síla domácího prostředí" (u reálné ligy odvozená z home splitu
-// tabulky, u mocku náhodná). Do λ se propisuje ve `matchLambdas` DVĚMA kanály:
-//   útok domácích  × (1 + (homeBoost−1) × HOME_ADV_SCALE)
-//   obdržené dom.  ÷ (1 + (homeBoost−1) × HOME_ADV_SCALE × HOME_DEFENSE_SHARE)
-// Dřív existoval jen první kanál a bez `HOME_ADV_SCALE` → liga dávala domácím jen
-// +2,5 p.b. (38,6/25,3/36,1) místo reálných ~+15 (45/25/30). Dva důvody: boost nesahal
-// na obranu a `λ = (útok + soupeřova obrana) / 2` ten násobič půlí.
+// `homeBoost` = poměr reálných gólů (domácí góly/zápas ÷ celkové góly/zápas); u mocku náhodný.
+// Ve `matchLambdas` se převede na ADITIVNÍ posun λ v gólech (`homeAdvantage`):
+//   λ domácích += (homeBoost−1) × HOME_ADV_SCALE
+//   λ hostů    -= (homeBoost−1) × HOME_ADV_SCALE × HOME_DEFENSE_SHARE
+//
+// Historie (obojí změřeno, ne odhadnuto):
+//  • Původně existoval jen násobič útoku domácích a žádné škálování → liga dávala domácím
+//    +2,5 p.b. (38,6/25,3/36,1) místo reálných ~+15. Vzorec `λ = (útok + soupeřova obrana)/2`
+//    každý násobič na jednom sčítanci navíc půlí.
+//  • Multiplikativní oprava (útok ×mult, obdržené ÷mult) sice trefila 45/25/30, ale zavedla
+//    strukturální nerovnováhu: doma se útok NÁSOBIL a obrana DĚLILA, takže `∂λ/∂útok` bylo
+//    zesílené a `∂λ/∂obrana` tlumené → bod do útoku +1.16 b/sezónu vs bod do obrany +0.84,
+//    a žádná hodnota `DEV_DEFENSE_STEP` to nespravila (grid 0.08/0.10/0.12).
+//  • Aditivní posun λ má `∂λ/∂rating = 1/2` pro obě strany i oba typy zápasů → parita
+//    (+1.02 vs +0.95). Navíc sedí na to, jak se domácí výhoda reálně měří (~+0,35 gólu),
+//    a dá i realističtější počet gólů (⌀ 3,02 vs 3,10).
 
 /** Rozsah homeBoost generovaný pro fiktivní (mock) ligu. */
 export const HOME_BOOST_MIN = 1.05;
@@ -41,30 +50,29 @@ export const HOME_BOOST_MAX = 1.15;
 
 /**
  * **Tvrdý strop na `homeBoost`** – JEDINÝ zdroj pravdy. Platí pro odvození z reálné tabulky,
- * pro investice do stadionu i pro `matchLambdas`. Reálné kluby se drží pod ~1.25 (domácí góly
- * na zápas / celkové góly na zápas), takže výš pouštět nemá smysl a s `HOME_ADV_SCALE = 3`
- * by to bylo destruktivní: `homeBoost` 1.30 znamená +7,4 bodu za sezónu jen z 19 domácích
- * zápasů. Viz `DEV_STADIUM_STEP`.
+ * pro investice do stadionu i jako pojistka ve `matchLambdas`. Reálné kluby se drží pod ~1.25
+ * (domácí góly/zápas ÷ celkové góly/zápas), takže výš pouštět nemá smysl: `homeBoost` 1.25
+ * je +0.50 gólu k λ v každém domácím zápase. Viz `DEV_STADIUM_STEP`.
  */
 export const HOME_BOOST_CAP = 1.25;
 /** `homeBoost`, když neznáme home split (mezisezóna, chybějící data). */
 export const HOME_BOOST_FALLBACK = 1.1;
 
 /**
- * Zesílení domácí výhody. Laděno gridem přes VŠECHNY uspořádané dvojice generované ligy
- * (= přesně to, co dvoukolový round-robin odehraje) na reálný rozklad 1X2 ~45/25/30.
- * Kompenzuje `/2` v `matchLambdas`: λ je průměr „co jeden dá" a „co druhý dostane",
- * takže násobič na jednom sčítanci se v λ projeví zhruba půlkou.
+ * Převod relativní domácí síly (`homeBoost − 1`) na GÓLY přičtené k λ domácích.
+ * Laděno gridem přes VŠECHNY uspořádané dvojice generované ligy (= přesně to, co dvoukolový
+ * round-robin odehraje) na reálný rozklad 1X2 ~45/25/30. Typický tým (`homeBoost` 1.10)
+ * dostane +0.20 gólu, silně domácí (1.25) +0.50 – řádově sedí na měřenou realitu (~+0.35).
  */
-export const HOME_ADV_SCALE = 3.0;
+export const HOME_ADV_SCALE = 2.0;
 /**
- * Kolik z domácí výhody jde do OBRANY (0 = jen útok jako dřív, 1 = stejně jako do útoku).
- * Doma se nejen víc dává, ale i míň dostává. Bez tohohle kanálu se na 45/25/30 dostat NEJDE:
- * i při `scale = 3.5` a `share = 0` dá liga jen 43,7 % domácích výher a ⌀ gólů vyletí na 3,25
- * (samotný útok hýbe hlavně počtem gólů, ne výsledkem). Se `share = 0.8` sedí 45,2/24,5/30,3
- * při ⌀ 3,08 gólu — proti 3,04 před změnou.
+ * Kolik z domácí výhody se ODEČTE hostům (0 = domácí jen víc dají, 1 = symetricky).
+ * Doma se nejen víc dává, ale soupeř i míň skóruje. Bez tohohle kanálu se na 45/25/30 dostat
+ * NEJDE: i při `scale = 4.0` a `share = 0` dá liga jen 46,3 % domácích výher a ⌀ gólů vyletí
+ * na 3,36 (samotné přidávání gólů hýbe hlavně skóre, ne výsledkem).
+ * `scale = 2.0, share = 0.7` → 44,7/24,9/30,4 při ⌀ 3,02 gólu.
  */
-export const HOME_DEFENSE_SHARE = 0.8;
+export const HOME_DEFENSE_SHARE = 0.7;
 
 /**
  * Rozptyl sil ligy: násobí odchylku ratingu od ligového průměru (`amplifySpread`).
@@ -125,17 +133,15 @@ export const DEV_ATTACK_STEP = 0.08;
 /**
  * Obrana má STEJNÝ krok jako útok: `λ = (útok + soupeřova obrana) / 2`, takže bod do útoku
  * zvedne tvoje λ o `step/2` a bod do obrany srazí soupeřovo λ o `step/2` → λ-parita.
- * Při 0.065 byl útok o ~70 % výnosnější; teď je rozdíl +1.16 vs +0.84 bodu za sezónu.
+ * Při 0.065 byl útok o ~70 % výnosnější.
  *
- * ZBYTKOVÁ NEROVNOVÁHA (vědomá, změřená; NEŘEŠIT zvětšováním kroku – nefunguje to). Útok
- * zůstává výnosnější ze dvou strukturálních důvodů, na které krok nemá vliv:
- *   a) doma se útok NÁSOBÍ `attackMult`, kdežto obrana se DĚLÍ `defenseMult` → zlepšení
- *      obrany je doma tlumené (`matchLambdas`),
- *   b) `DEV_LEAGUE_CEILING` dá průměrnému týmu 14 bodů prostoru v útoku, ale jen 10
- *      v obraně, než narazí na špičku ligy.
- * Empiricky (`sim-game` sekce 4, vše do jedné oblasti, 10 sezón): útok Ø 4.0. místo, obrana
- * Ø 6.3. Grid přes krok 0.08/0.10/0.12 s tím pohnul jen na 5.8 → váže strop, ne krok.
- * Skutečná náprava = jiná sémantika `DEV_LEAGUE_CEILING` nebo λ vzorce. TODO, mimo scope.
+ * Krok sám o sobě parity nedosáhne – musí ji umožnit i model domácí výhody. Dokud byla
+ * multiplikativní (útok ×mult, obdržené ÷mult), bylo `∂λ/∂útok` doma zesílené a `∂λ/∂obrana`
+ * tlumené, takže útok vydělával +1.16 vs +0.84 bodu za sezónu bez ohledu na krok (ověřeno
+ * gridem 0.08/0.10/0.12). Aditivní domácí výhoda (`homeAdvantage`) to srovnala na +1.02
+ * vs +0.95. Zbytek rozdílu je nelinearita Poissona + to, že `DEV_LEAGUE_CEILING` dá
+ * průměrnému týmu víc prostoru v útoku (14 bodů) než v obraně (10) – obrana je zdola
+ * omezená nulou, útok shora ničím. To je fyzikální, ne chyba.
  */
 export const DEV_DEFENSE_STEP = 0.08; // obrana: nižší = lepší, odečítá se
 /**
@@ -144,10 +150,10 @@ export const DEV_DEFENSE_STEP = 0.08; // obrana: nižší = lepší, odečítá 
  * Proto nejmenší krok a společný strop `HOME_BOOST_CAP`.
  *
  * Změřeno proti skutečnému `matchLambdas` (průměrný tým, 19+19 zápasů, mezní hodnota 1 bodu):
- *   útok +1.16 b/sezónu · obrana +0.84 · stadion +0.43 (zato navždy)
- * Cesta 1.10 → 1.25 stojí 15 bodů (≈ 4 sezóny) a dá +5.7 b/sezónu natrvalo; pak je stadion
+ *   útok +1.02 b/sezónu · obrana +0.95 · stadion +0.43 (zato navždy)
+ * Cesta 1.10 → 1.25 stojí 15 bodů (≈ 4 sezóny) a dá +6.2 b/sezónu natrvalo; pak je stadion
  * hotový a další body by propadly (UI je proto nepustí přidat).
- * Původních 0.02/bod dávalo +0.85 b, tedy víc než obrana — a to při nulové regresi.
+ * Původních 0.02/bod dávalo +0.85 b, tedy skoro jako obrana — a to při nulové regresi.
  * Nezvyšovat bez nového měření (`npm run sim-game`, sekce 4).
  */
 export const DEV_STADIUM_STEP = 0.01; // homeBoost za bod

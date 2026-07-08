@@ -180,11 +180,13 @@ function colorFromId(id: number): string {
  * shrink k ligovému průměru). Domácí výhoda z home splitu. Lichý počet → dropne
  * poslední (roundRobin potřebuje sudý počet).
  *
- * **`homeBoost` se kalibruje až PO `amplifySpread`.** Model v `matchLambdas` počítá
- * `attack × homeBoost`, takže jmenovatel musí být ten `attack`, se kterým se pak reálně
- * počítá. Dřív se `homeBoost` dělil pre-spread útokem, jenže `amplifySpread` odchylky od
- * průměru roztáhne (×`SPREAD`) → silné týmy doma přestřelovaly (+9 %) a slabé podstřelovaly
- * (−18 %) svoje skutečné domácí góly na zápas.
+ * **`homeBoost` = poměr SKUTEČNÝCH gólů: domácí góly/zápas ÷ celkové góly/zápas.** Je to
+ * čistě reálná veličina, na herních ratinzích **nezávislá** – proto se počítá z hrubých
+ * hodnot a `amplifySpread` na něj nesmí sáhnout. Kdyby se dělil post-spread útokem, dostaly
+ * by slabé týmy (kterým spread útok stlačí) nejvyšší poměr, a `matchLambdas` jim aditivně
+ * přidá největší domácí bonus: liga, kde všichni doma dávají +18 %, by dala nejlepšímu týmu
+ * +0.26 gólu a nejhoršímu +0.50. `homeBoost` se pak ve `matchLambdas` převede na góly
+ * (`homeAdvantage`), takže jeho jmenovatel musí být reálný, ne modelový.
  */
 export function standingsToTeams(
   rows: RawStandingRow[],
@@ -194,8 +196,6 @@ export function standingsToTeams(
   const meanAgainst = leagueAvg?.goalsAgainst ?? 1.35;
   const seen = new Set<number>();
   const teams: GameTeam[] = [];
-  /** Skutečné domácí góly na zápas (null = neznáme home split → fallback). */
-  const homeGoalsPerGame: (number | null)[] = [];
   for (const row of rows) {
     if (seen.has(row.teamId)) continue;
     seen.add(row.teamId);
@@ -206,8 +206,13 @@ export function standingsToTeams(
       played > 0
         ? shrink(row.goalsAgainst / played, meanAgainst, played)
         : meanAgainst;
+    // Poměr reálných gólů doma vs celkově – nezávislý na spreadu i na shrinku.
     const homePlayed = row.homePlayed ?? 0;
-    homeGoalsPerGame.push(homePlayed > 0 ? (row.homeGoalsFor ?? 0) / homePlayed : null);
+    const overallGpg = played > 0 ? row.goalsFor / played : 0;
+    const homeBoost =
+      homePlayed > 0 && overallGpg > 0
+        ? clamp((row.homeGoalsFor ?? 0) / homePlayed / overallGpg, 1, HOME_BOOST_CAP)
+        : HOME_BOOST_FALLBACK;
     teams.push({
       id: row.teamId,
       name: row.name,
@@ -216,21 +221,11 @@ export function standingsToTeams(
       logo: row.logo,
       attack: round2(clamp(attack, 0.3, 3.2)),
       defense: round2(clamp(defense, 0.3, 3.2)),
-      homeBoost: HOME_BOOST_FALLBACK, // dopočítá se níž z finálního útoku
+      homeBoost: round2(homeBoost),
     });
   }
-  if (teams.length % 2 === 1) {
-    teams.pop();
-    homeGoalsPerGame.pop();
-  }
-  return amplifySpread(teams).map((t, i) => {
-    const homeGpg = homeGoalsPerGame[i];
-    const boost =
-      homeGpg !== null && t.attack > 0
-        ? clamp(homeGpg / t.attack, 1.0, HOME_BOOST_CAP)
-        : HOME_BOOST_FALLBACK;
-    return { ...t, homeBoost: round2(boost) };
-  });
+  if (teams.length % 2 === 1) teams.pop();
+  return amplifySpread(teams); // `amplifySpread` mění jen attack/defense, homeBoost nechává
 }
 
 function clamp(v: number, lo: number, hi: number): number {

@@ -1191,26 +1191,54 @@ describe("domácí výhoda", () => {
     homeBoost,
   });
 
-  it("homeBoost zvedá útok domácích A snižuje, kolik dostanou", () => {
+  it("domácí dají víc a zároveň dostanou míň", () => {
     const home = T(1.65, 1.3, 1.15, 1);
     const away = T(1.65, 1.3, 1.15, 2);
     const [lh, la] = matchLambdas(home, away);
     const [lhFlat, laFlat] = matchLambdas({ ...home, homeBoost: 1 }, away);
-    expect(lh).toBeGreaterThan(lhFlat); // domácí dají víc
-    expect(la).toBeLessThan(laFlat); // a zároveň dostanou míň
+    expect(lh).toBeGreaterThan(lhFlat);
+    expect(la).toBeLessThan(laFlat);
   });
 
-  it("hosté nemají žádný postih – celá výhoda je na straně domácích", () => {
-    const a = T(1.65, 1.3, 1.05, 1);
-    const b = T(1.65, 1.3, 1.25, 2);
-    // Hostův útok do λ vstupuje bez ohledu na to, jak silné je domácí prostředí.
-    const weakHome = matchLambdas(a, b);
-    const strongHome = matchLambdas({ ...a, homeBoost: 1.25 }, b);
-    const awayAttackTerm = (l: number, homeDefense: number, defenseMult: number) =>
-      2 * l - homeDefense / defenseMult;
-    expect(awayAttackTerm(weakHome[1], a.defense, homeAdvantage(1.05).defenseMult)).toBeCloseTo(
-      awayAttackTerm(strongHome[1], a.defense, homeAdvantage(1.25).defenseMult)
-    );
+  it("domácí výhoda je ADITIVNÍ posun λ v gólech, nezávislý na ratinzích", () => {
+    const { homeBonus, awayPenalty } = homeAdvantage(1.15);
+    // Slabý i silný tým dostanou doma stejný gólový bonus.
+    const weak = matchLambdas(T(0.9, 1.8, 1.15, 1), T(1.65, 1.3, 1.1, 2));
+    const weakFlat = matchLambdas(T(0.9, 1.8, 1, 1), T(1.65, 1.3, 1.1, 2));
+    const strong = matchLambdas(T(2.4, 0.8, 1.15, 1), T(1.65, 1.3, 1.1, 2));
+    const strongFlat = matchLambdas(T(2.4, 0.8, 1, 1), T(1.65, 1.3, 1.1, 2));
+    expect(weak[0] - weakFlat[0]).toBeCloseTo(homeBonus);
+    expect(strong[0] - strongFlat[0]).toBeCloseTo(homeBonus);
+    expect(weakFlat[1] - weak[1]).toBeCloseTo(awayPenalty);
+    expect(strongFlat[1] - strong[1]).toBeCloseTo(awayPenalty);
+  });
+
+  /**
+   * Jádro celé aditivní přestavby: bod do útoku a bod do obrany musí hýbat λ stejně,
+   * a to DOMA i VENKU. V multiplikativní verzi se doma útok násobil a obrana dělila,
+   * takže investice do útoku byla strukturálně výnosnější (+1.16 vs +0.84 b/sezónu)
+   * a nešlo to spravit žádnou hodnotou `DEV_DEFENSE_STEP`.
+   */
+  it("λ-parita: bod do útoku a do obrany hýbe λ stejně, doma i venku", () => {
+    const d = 0.08;
+    const me = T(1.65, 1.3, 1.15, 1);
+    const opp = T(1.65, 1.3, 1.12, 2);
+
+    // Doma: můj útok zvedá moje λ; moje obrana snižuje λ soupeře.
+    const homeBase = matchLambdas(me, opp);
+    const homeAtk = matchLambdas({ ...me, attack: me.attack + d }, opp);
+    const homeDef = matchLambdas({ ...me, defense: me.defense - d }, opp);
+    expect(homeAtk[0] - homeBase[0]).toBeCloseTo(homeBase[1] - homeDef[1]);
+
+    // Venku: totéž z druhé strany.
+    const awayBase = matchLambdas(opp, me);
+    const awayAtk = matchLambdas(opp, { ...me, attack: me.attack + d });
+    const awayDef = matchLambdas(opp, { ...me, defense: me.defense - d });
+    expect(awayAtk[1] - awayBase[1]).toBeCloseTo(awayBase[0] - awayDef[0]);
+
+    // A doma i venku je ten posun stejně velký (žádné zesílení/tlumení dle prostředí).
+    expect(homeAtk[0] - homeBase[0]).toBeCloseTo(awayAtk[1] - awayBase[1]);
+    expect(homeBase[1] - homeDef[1]).toBeCloseTo(awayBase[0] - awayDef[0]);
   });
 
   it("identické týmy: domácí mají výhodu, ale ne drtivou", () => {
@@ -1223,15 +1251,41 @@ describe("domácí výhoda", () => {
   it("homeAdvantage je stropovaná HOME_BOOST_CAP i pro absurdní vstup", () => {
     const capped = homeAdvantage(HOME_BOOST_CAP);
     expect(homeAdvantage(5)).toEqual(capped);
-    expect(homeAdvantage(0.5)).toEqual({ attackMult: 1, defenseMult: 1 }); // pod 1 = neutrál
-    // Obrana dostává menší podíl výhody než útok.
-    expect(capped.defenseMult).toBeLessThan(capped.attackMult);
+    expect(homeAdvantage(0.5)).toEqual({ homeBonus: 0, awayPenalty: 0 }); // pod 1 = neutrál
+    // Hostům se odečte míň, než se domácím přičte.
+    expect(capped.awayPenalty).toBeLessThan(capped.homeBonus);
+    expect(capped.awayPenalty).toBeGreaterThan(0);
   });
 
-  // Regrese: `homeBoost` se dřív dělil PRE-spread útokem, jenže model počítá
-  // `attack × homeBoost` s post-spread útokem → silné týmy doma přestřelovaly (+9 %)
-  // a slabé podstřelovaly (−18 %) svoje skutečné domácí góly na zápas.
-  it("standingsToTeams kalibruje homeBoost proti FINÁLNÍMU útoku", () => {
+  // Regrese: `homeBoost` je poměr REÁLNÝCH gólů, ne modelových ratingů. Kdyby se dělil
+  // post-spread útokem, dostaly by slabé týmy (kterým spread útok stlačí) nejvyšší poměr
+  // a aditivní model by jim dal největší domácí bonus.
+  it("homeBoost = poměr reálných gólů, nezávislý na amplifySpread", () => {
+    // Bez zaokrouhlování na celé góly: všichni mají doma přesně +18 %.
+    const rows = Array.from({ length: 20 }, (_, i) => {
+      const gpg = 2.3 - i * 0.07;
+      return {
+        teamId: i + 1,
+        name: `T${i + 1}`,
+        played: 38,
+        goalsFor: gpg * 38,
+        goalsAgainst: (0.8 + i * 0.05) * 38,
+        homePlayed: 19,
+        homeGoalsFor: gpg * 1.18 * 19,
+      };
+    });
+    const teams = standingsToTeams(rows, { goalsFor: 1.35, goalsAgainst: 1.35 });
+    // Stejná domácí převaha → stejný homeBoost i stejný gólový bonus, bez ohledu na to,
+    // jak moc `amplifySpread` daný tým v útoku roztáhl nebo stlačil.
+    for (const t of teams) expect(t.homeBoost, t.name).toBeCloseTo(1.18, 2);
+    const bonuses = teams.map((t) => homeAdvantage(t.homeBoost).homeBonus);
+    expect(Math.max(...bonuses) - Math.min(...bonuses)).toBeLessThan(0.01);
+  });
+
+  // Reálná data jsou celočíselná → poměr má šum. Podstatné je, že šum NEKORELUJE se silou:
+  // s původním jmenovatelem (post-spread útok) rostl bonus monotónně se slabostí týmu
+  // (0.26 gólu pro nejlepší, 0.50 pro nejhorší), přestože všichni měli doma stejných +18 %.
+  it("gólový bonus nekoreluje se silou týmu ani na celočíselných datech", () => {
     const rows = Array.from({ length: 20 }, (_, i) => {
       const gpg = 2.3 - i * 0.07;
       return {
@@ -1241,20 +1295,19 @@ describe("domácí výhoda", () => {
         goalsFor: Math.round(gpg * 38),
         goalsAgainst: Math.round((0.8 + i * 0.05) * 38),
         homePlayed: 19,
-        homeGoalsFor: Math.round(gpg * 1.18 * 19), // doma o 18 % víc
+        homeGoalsFor: Math.round(gpg * 1.18 * 19),
       };
     });
     const teams = standingsToTeams(rows, { goalsFor: 1.35, goalsAgainst: 1.35 });
-    for (const [idx, t] of teams.entries()) {
-      const realHomeGpg = rows[idx].homeGoalsFor / rows[idx].homePlayed;
-      const modeled = t.attack * t.homeBoost;
-      const atCap = t.homeBoost >= HOME_BOOST_CAP - 1e-9 || t.homeBoost <= 1 + 1e-9;
-      if (atCap) continue; // u stropu vítězí `HOME_BOOST_CAP` nad kalibrací (vědomě)
-      expect(Math.abs(modeled / realHomeGpg - 1), `${t.name}`).toBeLessThan(0.01);
-    }
-    // Slabé týmy narazí na strop: `amplifySpread` jim útok stlačí tak, že by na svoje
-    // domácí góly potřebovaly homeBoost > CAP. Strop je důležitější než přesnost.
-    expect(teams[teams.length - 1].homeBoost).toBeCloseTo(HOME_BOOST_CAP);
+    const bonus = (t: (typeof teams)[number]) => homeAdvantage(t.homeBoost).homeBonus;
+    const strongest = teams[0];
+    const weakest = teams[teams.length - 1];
+    expect(Math.abs(bonus(weakest) - bonus(strongest))).toBeLessThan(0.05);
+    // Ani průměr horní a dolní poloviny se nesmí systematicky lišit.
+    const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const top = avg(teams.slice(0, 10).map(bonus));
+    const bottom = avg(teams.slice(10).map(bonus));
+    expect(Math.abs(top - bottom)).toBeLessThan(0.03);
   });
 
   it("investice do stadionu nepřekročí HOME_BOOST_CAP ani po mnoha sezónách", () => {
