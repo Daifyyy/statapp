@@ -62,6 +62,7 @@ import { INSTRUCTIONS, recommendInstruction, resolveInstruction } from "./instru
 import {
   COUNTER_MATRIX,
   COUNTER_MAX_EFFECT,
+  DEV_YOUTH_MAX,
   DRIFT_REGRESSION,
   HOME_BOOST_CAP,
   MAX_DEV_POINTS,
@@ -89,6 +90,23 @@ describe("generateLeague", () => {
     }
     // Různý seed → jiná liga
     expect(generateLeague(999)).not.toEqual(a);
+  });
+
+  // Regrese: jitter se dřív losoval JEDNOU a přičítal do útoku i obrany. V síle
+  // (`attack − defense`) se tím odečetl sám se sebou → žebřík sil byl dokonale lineární,
+  // rozestupy sousedů konstantní a žádný tým nemohl být překvapením. Šum musí hýbat i silou.
+  it("šum hýbe silou týmu, nejen stylem", () => {
+    const gaps: number[] = [];
+    for (const seed of [1, 7, 42, 123, 999]) {
+      const s = generateLeague(seed)
+        .map((t) => teamStrengthScore(t))
+        .sort((a, b) => b - a);
+      for (let i = 1; i < s.length; i++) gaps.push(s[i - 1] - s[i]);
+    }
+    const m = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    const sd = Math.sqrt(gaps.reduce((a, g) => a + (g - m) ** 2, 0) / gaps.length);
+    // Sdílený jitter dal rozestupy konstantní (sd ≈ 0.02 = jen zaokrouhlení na 2 des. místa).
+    expect(sd).toBeGreaterThan(0.05);
   });
 });
 
@@ -1211,6 +1229,46 @@ describe("development", () => {
     const after = sd(s.teams.map((t) => t.attack));
     expect(after / before).toBeGreaterThan(0.8);
     expect(after / before).toBeLessThan(1.2);
+  });
+
+  // Regrese: `renormalize` je afinní na celou ligu, takže regresi uvnitř driftu PŘESNĚ
+  // vyrušila. Rozdílné `reg` tvého klubu se tím obracelo ve svůj opak – mládež odchylku
+  // od průměru skládaně nafukovala (silný klub rostl zadarmo, slabý se propadal).
+  // Regrese tvého klubu proto běží až ZA renormalizací.
+  it("drift regreduje tvůj klub k průměru, mládež to tlumí", () => {
+    // Odchylka útoku tvého klubu od ligového průměru (znaménko zachováno).
+    const devOf = (s: SeasonState) => {
+      const m = s.teams.reduce((a, t) => a + t.attack, 0) / s.teams.length;
+      return s.teams.find((t) => t.id === s.yourTeamId)!.attack - m;
+    };
+    // `youth` se drží konstantní: měříme čistý drift, ne investice.
+    const after = (teamId: number, youth: number, seasons: number) => {
+      let s: SeasonState = { ...newSeason(42, teamId, {}), youth };
+      for (let i = 0; i < seasons; i++) {
+        s = { ...startNextSeason(simulateToEnd(s), EMPTY_SPEND), youth };
+      }
+      return devOf(s);
+    };
+
+    const teams = generateLeague(42);
+    const meanAtk = teams.reduce((a, t) => a + t.attack, 0) / teams.length;
+    const sorted = [...teams].sort((a, b) => b.attack - a.attack);
+    const strong = sorted[0].id; // výrazně nad průměrem
+    const weak = sorted[sorted.length - 1].id; // výrazně pod průměrem
+
+    for (const id of [strong, weak]) {
+      const start = Math.abs(
+        teams.find((t) => t.id === id)!.attack - meanAtk
+      );
+      const plain = Math.abs(after(id, 0, 5));
+      const withYouth = Math.abs(after(id, DEV_YOUTH_MAX, 5));
+
+      // 1) Bez mládeže se odchylka od průměru za 5 sezón zmenší (regrese funguje).
+      expect(plain).toBeLessThan(start);
+      // 2) Mládež regresi TLUMÍ – neobrací ji v růst odchylky.
+      expect(withYouth).toBeGreaterThan(plain);
+      expect(withYouth).toBeLessThanOrEqual(start);
+    }
   });
 
   // Regrese: `startNextSeason` dřív `leagueAccess` do další sezóny vůbec nepředal

@@ -580,6 +580,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     12 sezón): útok Ø 3.9. místo / 85 titulů, obrana Ø 5.2. / 32, stadion Ø 6.4. / 16.
     Zbylý náskok útoku je **fyzikální**: `DEV_LEAGUE_CEILING` dá průměrnému týmu 14 bodů prostoru
     v útoku, ale jen 10 v obraně — obranu zdola omezuje nula, útok shora nic.
+- **Regrese tvého klubu běží AŽ ZA renormalizací** (`regressToMean` v `career.ts`). `renormalize`
+  je afinní na celou ligu, takže regresi uvnitř driftu **přesně vyruší** (zmenší odchylky o
+  `1−reg`, přeškálování je vrátí o `1/(1−reg)`). Dokud měl tvůj klub uvnitř driftu vlastní nižší
+  `reg` (mládež), nepřežil z toho útlum, ale **rozdíl**: odchylka se násobila
+  `(1−reg_ty)/(1−DRIFT_REGRESSION) > 1` → mládež odchylku od průměru skládaně **nafukovala**
+  (silný klub rostl zadarmo, slabý se propadal hlouběji) a regrese k průměru neexistovala vůbec.
+  Změřeno: 6 sezón bez investic, odchylka útoku +0.84 → +1.21 (mládež 5) vs +0.87 (bez mládeže).
+  Dnes drift regreduje všechny stejně (= no-op po renormalizaci, jen šum a `DRIFT_PERFORMANCE`
+  přemíchají pořadí) a tvůj klub dostane regresi až po ní, tlumenou `youthRegression`. Kryto
+  testem „drift regreduje tvůj klub k průměru, mládež to tlumí".
 - **`driftTeams` (`career.ts`) — tři opravené chyby.** Mezisezónní drift teď regreduje ke
   **skutečnému průměru ligy** (dřív ke konstantě 1.65 = středu generovaného rozsahu, což reálným
   ligám s průměrem ~1.35 každou sezónu nafukovalo útok), **nevolá `amplifySpread`** (ten patří jen

@@ -25,8 +25,9 @@ export const LEAGUE_SIZE = 20;
 
 /**
  * Roztáhne rozptyl sil ligy kolem jejího průměru (`rating' = mean + (rating−mean)·SPREAD`).
- * Mistr silnější, dno slabší → realistická dominance favorita. Čistá funkce; volá se na
- * konci každého trychtýře ratingů (generateLeague/standingsToTeams i po driftTeams).
+ * Mistr silnější, dno slabší → realistická dominance favorita. Čistá funkce; volá se jen
+ * na konci trychtýře ratingů čerstvě postavené ligy (generateLeague/standingsToTeams).
+ * **Ne v mezisezónním driftu** – tam se rozptyl zachovává renormalizací (viz `driftTeams`).
  */
 export function amplifySpread(teams: GameTeam[]): GameTeam[] {
   if (teams.length === 0) return teams;
@@ -91,14 +92,17 @@ export function generateLeague(seed: number): GameTeam[] {
   const base = TEAM_META.map((meta, idx) => {
     const slot = order[idx]; // 0 (top) .. 19 (bottom)
     const t = slot / (LEAGUE_SIZE - 1); // 0=top, 1=dno
-    const jitter = (rand() - 0.5) * 0.2; // ±0.1 šum, ať nejsou týmy stejné tier klony
+    // ±0.1 šum ZVLÁŠŤ pro každou osu. Sdílený jitter (jedno losování do obou) se v síle
+    // `attack − defense` odečte sám se sebou → žebřík sil by byl dokonale lineární
+    // a šum by měnil jen styl (útočný/defenzivní), nikdy pořadí. Nezávislá losování
+    // dají σ(síla) ≈ 0.08 proti rozestupu slotů 0.13 → sousedi se můžou prohodit.
     const attack = clamp(
-      ATTACK_MAX - t * (ATTACK_MAX - ATTACK_MIN) + jitter,
+      ATTACK_MAX - t * (ATTACK_MAX - ATTACK_MIN) + jitter(rand),
       ATTACK_MIN,
       ATTACK_MAX
     );
     const defense = clamp(
-      DEFENSE_BEST + t * (DEFENSE_WORST - DEFENSE_BEST) + jitter,
+      DEFENSE_BEST + t * (DEFENSE_WORST - DEFENSE_BEST) + jitter(rand),
       DEFENSE_BEST,
       DEFENSE_WORST
     );
@@ -230,6 +234,11 @@ export function standingsToTeams(
   }
   if (teams.length % 2 === 1) teams.pop();
   return amplifySpread(teams); // `amplifySpread` mění jen attack/defense, homeBoost nechává
+}
+
+/** ±0.1 šum ratingu. Volá se pro útok a obranu zvlášť – viz `generateLeague`. */
+function jitter(rand: () => number): number {
+  return (rand() - 0.5) * 0.2;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

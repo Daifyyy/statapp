@@ -82,12 +82,26 @@ export interface DriftContext {
 
 /**
  * Drift ratingů mezi sezónami:
- *  1. regrese ke **skutečnému průměru ligy** + šum (u tvého klubu tlumená mládeží),
- *  2. výkonová zpětná vazba: kdo přeplnil očekávání, mírně posílí; kdo podlezl, oslabí,
- *  3. **renormalizace na původní průměr a rozptyl** ligy,
+ *  1. regrese k **průměru ligy** + šum + výkonová zpětná vazba (kdo přeplnil očekávání,
+ *     mírně posílí; kdo podlezl, oslabí) – pro VŠECHNY týmy stejně,
+ *  2. **renormalizace na původní průměr a rozptyl** ligy (drift jen promíchá pořadí sil),
+ *  3. **regrese TVÉHO klubu k průměru** (tlumená mládeží) – až tady, viz níže,
  *  4. teprve pak tvoje investice (`applyDevelopment`) – ta má rozptyl posunout.
  *
- * Krok 3 nahradil dřívější `amplifySpread`. Ten roztahoval odchylky 1.35× KAŽDOU sezónu,
+ * **Proč je regrese tvého klubu až za renormalizací.** Krok 1 je afinní: zmenší odchylku
+ * každého týmu o `(1 − reg)`, tedy i rozptyl ligy. Krok 2 ho pak přeškáluje o `1/(1 − reg)`
+ * zpátky – a tím regresi z kroku 1 PŘESNĚ vyruší. Dokud měl tvůj klub v kroku 1 vlastní
+ * (nižší) `reg`, nepřežil z toho útlum, ale rozdíl: tvoje odchylka se každou sezónu
+ * násobila `(1 − reg_ty)/(1 − DRIFT_REGRESSION) > 1`, tj. mládež místo tlumení propadu
+ * skládaně NAFUKOVALA odchylku od průměru. Silný klub tím zadarmo rostl, slabý (start
+ * kariéry, čerstvý postup) se propadal ještě hlouběje – přesný opak toho, co UI slibuje.
+ * Změřeno: 6 sezón bez investic, odchylka útoku +0.84 → +1.21 (mládež 5) vs +0.87 (bez).
+ *
+ * Renormalizace je afinní na celou ligu, takže JAKÁKOLIV regrese uvnitř kroku 1 se vyruší.
+ * Jediné místo, kde regrese může přežít, je až za ní – proto tam je. Kryto testem
+ * „drift regreduje tvůj klub k průměru, mládež to tlumí".
+ *
+ * Krok 2 nahradil dřívější `amplifySpread`. Ten roztahoval odchylky 1.35× KAŽDOU sezónu,
  * zatímco regrese je vracela jen 0.9× → net 1.215×/sezónu a liga se za ~10 sezón
  * polarizovala do clampů (std útoku 0.56 → 0.91). `amplifySpread` patří jen na čerstvě
  * postavenou ligu (`generateLeague`/`standingsToTeams`), ne do mezisezónního driftu.
@@ -112,8 +126,6 @@ function driftTeams(teams: GameTeam[], seed: number, ctx: DriftContext): GameTea
   const stdDef = std(teams.map((t) => t.defense), meanDef);
 
   const drifted = teams.map((t) => {
-    // Tvůj klub regreduje pomaleji podle investic do mládeže.
-    const reg = t.id === ctx.yourTeamId ? youthRegression(ctx.youth) : DRIFT_REGRESSION;
     // Přeplněné očekávání → posílí (kladné `perf`), podlezené → oslabí.
     const rank = rankOf.get(t.id) ?? Math.round(size / 2);
     const exp = expectedOf.get(t.id) ?? Math.round(size / 2);
@@ -121,18 +133,58 @@ function driftTeams(teams: GameTeam[], seed: number, ctx: DriftContext): GameTea
     const nudge = perf * DRIFT_PERFORMANCE;
     return {
       ...t,
-      attack: t.attack + (meanAtk - t.attack) * reg + (rand() - 0.5) * DRIFT_NOISE + nudge,
+      attack:
+        t.attack +
+        (meanAtk - t.attack) * DRIFT_REGRESSION +
+        (rand() - 0.5) * DRIFT_NOISE +
+        nudge,
       // Obrana: nižší = lepší, takže dobrý výkon ji SNIŽUJE.
-      defense: t.defense + (meanDef - t.defense) * reg + (rand() - 0.5) * DRIFT_NOISE - nudge,
+      defense:
+        t.defense +
+        (meanDef - t.defense) * DRIFT_REGRESSION +
+        (rand() - 0.5) * DRIFT_NOISE -
+        nudge,
     };
   });
 
-  // Renormalizace: vrať lize původní průměr i rozptyl (drift jen promíchá pořadí sil).
   const renorm = renormalize(drifted, meanAtk, stdAtk, meanDef, stdDef);
   const you = renorm.find((t) => t.id === ctx.yourTeamId);
   if (!you) return renorm;
-  const developed = applyDevelopment(you, ctx.spend, renorm);
-  return renorm.map((t) => (t.id === ctx.yourTeamId ? developed : t));
+  const regressed = regressToMean(you, meanAtk, meanDef, youthRegression(ctx.youth));
+  const league = renorm.map((t) => (t.id === ctx.yourTeamId ? regressed : t));
+  const developed = applyDevelopment(regressed, ctx.spend, league);
+  return league.map((t) => (t.id === ctx.yourTeamId ? developed : t));
+}
+
+/**
+ * Přitáhne tvůj klub k ligovému průměru o `reg` jeho odchylky (obojí osy). `reg` je
+ * `youthRegression(youth)`: bez mládeže plných `DRIFT_REGRESSION`, s plnou mládeží
+ * čtvrtina – dřina se pak smyje pomaleji. Vždy míří K průměru, takže slabý klub se
+ * naopak přiblíží nahoru (mládež mu tenhle dohánějící efekt zpomalí).
+ */
+function regressToMean(
+  team: GameTeam,
+  meanAtk: number,
+  meanDef: number,
+  reg: number
+): GameTeam {
+  return {
+    ...team,
+    attack: round2(
+      clamp(
+        team.attack + (meanAtk - team.attack) * reg,
+        SPREAD_ATTACK_MIN,
+        SPREAD_ATTACK_MAX
+      )
+    ),
+    defense: round2(
+      clamp(
+        team.defense + (meanDef - team.defense) * reg,
+        SPREAD_DEFENSE_MIN,
+        SPREAD_DEFENSE_MAX
+      )
+    ),
+  };
 }
 
 function renormalize(
