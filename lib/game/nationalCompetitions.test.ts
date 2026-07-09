@@ -113,6 +113,19 @@ describe("los závěrečného pole", () => {
     expect(teams.some((t) => t.id === comp.hostId)).toBe(true);
   });
 
+  it("kvalifikovaný hráč z konfederace s málo místy (OFC=1) zůstane v poli", () => {
+    // Regrese: OFC má na MS jen 1 místo, ale ze skupiny garantujeme 3 postupující →
+    // ořezání na 1 místo dřív vyhodilo i hráče, přestože postoupil (crash v newTournament).
+    const ofc = NATIONAL_TEAMS.filter((t) => t.confed === "OFC");
+    for (let seed = 0; seed < 12; seed++) {
+      let qs = startQualification("WC", ofc[0].id, seed);
+      while (!isQualOver(qs)) qs = playRunRoundQual(qs);
+      const { teams, yourQualified } = buildTournamentField(qs, qs.seed);
+      if (yourQualified) expect(teams.some((t) => t.id === ofc[0].id)).toBe(true);
+      expect(teams.length).toBe(fieldSize(COMPETITIONS.WC));
+    }
+  });
+
   it("pořadatel dostane v poli domácí výhodu (homeBoost > 1)", () => {
     let qs = startQualification("WC", 6, 8);
     while (!isQualOver(qs)) qs = playRunRoundQual(qs);

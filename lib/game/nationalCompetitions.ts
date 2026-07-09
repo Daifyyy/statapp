@@ -21,15 +21,16 @@ import {
   STARTING_FITNESS,
   STARTING_MORALE,
 } from "./balance";
-import { simulateMatch } from "./simulate";
-import { NEUTRAL_ADJUST } from "./simulate";
+import { simulateMatch, predictProbs, NEUTRAL_ADJUST } from "./simulate";
 import type { SideAdjust } from "./simulate";
 import { roundRobin } from "./schedule";
 import { buildTable } from "./standings";
 import { teamById } from "./teams";
 import { teamStrengthScore } from "./leagues";
-import { resolveYourAdjust } from "./engine";
-import { maybeEvent } from "./events";
+import { resolveYourAdjust, resolveAdjust } from "./engine";
+import { scoutOpponent } from "./scouting";
+import type { ScoutReport } from "./scouting";
+import { maybeEvent, applyEventChoice } from "./events";
 import { updateMorale } from "./morale";
 import { updateFitness } from "./fitness";
 import { HIRE_MARGIN } from "./reputation";
@@ -41,6 +42,7 @@ import {
   newTournament,
   playTournamentRound,
   simulateTournamentToEnd,
+  yourFixture,
 } from "./tournament";
 import type { Stage, TournamentFormat, TournamentState } from "./tournament";
 import {
@@ -53,6 +55,7 @@ import type {
   Fixture,
   GameTeam,
   Instruction,
+  MatchProbs,
   MatchResult,
   Modifier,
   Plan,
@@ -396,9 +399,15 @@ export function buildTournamentField(
   let confedIndex = 0;
   for (const [confed, slots] of Object.entries(comp.slotsByConfed) as [ConfedCode, number][]) {
     const pool = nationalsByConfed(confed);
+    // Pořadí garancí = priorita při oříznutí na `slots`: TY první (aby tě malá kvóta
+    // konfederace — třeba OFC s 1 místem — nevyhodila z pole navzdory postupu), pak
+    // pořadatel, pak zbytek postupujících z tvé skupiny. `weightedDraw` deduplikuje.
     const guaranteed: number[] = [];
+    if (confed === yourConfed && yourQualified) guaranteed.push(qs.yourTeamId);
     if (byId(comp.hostId).confed === confed) guaranteed.push(comp.hostId);
-    if (confed === yourConfed) guaranteed.push(...groupQualifiers);
+    if (confed === yourConfed) {
+      guaranteed.push(...groupQualifiers.filter((id) => id !== qs.yourTeamId));
+    }
     const drawn = weightedDraw(pool, slots, deriveSeed(seed, 40000 + confedIndex), guaranteed);
     ids.push(...drawn.slice(0, slots));
     confedIndex++;
@@ -529,6 +538,64 @@ export function setRunInstruction(run: TournamentRun, instruction: Instruction):
     return { ...run, tournament: { ...run.tournament, instruction } };
   }
   return run;
+}
+
+/** Vyřeší nevyřízený event aktivní fáze (kvalifikace / turnaj). */
+export function applyRunEventChoice(run: TournamentRun, choiceIndex: number): TournamentRun {
+  if (run.phase === "qualification") {
+    return { ...run, qualification: applyEventChoice(run.qualification, choiceIndex) };
+  }
+  if (run.phase === "final" && run.tournament) {
+    return { ...run, tournament: applyEventChoice(run.tournament, choiceIndex) };
+  }
+  return run;
+}
+
+/** Náhled nejbližšího zápasu běhu (predikce + scouting) – sdílené s ligovým `yourNextMatch`. */
+export interface RunPreview {
+  homeId: number;
+  awayId: number;
+  isHome: boolean;
+  you: GameTeam;
+  opponent: GameTeam;
+  probs: MatchProbs;
+  scout: ScoutReport;
+  /** true = závěrečný turnaj na neutrální půdě (pořadatel má výhodu). */
+  neutral: boolean;
+}
+
+export function runPreview(run: TournamentRun): RunPreview | null {
+  const active = activeAgency(run);
+  if (!active) return null;
+  const f =
+    run.phase === "qualification"
+      ? yourQualFixture(run.qualification)
+      : yourFixture(run.tournament!);
+  if (!f) return null;
+
+  const isHome = f.homeId === run.yourTeamId;
+  const oppId = isHome ? f.awayId : f.homeId;
+  const home = teamById(active.teams, f.homeId);
+  const away = teamById(active.teams, f.awayId);
+  // Náhled ignoruje zvolený plán/instrukci (anti-exploit, stejně jako `yourNextMatch`);
+  // morálka/kondice/eventové modifikátory se projeví (nejdou v tu chvíli změnit).
+  const yourAdj = resolveAdjust(active, oppId, "balanced", "none");
+  const probs = predictProbs(
+    home,
+    away,
+    isHome ? yourAdj : NEUTRAL_ADJUST,
+    isHome ? NEUTRAL_ADJUST : yourAdj
+  );
+  return {
+    homeId: f.homeId,
+    awayId: f.awayId,
+    isHome,
+    you: teamById(active.teams, run.yourTeamId),
+    opponent: teamById(active.teams, oppId),
+    probs,
+    scout: scoutOpponent(active, oppId),
+    neutral: run.phase === "final",
+  };
 }
 
 // ───────────────────────── vyhodnocení běhu ─────────────────────────
