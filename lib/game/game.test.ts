@@ -46,7 +46,7 @@ import {
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
 import { resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
-import { maybeEvent, applyEventChoice, EVENTS, getEvent } from "./events";
+import { maybeEvent, applyEventChoice, describeEffect, EVENTS, getEvent } from "./events";
 import { RNG_SALT_LEAGUE, RNG_SALT_TOURNAMENT } from "./agency";
 import type { AgencyState } from "./agency";
 import { mulberry32, randomSeed, deriveSeed } from "./rng";
@@ -929,6 +929,21 @@ describe("events", () => {
         }
       }
     }
+  });
+
+  it("describeEffect: každá volba má aspoň jeden čitelný chip a tóny sedí", () => {
+    // Aspoň jeden efekt na volbu → hráč nevybírá naslepo.
+    for (const ev of EVENTS) {
+      for (const c of ev.choices) {
+        expect(describeEffect(c.effect).length).toBeGreaterThan(0);
+      }
+    }
+    // concede < 1 = pevnější obrana = good; > 1 = děravější = bad; attack > 1 = good.
+    expect(describeEffect({ modifier: { concede: 0.9, rounds: 2, label: "x" } })[0].tone).toBe("good");
+    expect(describeEffect({ modifier: { concede: 1.1, rounds: 2, label: "x" } })[0].tone).toBe("bad");
+    expect(describeEffect({ modifier: { attack: 1.1, rounds: 2, label: "x" } })[0].tone).toBe("good");
+    expect(describeEffect({ moraleDelta: -4 })[0].tone).toBe("bad");
+    expect(describeEffect({ scoutBoostRounds: 3 })[0].tone).toBe("good");
   });
 
   it("applyEventChoice mění morálku/modifikátory a čistí pendingEvent", () => {

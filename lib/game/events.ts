@@ -414,11 +414,235 @@ export const EVENTS: GameEvent[] = [
       },
     ],
   },
+  {
+    id: "contract_extension",
+    title: "Prodloužení smlouvy opory",
+    text: "Klíčový hráč chce jasno ohledně budoucnosti ještě před dalším zápasem.",
+    choices: [
+      {
+        label: "Vyřešit to hned",
+        detail: "Šatna nadšená, ale jednání ti vzalo čas na trénink.",
+        effect: { moraleDelta: 6, fitnessDelta: -3 },
+      },
+      {
+        label: "Odložit po zápase",
+        detail: "Klid na hru, hráč trochu nesvůj.",
+        effect: {
+          moraleDelta: -2,
+          modifier: { concede: 0.96, rounds: 2, label: "Klid na hru" },
+        },
+      },
+    ],
+  },
+  {
+    id: "tactical_experiment",
+    title: "Taktický experiment",
+    text: "Na tréninku ti sedl odvážný rozestup — nasadit ho hned?",
+    condition: playedAtLeast(3),
+    choices: [
+      {
+        label: "Zkusit ho v zápase",
+        detail: "Víc vepředu, ale ještě není vyladěný vzadu.",
+        effect: {
+          moraleDelta: 2,
+          modifier: { attack: 1.06, concede: 1.05, rounds: 2, label: "Nový rozestup" },
+        },
+      },
+      {
+        label: "Zůstat u osvědčeného",
+        detail: "Jistota, ale hráči by rádi zkusili něco nového.",
+        effect: { fitnessDelta: 4, moraleDelta: -1 },
+      },
+    ],
+  },
+  {
+    id: "heavy_pitch",
+    title: "Rozbitý trávník",
+    text: "Terén po deštích je těžký a nevyzpytatelný.",
+    choices: [
+      {
+        label: "Hrát to jednoduše",
+        detail: "Míň riskuješ vzadu, ale i vepředu.",
+        effect: {
+          moraleDelta: 1,
+          modifier: { attack: 0.95, concede: 0.95, rounds: 1, label: "Jednoduchá hra" },
+        },
+      },
+      {
+        label: "Tlačit na kombinaci",
+        detail: "Chceš hrát svůj fotbal — na těžkém terénu risk vzadu.",
+        effect: {
+          modifier: { attack: 1.05, concede: 1.06, rounds: 1, label: "Kombinace v blátě" },
+        },
+      },
+    ],
+  },
+  {
+    id: "fan_tifo",
+    title: "Choreo fanoušků",
+    text: "Kotel chystá velké choreo a nabudil celé město.",
+    condition: (s) => s.morale >= 45,
+    choices: [
+      {
+        label: "Nasát atmosféru",
+        detail: "Tým to zvedne, žádné taktické riziko.",
+        effect: { moraleDelta: 5 },
+      },
+      {
+        label: "Držet nohy na zemi",
+        detail: "Emoce stranou, zato semknutá obrana.",
+        effect: {
+          moraleDelta: -1,
+          modifier: { concede: 0.96, rounds: 2, label: "Chladná hlava" },
+        },
+      },
+    ],
+  },
+  {
+    id: "star_transfer_rumor",
+    title: "Spekulace o odchodu",
+    text: "Média píší, že tvá opora míří k soupeři.",
+    choices: [
+      {
+        label: "Uklidnit veřejně",
+        detail: "Zvedneš náladu, ale rozptýlíš přípravu.",
+        effect: {
+          moraleDelta: 4,
+          modifier: { attack: 0.97, rounds: 1, label: "Rozptýlení spekulacemi" },
+        },
+      },
+      {
+        label: "Nechat to být",
+        detail: "Klid na práci, ale šatna je nervózní.",
+        effect: {
+          moraleDelta: -3,
+          modifier: { concede: 0.97, rounds: 2, label: "Soustředění na obranu" },
+        },
+      },
+    ],
+  },
+  {
+    id: "sports_science",
+    title: "Sportovní věda",
+    text: "Kondiční tým navrhuje nákladný regenerační blok.",
+    condition: tired,
+    choices: [
+      {
+        label: "Zaplatit regeneraci",
+        detail: "Nohy budou svěží — na úkor rozpočtu na rozvoj.",
+        effect: { fitnessDelta: 12, devBonus: -1 },
+      },
+      {
+        label: "Zvládneme to sami",
+        detail: "Ušetříš, únava ale zůstává.",
+        effect: { moraleDelta: 1 },
+      },
+    ],
+  },
+  {
+    id: "veteran_leadership",
+    title: "Veterán v kabině",
+    text: "Zkušený matador se nabízí vzít tým za pačesy.",
+    condition: (s) => s.morale < 50,
+    choices: [
+      {
+        label: "Dát mu slovo",
+        detail: "Kabina se semkne, ale trochu ubere z tempa.",
+        effect: {
+          moraleDelta: 6,
+          modifier: { attack: 0.98, rounds: 1, label: "Zkušené vedení" },
+        },
+      },
+      {
+        label: "Vsadit na mladé nohy",
+        detail: "Víc energie vepředu, veterán zklamaný.",
+        effect: {
+          moraleDelta: -2,
+          modifier: { attack: 1.05, rounds: 2, label: "Mladá energie" },
+        },
+      },
+    ],
+  },
+  {
+    id: "penalty_practice",
+    title: "Standardky a penalty",
+    text: "Trenér standardek chce zabrat na pokutových kopech a rozích.",
+    condition: playedAtLeast(2),
+    choices: [
+      {
+        label: "Věnovat tréninku čas",
+        detail: "Vyšší zisk vepředu, ale sáhneš si na kondici.",
+        effect: {
+          fitnessDelta: -4,
+          modifier: { attack: 1.05, rounds: 2, label: "Nacvičené standardky" },
+        },
+      },
+      {
+        label: "Radši dřít obranné situace",
+        detail: "Pevněji vzadu, hráči by radši útočili.",
+        effect: {
+          moraleDelta: -1,
+          modifier: { concede: 0.95, rounds: 2, label: "Nacvičená obrana" },
+        },
+      },
+    ],
+  },
 ];
 
 /** Vyhledá event dle id (pro UI render z pendingEvent). */
 export function getEvent(id: string): GameEvent | undefined {
   return EVENTS.find((e) => e.id === id);
+}
+
+/** Chip s konkrétním efektem volby pro UI (aby hráč nevybíral „naslepo" z prózy). */
+export interface EffectChip {
+  text: string;
+  tone: "good" | "bad" | "neutral";
+}
+
+function roundsLabel(n: number): string {
+  return `${n} ${n === 1 ? "kolo" : n < 5 ? "kola" : "kol"}`;
+}
+function signed(n: number): string {
+  return `${n > 0 ? "+" : ""}${n}`;
+}
+
+/**
+ * Rozloží efekt volby na čitelné chip-y (morálka / kondice / λ modifikátor / scouting /
+ * rozvojový bod). `concede < 1` = míň obdržených = dobré; `> 1` = děravější = špatné.
+ */
+export function describeEffect(e: EventChoiceEffect): EffectChip[] {
+  const chips: EffectChip[] = [];
+  if (e.moraleDelta) {
+    chips.push({ text: `Morálka ${signed(e.moraleDelta)}`, tone: e.moraleDelta > 0 ? "good" : "bad" });
+  }
+  if (e.fitnessDelta) {
+    chips.push({ text: `Kondice ${signed(e.fitnessDelta)}`, tone: e.fitnessDelta > 0 ? "good" : "bad" });
+  }
+  if (e.devBonus) {
+    chips.push({
+      text: `${signed(e.devBonus)} rozvojový bod`,
+      tone: e.devBonus > 0 ? "good" : "bad",
+    });
+  }
+  if (e.scoutBoostRounds) {
+    chips.push({ text: `Scouting jistější · ${roundsLabel(e.scoutBoostRounds)}`, tone: "good" });
+  }
+  if (e.modifier) {
+    const m = e.modifier;
+    if (m.attack != null && m.attack !== 1) {
+      const pct = Math.round((m.attack - 1) * 100);
+      chips.push({ text: `Útok ${signed(pct)} % · ${roundsLabel(m.rounds)}`, tone: pct > 0 ? "good" : "bad" });
+    }
+    if (m.concede != null && m.concede !== 1) {
+      const pct = Math.round((m.concede - 1) * 100);
+      chips.push({
+        text: `Obrana ${pct < 0 ? "pevnější" : "děravější"} · ${roundsLabel(m.rounds)}`,
+        tone: pct < 0 ? "good" : "bad",
+      });
+    }
+  }
+  return chips;
 }
 
 /**

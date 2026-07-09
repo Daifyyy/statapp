@@ -40,7 +40,7 @@ import {
   INSTRUCTION_HINT,
   INSTRUCTION_LABEL,
 } from "@/lib/game/instructions";
-import { getEvent, applyEventChoice } from "@/lib/game/events";
+import { getEvent, applyEventChoice, describeEffect } from "@/lib/game/events";
 import { fitnessDelta, fitnessLabel } from "@/lib/game/fitness";
 import {
   DEV_AREA_HINT,
@@ -1506,17 +1506,39 @@ function EventCard({
       <div className="mt-1 text-sm font-semibold text-foreground">{ev.title}</div>
       <p className="mt-1 text-xs text-muted">{ev.text}</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-        {ev.choices.map((c, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onChoice(i)}
-            className="rounded-xl border border-border bg-surface px-3 py-2 text-left transition hover:border-foreground/30"
-          >
-            <span className="block text-sm font-medium text-foreground">{c.label}</span>
-            <span className="block text-[11px] text-muted">{c.detail}</span>
-          </button>
-        ))}
+        {ev.choices.map((c, i) => {
+          const chips = describeEffect(c.effect);
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onChoice(i)}
+              className="rounded-xl border border-border bg-surface px-3 py-2 text-left transition hover:border-foreground/30"
+            >
+              <span className="block text-sm font-medium text-foreground">{c.label}</span>
+              <span className="block text-[11px] text-muted">{c.detail}</span>
+              {chips.length > 0 && (
+                <span className="mt-1.5 flex flex-wrap gap-1">
+                  {chips.map((ch, j) => (
+                    <span
+                      key={j}
+                      className={
+                        "rounded-md px-1.5 py-0.5 text-[10px] font-semibold " +
+                        (ch.tone === "good"
+                          ? "bg-positive/15 text-positive"
+                          : ch.tone === "bad"
+                            ? "bg-negative/15 text-negative"
+                            : "bg-border/60 text-muted")
+                      }
+                    >
+                      {ch.text}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
