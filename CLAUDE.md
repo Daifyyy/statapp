@@ -622,8 +622,41 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     ligu; reprezentační pole je už seříznuté kvalifikací a ratingy jdou z reálných dat.
   - `npm run sim-game` sekce 5 měří titul favorita (turnaj je loterie: Euro ~15–23 %, MS ~9 %)
     a poměr prodloužení/penalt. Malý počet běhů = velký šum.
-- **Možná rozšíření (TODO):** reprezentační dataset + kvalifikace + UI (Phase 4, kroky T3–T6),
-  klubový pohár / Liga mistrů (znovupoužije `tournament.ts`).
+- **Reprezentační turnaje (Euro/MS) — HOTOVO** (`lib/game/nationalCompetitions.ts`, čisté +
+  `nationalCompetitions.test.ts`/`nationalCareer.test.ts`): samostatný režim vedle klubové
+  kariéry, **sdílená reputace** (buduje se napříč turnaji, nereset jako klub). Vedeš buď klub,
+  nebo reprezentaci — invariant `SaveState.current` XOR `SaveState.tournament`.
+  - **Registr `COMPETITIONS`** = EURO (24, jen UEFA, host Německo) + WC (48, kvóty per
+    konfederace UEFA 16 / CONMEBOL 6 / CAF 9 / AFC 9 / CONCACAF 7 / OFC 1 = 48, host USA).
+    Kvóty se sečtou **přesně na velikost pole**; MS je vědomé zaokrouhlení (reálně 46 + hostitelé).
+  - **Kvalifikace = vědomé zjednodušení** (reálné formáty se cyklus od cyklu mění): hráč hraje
+    JEDNU skupinu své konfederace 6 týmů **dvoukolově doma/venku** (tady `homeBoost` = `QUAL_HOME_BOOST`
+    dává smysl, ne 1 jako v turnaji), postup do `QUAL_ADVANCE` (3.) místa. Soupeři stratifikovaně
+    dle síly (ne celá slabá/silná skupina). **Ostatní místa** (jiné konfederace + doplnění té tvé)
+    obsadí **los vážený ratingem** s garancí pořadatele a postupujících z tvé skupiny.
+  - **`TournamentRun`** orchestruje fáze `qualification → final → done`: `playRunRound` odehraje
+    kolo kvalifikace, po jejím dohrání postaví pole (`buildTournamentField`) a buď spustí závěrečný
+    turnaj (`newTournament`, reuse `tournament.ts`), nebo skončí (nekvalifikoval ses). Agency
+    (plán/counter/instrukce/morálka/kondice/eventy) běží beze změny přes `AgencyState`; kvalifikace
+    má vlastní RNG proud (`RNG_SALT_QUALIFICATION`), ať kolo 0 kvalifikace ≠ kolo 0 turnaje.
+  - **Past (opravená, kryto testem):** konfederace s méně místy než počet garantovaných
+    postupujících (OFC = 1 místo, ale garantujeme 3 z tvé skupiny) dřív oříznutím na `slots`
+    vyhodila i kvalifikovaného HRÁČE z pole → crash v `newTournament`. Fix: v garancích je **TY
+    první**, takže tě malá kvóta nikdy nevyhodí.
+  - **Kariéra/profil:** `summarizeRun` → `TournamentSummary` (agreguje kvalifikaci i turnaj),
+    `foldTournament` plní **vlastní pole** `AllTimeRecords` (`tournamentsPlayed`/`majorTitles`/
+    `finalsReached`/`nationsCoached`) — NErecykluje `SeasonSummary` (`champion:true` z poháru by
+    rozbil ligové `titles`). `updateReputationTournament` (paralelní k `updateReputation`).
+    Druhý registr `TOURNAMENT_ACHIEVEMENTS` + `newlyEarnedTournament`; `owned:Set<string>` pokryje
+    oba registry, sloučí se v `ALL_ACHIEVEMENTS` (UI grid). `SaveState.tournament`/`tournamentHistory`
+    (`import type` v types.ts = bez runtime cyklu), `SAVE_VERSION` beze změny (pole nullable,
+    čtou se s `?? null`/`?? []`).
+  - **UI:** rozcestník Klub/Reprezentace v `ManagerHub`, `NationPicker` (soutěž + národ gated
+    reputací, pořadatel označen), `TournamentView` (kvalifikace/skupina/pavouk + `TournamentNextMatch`
+    s celou agency, `MiniTable` postupová zóna, „Tvoje cesta pavoukem"), `TournamentDone`,
+    `ProfilePanel` skutečné reprezentační rekordy.
+- **Možná rozšíření (TODO):** klubový pohár / Liga mistrů (znovupoužije `tournament.ts`);
+  víc soutěží (Copa/AFCON…) = položka v `COMPETITIONS`.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
 
 ## PWA (instalace na iOS/Android)
