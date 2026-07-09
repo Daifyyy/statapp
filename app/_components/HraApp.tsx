@@ -1081,6 +1081,7 @@ function GameView({
               {busy ? "Simuluje se…" : "Dohrát sezónu"}
             </button>
           </div>
+          <ClubOverview state={s} />
           <LeagueTable state={s} />
           <YourForm state={s} />
         </>
@@ -1818,6 +1819,130 @@ const DEV_AREAS: (keyof DevSpend)[] = ["attack", "defense", "youth", "stadium"];
  * titul/Evropa, reputace) – strop je `MAX_DEV_POINTS`, takže jedna sezóna z průměrného
  * klubu top tým neudělá. Nevyužité body propadají (nepřenášejí se).
  */
+/**
+ * Přehled akumulovaného stavu klubu (síla vs liga, stadion, mládež) + co je trvalé a co
+ * mezi sezónami regreduje. Čistě čte SeasonState – žádná nová data, jen viditelnost rozvoje.
+ */
+function ClubOverview({ state }: { state: SeasonState }) {
+  const you = teamById(state.teams, state.yourTeamId);
+  const n = state.teams.length || 1;
+  const avgAttack = state.teams.reduce((s, t) => s + t.attack, 0) / n;
+  const avgDefense = state.teams.reduce((s, t) => s + t.defense, 0) / n;
+  const stadiumPct = Math.max(
+    0,
+    Math.min(1, (you.homeBoost - 1) / (HOME_BOOST_CAP - 1))
+  );
+  const stadiumMaxed = you.homeBoost >= HOME_BOOST_CAP - 1e-9;
+  const youthPct = Math.max(0, Math.min(1, state.youth / DEV_YOUTH_MAX));
+
+  return (
+    <div className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-foreground">🏟️ Tvůj klub</span>
+        <Stars n={leagueStars(you, state.teams)} />
+      </div>
+
+      {/* Síla útoku / obrany vs. ⌀ ligy */}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <RatingCompare
+          label="Útok"
+          value={you.attack}
+          leagueAvg={avgAttack}
+          higherBetter
+        />
+        <RatingCompare
+          label="Obrana"
+          value={you.defense}
+          leagueAvg={avgDefense}
+          higherBetter={false}
+        />
+      </div>
+
+      {/* Stadion (trvalý) + mládež */}
+      <div className="mt-3 space-y-2">
+        <DevMeter
+          label="Stadion"
+          pct={stadiumPct}
+          right={stadiumMaxed ? "maximum" : "trvalé"}
+          tone="positive"
+        />
+        <DevMeter
+          label="Mládež"
+          pct={youthPct}
+          right={`${state.youth}/${DEV_YOUTH_MAX}`}
+          tone="muted"
+        />
+      </div>
+
+      <p className="mt-2 text-[10px] leading-tight text-muted">
+        Stadion je <strong className="text-foreground">trvalý</strong> (neregreduje). Útok a
+        obrana se mezi sezónami mírně vrací k průměru ligy — mládež ten propad tlumí.
+      </p>
+    </div>
+  );
+}
+
+/** Hodnota metriky vs. ligový průměr (barevně dle toho, zda jsi nad/pod ⌀). */
+function RatingCompare({
+  label,
+  value,
+  leagueAvg,
+  higherBetter,
+}: {
+  label: string;
+  value: number;
+  leagueAvg: number;
+  higherBetter: boolean;
+}) {
+  const better = higherBetter ? value > leagueAvg : value < leagueAvg;
+  const diff = value - leagueAvg;
+  return (
+    <div className="rounded-xl border border-border bg-background/40 px-3 py-2">
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className="mt-0.5 flex items-baseline gap-1.5">
+        <span className="text-lg font-bold tabular-nums text-foreground">
+          {value.toFixed(2)}
+        </span>
+        <span
+          className={
+            "text-[10px] font-semibold " + (better ? "text-positive" : "text-negative")
+          }
+        >
+          {diff >= 0 ? "+" : ""}
+          {diff.toFixed(2)}
+        </span>
+      </div>
+      <div className="text-[10px] text-muted">⌀ liga {leagueAvg.toFixed(2)}</div>
+    </div>
+  );
+}
+
+/** Progres-bar rozvojové oblasti (stadion / mládež). */
+function DevMeter({
+  label,
+  pct,
+  right,
+  tone,
+}: {
+  label: string;
+  pct: number;
+  right: string;
+  tone: "positive" | "muted";
+}) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-16 shrink-0 text-muted">{label}</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
+        <div
+          className={"bar-fill h-full rounded-full " + (tone === "positive" ? "bg-positive" : "bg-muted/60")}
+          style={{ width: `${pct * 100}%` }}
+        />
+      </div>
+      <span className="shrink-0 text-[10px] font-medium text-muted">{right}</span>
+    </div>
+  );
+}
+
 function DevelopmentPanel({
   points,
   spend,

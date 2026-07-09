@@ -50,10 +50,10 @@ export const DEV_AREA_LABEL: Record<keyof DevSpend, string> = {
 };
 
 export const DEV_AREA_HINT: Record<keyof DevSpend, string> = {
-  attack: "Vyšší očekávané góly tvého týmu.",
-  defense: "Nižší očekávané obdržené góly.",
-  youth: "Menší mezisezónní propad ratingu — udrží, co jsi vydřel.",
-  stadium: "Silnější domácí prostředí. Roste pomalu, ale nikdy neklesne.",
+  attack: "Vyšší očekávané góly. Mezi sezónami mírně regreduje k průměru ligy.",
+  defense: "Nižší obdržené góly. Mezi sezónami mírně regreduje k průměru ligy.",
+  youth: "Tlumí mezisezónní propad ratingu — udrží, co jsi vydřel (patří klubu).",
+  stadium: "Silnější domácí prostředí. Roste pomalu, ale je TRVALÝ — nikdy neklesne.",
 };
 
 /** Kolik bodů je celkem rozděleno. */
