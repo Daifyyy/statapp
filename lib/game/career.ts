@@ -4,7 +4,7 @@
 import { deriveSeed, mulberry32 } from "./rng";
 import { newSeason, currentTable } from "./engine";
 import { teamById } from "./teams";
-import { evaluateSeason } from "./leagues";
+import { evaluateSeason, teamPrestige } from "./leagues";
 import { expectedRank } from "./reputation";
 import { applyDevelopment, nextYouth, youthRegression, EMPTY_SPEND } from "./development";
 import type { DevSpend } from "./development";
@@ -59,6 +59,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
     championId: champion.teamId,
     championName: teamById(state.teams, champion.teamId).name,
     objectiveMet: you.rank <= state.objective.targetRank,
+    yourPrestige: teamPrestige(yourTeam, state.leagueId, state.teams),
   };
 }
 

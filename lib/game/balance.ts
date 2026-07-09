@@ -330,6 +330,16 @@ export const EUROPE_REP: Record<EuropeSpot, number> = {
 };
 export const CHAMPION_REP = 6;
 export const RELEGATION_REP = -12;
+
+/**
+ * Strop reputace daný ÚROVNÍ týmu, který zrovna vedeš: kladné přírůstky reputace nemůžou
+ * vytlačit reputaci nad `prestiž týmu + tenhle margin`. Bez toho by šlo vybudovat elitní
+ * reputaci sérií titulů se slabým klubem (Sparta, globálně nízká úroveň) a hned převzít
+ * Španělsko. Se stropem se k elitě musíš propracovat přes silnější klub/reprezentaci.
+ * Záporné změny platí vždy; kdo spadl pod svou úroveň o reputaci nepřijde, jen neroste.
+ * Ladicí konstanta – ověřit playtestem (sim-game reputaci mezi ligami neměří).
+ */
+export const REP_CEILING_MARGIN = 12;
 export const PROMOTION_REP = 8;
 export const OBJECTIVE_MET_REP = 3;
 export const REP_PERF_CLAMP = 10;

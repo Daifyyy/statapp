@@ -199,6 +199,10 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
   const [hasUnseenAchievement, setHasUnseenAchievement] = useState(false);
+  /** Který režim se zobrazuje, když běží klub i reprezentace paralelně. */
+  const [careerMode, setCareerMode] = useState<"club" | "nation">("club");
+  /** Overlay výběru nového týmu (klub / reprezentace) – i s aktivní druhou kariérou. */
+  const [picking, setPicking] = useState<null | "club" | "nation">(null);
   /** Stav, který se nepodařilo uložit na server – zůstává, dokud "Zkusit znovu" neuspěje. */
   const [saveError, setSaveError] = useState<SaveState | null>(null);
 
@@ -247,10 +251,14 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         const next: SaveState = {
           version: SAVE_VERSION,
           profile,
-          // Nová kariéra startuje na pevné reputaci → výběr klubu je gated (ne top klub).
-          manager: { reputation: STARTING_REPUTATION },
+          // Reputace se SDÍLÍ (buduje se napříč klubem i reprezentací); převzetí klubu ji
+          // neresetuje. Gate výběru řeší strop reputace dle prestiže (REP_CEILING_MARGIN).
+          manager: { reputation: prev?.manager.reputation ?? STARTING_REPUTATION },
           current,
           history: [],
+          // Paralelní reprezentační běh zůstává (invariant XOR zrušen).
+          tournament: prev?.tournament ?? null,
+          tournamentHistory: prev?.tournamentHistory ?? [],
         };
         trackSave(next);
         return next;
@@ -295,7 +303,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         const next: SaveState = {
           ...base,
           profile: startCareer(base.profile),
-          current: null,
+          // Klubová kariéra zůstává (invariant XOR zrušen) – běží paralelně.
           tournament: run,
           tournamentHistory: base.tournamentHistory ?? [],
         };
@@ -525,10 +533,11 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     [finishAndAdvance]
   );
 
+  // Úplný restart „od nuly": smaže obě kariéry i reputaci (síň slávy zůstává).
   const onReset = useCallback(() => {
     if (
       !confirm(
-        "Ukončit aktuální kariéru? Rozehraná sezóna a její historie se smažou, ale síň slávy (rekordy + achievementy) zůstane."
+        "Nová kariéra od nuly? Rozehraný klub i reprezentace, jejich historie a reputace se smažou. Síň slávy (rekordy + achievementy) zůstane."
       )
     )
       return;
@@ -546,8 +555,74 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       return next;
     });
     setView("season");
+    setCareerMode("club");
     setHasUnseenAchievement(false);
   }, [trackSave]);
+
+  // Ukončí JEN klubovou kariéru (reprezentace i sdílená reputace zůstávají).
+  const onEndClub = useCallback(() => {
+    if (
+      !confirm(
+        "Ukončit klubovou kariéru? Rozehraná sezóna a její historie se smažou; reputace, síň slávy i případná reprezentace zůstanou."
+      )
+    )
+      return;
+    setSave((prev) => {
+      if (!prev) return prev;
+      const next: SaveState = { ...prev, current: null, history: [] };
+      trackSave(next);
+      return next;
+    });
+    setCareerMode("nation");
+  }, [trackSave]);
+
+  // Ukončí JEN reprezentační běh (klub i sdílená reputace zůstávají). Bez foldu (opuštění).
+  const onEndNation = useCallback(() => {
+    if (
+      !confirm(
+        "Ukončit reprezentaci? Rozehraný turnaj se zahodí (nezapíše se do síně slávy); klub a reputace zůstanou."
+      )
+    )
+      return;
+    setSave((prev) => {
+      if (!prev) return prev;
+      const next: SaveState = { ...prev, tournament: null };
+      trackSave(next);
+      return next;
+    });
+    setCareerMode("club");
+  }, [trackSave]);
+
+  // Wrappery výběru: po startu zavřou overlay a přepnou na nově převzatý režim.
+  const takeClub = useCallback(
+    (
+      leagueId: number,
+      leagueName: string,
+      teams: GameTeam[],
+      teamId: number,
+      leagueAccess: LeagueAccess | null
+    ) => {
+      startGame(leagueId, leagueName, teams, teamId, leagueAccess);
+      setPicking(null);
+      setCareerMode("club");
+    },
+    [startGame]
+  );
+
+  const takeNation = useCallback(
+    (competitionId: CompetitionId, teamId: number) => {
+      startTournament(competitionId, teamId);
+      setPicking(null);
+      setCareerMode("nation");
+    },
+    [startTournament]
+  );
+
+  const hasClub = Boolean(save?.current);
+  const hasNation = Boolean(save?.tournament);
+  // Když běží obě, řídí zobrazení `careerMode`; jinak se ukáže ta existující.
+  const mode: "club" | "nation" = hasClub && hasNation ? careerMode : hasNation ? "nation" : "club";
+  const sharedReputation = save?.manager.reputation ?? STARTING_REPUTATION;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
@@ -581,47 +656,64 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         <SignInGate />
       ) : loading ? (
         <LoadingRows />
-      ) : save?.tournament ? (
-        <TournamentView
-          save={save}
-          managerName={user.name ?? null}
-          run={save.tournament}
-          busy={busy}
-          onPlayRound={onTournPlayRound}
-          onSimulateToEnd={onTournSimToEnd}
-          onPlan={onTournPlan}
-          onInstruction={onTournInstruction}
-          onEventChoice={onTournEventChoice}
-          onFinish={onFinishTournament}
-          onReset={onReset}
+      ) : picking ? (
+        <PickerScreen
+          mode={picking}
+          reputation={sharedReputation}
+          onBack={() => setPicking(null)}
+          onStartClub={takeClub}
+          onStartTournament={takeNation}
+          onError={setError}
         />
-      ) : !save?.current ? (
+      ) : !hasClub && !hasNation ? (
         <ManagerHub
           save={save}
           managerName={user.name ?? null}
-          onStart={startGame}
-          onStartTournament={startTournament}
-          onError={setError}
+          onPickClub={() => setPicking("club")}
+          onPickNation={() => setPicking("nation")}
         />
       ) : (
-        <GameView
-          save={save}
-          managerName={user.name ?? null}
-          view={view}
-          setView={setView}
-          busy={busy}
-          onPlayRound={onPlayRound}
-          onSimulateToEnd={onSimulateToEnd}
-          onPlan={onPlan}
-          onInstruction={onInstruction}
-          onEventChoice={onEventChoice}
-          onContinue={onContinue}
-          onSwitch={onSwitch}
-          onReset={onReset}
-          onError={setError}
-          hasUnseenAchievement={hasUnseenAchievement}
-          onDismissUnseenAchievement={() => setHasUnseenAchievement(false)}
-        />
+        <>
+          {hasClub && hasNation && <ModeBar mode={mode} onMode={setCareerMode} />}
+          {mode === "nation" && save?.tournament ? (
+            <TournamentView
+              save={save}
+              managerName={user.name ?? null}
+              run={save.tournament}
+              busy={busy}
+              onPlayRound={onTournPlayRound}
+              onSimulateToEnd={onTournSimToEnd}
+              onPlan={onTournPlan}
+              onInstruction={onTournInstruction}
+              onEventChoice={onTournEventChoice}
+              onFinish={onFinishTournament}
+              onEnd={onEndNation}
+              onReset={onReset}
+              onTakeClub={hasClub ? undefined : () => setPicking("club")}
+            />
+          ) : save?.current ? (
+            <GameView
+              save={save}
+              managerName={user.name ?? null}
+              view={view}
+              setView={setView}
+              busy={busy}
+              onPlayRound={onPlayRound}
+              onSimulateToEnd={onSimulateToEnd}
+              onPlan={onPlan}
+              onInstruction={onInstruction}
+              onEventChoice={onEventChoice}
+              onContinue={onContinue}
+              onSwitch={onSwitch}
+              onReset={onReset}
+              onEndClub={onEndClub}
+              onTakeNation={hasNation ? undefined : () => setPicking("nation")}
+              onError={setError}
+              hasUnseenAchievement={hasUnseenAchievement}
+              onDismissUnseenAchievement={() => setHasUnseenAchievement(false)}
+            />
+          ) : null}
+        </>
       )}
 
       <MatchResultToast toast={toast} onClose={() => setToast(null)} />
@@ -958,6 +1050,8 @@ function GameView({
   onContinue,
   onSwitch,
   onReset,
+  onEndClub,
+  onTakeNation,
   onError,
   hasUnseenAchievement,
   onDismissUnseenAchievement,
@@ -982,6 +1076,10 @@ function GameView({
     youth?: number
   ) => void;
   onReset: () => void;
+  /** Ukončí jen klubovou kariéru (reprezentace zůstane). */
+  onEndClub: () => void;
+  /** Otevře výběr reprezentace (jen když ještě žádná neběží). */
+  onTakeNation?: () => void;
   onError: (e: string | null) => void;
   hasUnseenAchievement: boolean;
   onDismissUnseenAchievement: () => void;
@@ -1022,13 +1120,16 @@ function GameView({
           >
             Profil
           </Segment>
-          <button
-            type="button"
-            onClick={onReset}
-            className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-negative"
-          >
-            Nová kariéra
-          </button>
+          {onTakeNation && (
+            <button
+              type="button"
+              onClick={onTakeNation}
+              title="Převezmi navíc reprezentaci — poběží paralelně s klubem"
+              className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-foreground"
+            >
+              🌐 Repre
+            </button>
+          )}
         </div>
       </div>
 
@@ -1041,12 +1142,15 @@ function GameView({
       )}
 
       {view === "profile" ? (
-        <ProfilePanel
-          profile={save.profile}
-          reputation={save.manager.reputation}
-          managerName={managerName}
-          activeCareer
-        />
+        <>
+          <ProfilePanel
+            profile={save.profile}
+            reputation={save.manager.reputation}
+            managerName={managerName}
+            activeCareer
+          />
+          <CareerManagement endLabel="klubovou kariéru" onEnd={onEndClub} onReset={onReset} />
+        </>
       ) : view === "history" ? (
         <HistoryView save={save} />
       ) : done ? (
@@ -2518,7 +2622,9 @@ function TournamentView({
   onInstruction,
   onEventChoice,
   onFinish,
+  onEnd,
   onReset,
+  onTakeClub,
 }: {
   save: SaveState;
   managerName: string | null;
@@ -2530,7 +2636,11 @@ function TournamentView({
   onInstruction: (i: Instruction) => void;
   onEventChoice: (choiceIndex: number) => void;
   onFinish: () => void;
+  /** Opustí reprezentační běh (klub zůstane). */
+  onEnd: () => void;
   onReset: () => void;
+  /** Otevře výběr klubu (jen když žádný neběží). */
+  onTakeClub?: () => void;
 }) {
   const comp = COMPETITIONS[run.competitionId];
   const over = isRunOver(run);
@@ -2558,13 +2668,33 @@ function TournamentView({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onReset}
-          className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-negative"
-        >
-          Nová kariéra
-        </button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {onTakeClub && (
+            <button
+              type="button"
+              onClick={onTakeClub}
+              title="Převezmi navíc klub — poběží paralelně s reprezentací"
+              className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-foreground"
+            >
+              🏟️ Klub
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onEnd}
+            className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-negative"
+          >
+            Ukončit
+          </button>
+          <button
+            type="button"
+            onClick={onReset}
+            title="Nová kariéra od nuly (smaže klub i reprezentaci a reputaci)"
+            className="rounded-full border border-negative/40 bg-negative/10 px-3 py-1.5 text-xs font-medium text-negative transition hover:bg-negative/15"
+          >
+            Od nuly
+          </button>
+        </div>
       </div>
 
       {over ? (
@@ -2955,17 +3085,72 @@ function TournamentDone({
 
 // ───────────────────────── manažerský profil / hub ─────────────────────────
 
-/** Vstupní rozcestník bez aktivní kariéry: profil + volba režimu (klub / reprezentace). */
-function ManagerHub({
-  save,
-  managerName,
-  onStart,
+/** Přepínač mezi paralelně běžícím klubem a reprezentací. */
+function ModeBar({
+  mode,
+  onMode,
+}: {
+  mode: "club" | "nation";
+  onMode: (m: "club" | "nation") => void;
+}) {
+  return (
+    <div className="mt-5 flex gap-1.5">
+      <Segment active={mode === "club"} onClick={() => onMode("club")}>
+        🏟️ Klub
+      </Segment>
+      <Segment active={mode === "nation"} onClick={() => onMode("nation")}>
+        🌐 Reprezentace
+      </Segment>
+    </div>
+  );
+}
+
+/** Správa aktivní kariéry: ukončit jen ji, nebo úplný restart od nuly. */
+function CareerManagement({
+  endLabel,
+  onEnd,
+  onReset,
+}: {
+  endLabel: string;
+  onEnd: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-surface p-3">
+      <div className="text-xs font-semibold text-foreground">Správa kariéry</div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onEnd}
+          className="rounded-full border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition hover:text-negative"
+        >
+          Ukončit {endLabel}
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          className="rounded-full border border-negative/40 bg-negative/10 px-3 py-1.5 text-xs font-medium text-negative transition hover:bg-negative/15"
+        >
+          Nová kariéra od nuly
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Overlay výběru nového týmu (klub / reprezentace) – i s aktivní druhou kariérou. */
+function PickerScreen({
+  mode,
+  reputation,
+  onBack,
+  onStartClub,
   onStartTournament,
   onError,
 }: {
-  save: SaveState | null;
-  managerName: string | null;
-  onStart: (
+  mode: "club" | "nation";
+  reputation: number;
+  onBack: () => void;
+  onStartClub: (
     leagueId: number,
     leagueName: string,
     teams: GameTeam[],
@@ -2975,41 +3160,37 @@ function ManagerHub({
   onStartTournament: (competitionId: CompetitionId, teamId: number) => void;
   onError: (e: string | null) => void;
 }) {
-  const [mode, setMode] = useState<null | "club" | "nation">(null);
-  const profile = save?.profile ?? emptyProfile();
-  // Reputace se sdílí napříč turnaji (buduje se); bez ní start na základní reputaci.
-  const reputation = save?.manager.reputation ?? STARTING_REPUTATION;
-
-  if (mode === "club") {
-    return (
-      <div className="mt-5">
-        <button
-          type="button"
-          onClick={() => setMode(null)}
-          className="text-xs text-muted hover:text-foreground"
-        >
-          ← Zpět na profil
-        </button>
-        <NewGameFlow onStart={onStart} onError={onError} />
-      </div>
-    );
-  }
-
-  if (mode === "nation") {
-    return (
-      <div className="mt-5">
-        <button
-          type="button"
-          onClick={() => setMode(null)}
-          className="text-xs text-muted hover:text-foreground"
-        >
-          ← Zpět na profil
-        </button>
+  return (
+    <div className="mt-5">
+      <button
+        type="button"
+        onClick={onBack}
+        className="text-xs text-muted hover:text-foreground"
+      >
+        ← Zpět
+      </button>
+      {mode === "club" ? (
+        <NewGameFlow onStart={onStartClub} onError={onError} />
+      ) : (
         <NationPicker reputation={reputation} onStart={onStartTournament} />
-      </div>
-    );
-  }
+      )}
+    </div>
+  );
+}
 
+/** Vstupní rozcestník bez aktivní kariéry: profil + volba režimu (klub / reprezentace). */
+function ManagerHub({
+  save,
+  managerName,
+  onPickClub,
+  onPickNation,
+}: {
+  save: SaveState | null;
+  managerName: string | null;
+  onPickClub: () => void;
+  onPickNation: () => void;
+}) {
+  const profile = save?.profile ?? emptyProfile();
   return (
     <div>
       <ProfilePanel
@@ -3021,7 +3202,7 @@ function ManagerHub({
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <button
           type="button"
-          onClick={() => setMode("club")}
+          onClick={onPickClub}
           className="rounded-2xl border border-border bg-surface px-4 py-4 text-left shadow-sm transition hover:border-foreground/30"
         >
           <div className="text-sm font-semibold text-foreground">🏟️ Klubová kariéra</div>
@@ -3031,7 +3212,7 @@ function ManagerHub({
         </button>
         <button
           type="button"
-          onClick={() => setMode("nation")}
+          onClick={onPickNation}
           className="rounded-2xl border border-border bg-surface px-4 py-4 text-left shadow-sm transition hover:border-foreground/30"
         >
           <div className="text-sm font-semibold text-foreground">🌐 Reprezentace</div>

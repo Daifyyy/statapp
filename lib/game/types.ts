@@ -160,6 +160,11 @@ export interface SeasonSummary {
   championName: string;
   /** Byl splněn sezónní cíl vedení? (bonus k reputaci) */
   objectiveMet: boolean;
+  /**
+   * Prestiž tvého klubu v této sezóně (`teamPrestige`) – strop pro KLADNÝ přírůstek reputace
+   * (`REP_CEILING_MARGIN`). Volitelné = staré summary (fallback = strop 100 = bez efektu).
+   */
+  yourPrestige?: number;
 }
 
 /**
@@ -187,6 +192,8 @@ export interface TournamentSummary {
   loss: number;
   goalsFor: number;
   goalsAgainst: number;
+  /** Prestiž reprezentace (`nationPrestige`) – strop pro kladný přírůstek reputace. Volitelné. */
+  teamPrestige?: number;
 }
 
 /** Stav probíhající sezóny. */

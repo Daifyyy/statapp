@@ -15,6 +15,7 @@ import {
   OBJECTIVE_MET_REP,
   PROMOTION_REP,
   RELEGATION_REP,
+  REP_CEILING_MARGIN,
   REP_PERF_CLAMP,
   REP_PERF_WEIGHT,
   TOURN_CHAMPION_REP,
@@ -56,7 +57,19 @@ export function updateReputation(
   );
   const delta =
     euroRep + championRep + relegRep + promotionRep + objectiveRep + performance * REP_PERF_WEIGHT;
-  return clamp(Math.round(prev + delta), 0, 100);
+  return applyCeiling(prev, delta, summary.yourPrestige);
+}
+
+/**
+ * Aplikuje změnu reputace se stropem daným úrovní týmu. Kladný přírůstek nesmí vytlačit
+ * reputaci nad `prestiž + REP_CEILING_MARGIN`; kdo už je nad stropem (spadl k slabšímu týmu)
+ * o reputaci nepřijde, jen neroste. Záporné změny platí vždy. Bez `prestige` = strop 100.
+ */
+function applyCeiling(prev: number, delta: number, prestige?: number): number {
+  const raw = prev + delta;
+  if (delta <= 0) return clamp(Math.round(raw), 0, 100);
+  const ceiling = (prestige ?? 100) + REP_CEILING_MARGIN;
+  return clamp(Math.round(Math.min(raw, Math.max(prev, ceiling))), 0, 100);
 }
 
 /**
@@ -75,7 +88,7 @@ export function updateReputationTournament(
     const stageRep = TOURN_STAGE_REP[summary.stageReached] ?? 0;
     delta = TOURN_QUALIFY_REP + stageRep + (summary.champion ? TOURN_CHAMPION_REP : 0);
   }
-  return clamp(Math.round(prev + delta), 0, 100);
+  return applyCeiling(prev, delta, summary.teamPrestige);
 }
 
 /**

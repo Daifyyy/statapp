@@ -134,6 +134,43 @@ describe("updateReputationTournament", () => {
     expect(updateReputation(50, ssummary({ champion: false, europe: "NONE", yourRank: 10, expectedRank: 10 })))
       .toBeTypeOf("number");
   });
+
+  it("strop dle prestiže reprezentace zabrání kladnému přetečení", () => {
+    // teamPrestige 45 → strop 57; velký kladný přírůstek se ořeže.
+    const champ = tsummary({ qualified: true, stageReached: "final", champion: true, teamPrestige: 45 });
+    expect(updateReputationTournament(55, champ)).toBe(57);
+    // Kdo je už nad stropem, o reputaci nepřijde (jen neroste).
+    expect(updateReputationTournament(80, champ)).toBe(80);
+  });
+});
+
+describe("strop reputace dle úrovně týmu (klub)", () => {
+  it("kladný přírůstek se ořeže prestiží klubu", () => {
+    // yourPrestige 50 → strop 62; titul + UCL + cíl by dal +15, ale strop drží.
+    const s = ssummary({ yourPrestige: 50 });
+    expect(updateReputation(60, s)).toBe(62);
+  });
+
+  it("nad stropem se neztrácí, jen neroste", () => {
+    expect(updateReputation(80, ssummary({ yourPrestige: 50 }))).toBe(80);
+  });
+
+  it("záporná změna platí i pod stropem", () => {
+    const releg = ssummary({
+      champion: false,
+      europe: "NONE",
+      relegated: true,
+      yourRank: 18,
+      expectedRank: 10,
+      yourPrestige: 90,
+    });
+    expect(updateReputation(60, releg)).toBeLessThan(60);
+  });
+
+  it("bez yourPrestige (staré summary) = strop 100 = beze změny chování", () => {
+    const s = ssummary({ yourPrestige: undefined });
+    expect(updateReputation(50, s)).toBeGreaterThan(50); // titul reputaci zvedne
+  });
 });
 
 describe("summarizeRun", () => {

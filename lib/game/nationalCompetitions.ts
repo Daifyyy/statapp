@@ -654,6 +654,7 @@ export function summarizeRun(run: TournamentRun): TournamentSummary {
     qualified: run.qualified,
     stageReached: stageReachedOf(run),
     champion: run.tournament?.champion === run.yourTeamId,
+    teamPrestige: nationPrestige(run.yourTeamId),
     played: qual.played + finals.played,
     win: qual.win + finals.win,
     draw: qual.draw + finals.draw,
