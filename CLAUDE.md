@@ -434,7 +434,10 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `objectiveMet`, `startNextSeason` s driftem+investicemi, `careerStats`), `leagues.ts` (prestiž,
   `evaluateSeason`, `LEAGUE_ACCESS`, `leagueStars`, `seasonObjective`), `reputation.ts`
   (`updateReputation` dle příčky+over/under-performance+**cíle**, `isHireable`/`expectedRank`/
-  `HIRE_MARGIN`), `analysis.ts` (`teamSeasonStats`), `development.ts`/`fitness.ts`/`instructions.ts`
+  `HIRE_MARGIN`; **strop reputace** `applyCeiling`: kladný přírůstek nesmí vytlačit reputaci nad
+  `prestiž vedeného týmu + REP_CEILING_MARGIN` → série titulů se slabým klubem nevynese na elitní
+  tým, viz níže „Paralelní kariéra"), `analysis.ts` (`teamSeasonStats`),
+  `development.ts`/`fitness.ts`/`instructions.ts`
   (Phase B, viz níže), `balance.ts` (**laditelné konstanty**).
 - **Agency je oddělená od ligy** (`lib/game/agency.ts`, příprava na reprezentační turnaje):
   `resolveAdjust`/`scoutOpponent`/`maybeEvent`/`applyEventChoice` berou **`AgencyState`** — 12 polí
@@ -586,7 +589,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   - **Pozor na stropy:** `ADJUST_MIN/MAX = 0.7/1.4` je dosažitelný už při plán × counter × morálka
     × 2 eventy. Přidávání dalších násobících pák tlačí kombinace do clampu, kde volby přestanou být
     cítit → držet efekty malé, **neroztahovat clamp**. `npm run sim-game` clamp měří (dnes ~0.1 %).
-- **Eventy** (`events.ts`, 15): `EVENT_CHANCE = 0.3` na kolo, losuje se **jen z eventů se splněnou
+- **Eventy** (`events.ts`, 23): `EVENT_CHANCE = 0.3` na kolo, losuje se **jen z eventů se splněnou
   `condition`** (dřív uniformně ze všech → „Krizová porada" padala i ve vítězné sérii). Volba dá
   morálku / kondici / `devBonus` / scout boost a/nebo `Modifier{attack?, concede?, untilRound}` =
   násobič λ na 1–3 kola (multiplikativně s plánem, counterem, instrukcí, morálkou i kondicí;
@@ -594,6 +597,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `derby_motivation` A dával +5 morálky *i* +6 % útoku bez postihu, `captain_dispute` A a
   `fan_protest` A byly čistě ztrátové. Kryto testem („zisk bez ceny"). `events.ts` **nesmí
   importovat `analysis.ts`** (to importuje `engine.ts` → cyklus) – formu si počítá lokálně.
+  **Číselné efekty na kartě:** `describeEffect(effect)` rozloží volbu na barevné chip-y
+  (Morálka +7 / Útok +6 % · 2 kola / Obrana pevnější / Kondice −8 / Scouting jistější / ±rozvojový
+  bod; `concede<1` = dobré, `>1` = špatné) → `EventCard` je zobrazuje, hráč nevybírá naslepo.
 - **Turnajové jádro** (`lib/game/tournament.ts`, čisté + `tournament.test.ts`; sdílené pro
   reprezentační turnaje i budoucí klubový pohár): skupiny + vyřazovací pavouk, deterministické
   dle seedu, **offline**. Formáty `EURO_FORMAT` (6×4, top 2 + 4 nejlepší třetí = 16 → osmifinále)
@@ -655,6 +661,23 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     reputací, pořadatel označen), `TournamentView` (kvalifikace/skupina/pavouk + `TournamentNextMatch`
     s celou agency, `MiniTable` postupová zóna, „Tvoje cesta pavoukem"), `TournamentDone`,
     `ProfilePanel` skutečné reprezentační rekordy.
+- **Paralelní kariéra klub + reprezentace** (`HraApp.tsx`): invariant `current` XOR `tournament`
+  **zrušen** — klubová sezóna a reprezentační běh běží současně. `ModeBar` (Klub/Reprezentace) se
+  ukáže když existují oba; `mode = hasClub&&hasNation ? careerMode : …`. Vstup do druhé z běžící
+  kariéry přes `PickerScreen` (`picking` stav; tlačítko „🌐 Repre" v `GameView` / „🏟️ Klub" v
+  `TournamentView`). Per-kariéra `onEndClub`/`onEndNation` (uvolní slot, reputace + síň slávy
+  zůstanou; opuštěná reprezentace se NEfolduje) vs. `onReset` = „Nová kariéra od nuly" (smaže obě +
+  reputaci). `startGame`/`startTournament` už reputaci NEresetují (sdílená, `prev?.manager.reputation`).
+  - **Sdílená reputace se stropem úrovně** (uživatelův požadavek): reputace se buduje napříč klubem
+    i reprezentací, ALE `applyCeiling` (`reputation.ts`) drží **kladné** přírůstky pod
+    `prestiž vedeného týmu + REP_CEILING_MARGIN` (12). Empiricky: 20 titulů se Spartou (prestiž ~60)
+    → strop reputace ~72 → Španělsko (prestiž 95, brána ~91) zůstane „🔒 mimo dosah"; k elitě se
+    musíš propracovat přes silnější klub (prestiž ~92 → reputace 100). Prestiž se nese na summary
+    (`SeasonSummary.yourPrestige` = `teamPrestige`, `TournamentSummary.teamPrestige` = `nationPrestige`,
+    fallback bez ní = strop 100). Ladicí konstanta – `sim-game` reputaci mezi ligami neměří.
+- **Přehled klubu** (`ClubOverview` v záložce Sezóna): síla útoku/obrany vs ⌀ ligy (barevně), hvězdy,
+  stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež + legenda co mezi
+  sezónami regreduje. Čistě čte `SeasonState`. `DEV_AREA_HINT` texty zpřesněny o trvanlivost.
 - **Možná rozšíření (TODO):** klubový pohár / Liga mistrů (znovupoužije `tournament.ts`);
   víc soutěží (Copa/AFCON…) = položka v `COMPETITIONS`.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
