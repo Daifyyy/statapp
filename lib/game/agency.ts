@@ -56,9 +56,11 @@ export interface AgencyState {
   instruction: Instruction;
   pendingEvent: PendingEvent | null;
 
-  /** Kariérní pole – v turnaji chybí, eventy je čtou přes `?? 0`. */
+  /** Kariérní pole – v turnaji chybí, eventy a scouting je čtou přes `?? 0`. */
   youth?: number;
   devBonus?: number;
+  /** Investice do skautského oddělení – zvedá konfidenci hlášení (`scoutConfidence`). */
+  scouting?: number;
 }
 
 /**

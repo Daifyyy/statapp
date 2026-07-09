@@ -41,6 +41,7 @@ const seasonSchema = z
     morale: z.number(),
     fitness: z.number().min(0).max(100),
     youth: z.number().int().min(0).max(20),
+    scouting: z.number().int().min(0).max(20),
     devBonus: z.number().int().min(-20).max(20),
     objective: z.object({}).passthrough(),
     modifiers: z.array(z.object({}).passthrough()).max(50),

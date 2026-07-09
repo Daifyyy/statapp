@@ -31,7 +31,8 @@ import { startNextSeason, summarizeSeason } from "../lib/game/career.ts";
 import { updateReputation } from "../lib/game/reputation.ts";
 import { applyEventChoice } from "../lib/game/events.ts";
 import { scoutOpponent } from "../lib/game/scouting.ts";
-import { developmentPoints } from "../lib/game/development.ts";
+import { recommendPlan } from "../lib/game/plans.ts";
+import { developmentPoints, EMPTY_SPEND } from "../lib/game/development.ts";
 import type { DevSpend } from "../lib/game/development.ts";
 import { teamStrengthScore } from "../lib/game/leagues.ts";
 import {
@@ -91,14 +92,16 @@ function leagueDifficulty() {
 
 // ───────────────────────── hráčská strategie ─────────────────────────
 
-/** Nejlepší protitah proti HLÁŠENÉMU stylu (hráč pravdu nezná). */
+/**
+ * Nejlepší protitah proti HLÁŠENÉMU stylu (hráč pravdu nezná). `null` = mlhavé hlášení
+ * (nízká konfidence) → nemá cenu riskovat counter, jede se bezpečně.
+ * Sdílí `recommendPlan` s tím, co skauti radí v UI – jeden zdroj pravdy.
+ */
 function pickPlan(state: SeasonState, oppId: number): Plan {
   const reported = scoutOpponent(state, oppId).reportedStyle;
   // Pod 55 % kondice se vyplatí ubrat, jinak by se tým uběhal.
   if (state.fitness < 55) return reported === "attacking" ? "counter" : "low_block";
-  if (reported === "attacking") return "counter";
-  if (reported === "defensive") return "press";
-  return "balanced";
+  return reported ? recommendPlan(reported) : "balanced";
 }
 
 let clampHits = 0;
@@ -132,7 +135,7 @@ function playSeason(state: SeasonState): SeasonState {
 
 /** Rozdělí rozvojové body: střídavě útok/obrana, každý 3. do mládeže. */
 function allocate(points: number, season: number): DevSpend {
-  const spend: DevSpend = { attack: 0, defense: 0, youth: 0, stadium: 0 };
+  const spend: DevSpend = { ...EMPTY_SPEND };
   for (let i = 0; i < points; i++) {
     if (season <= 2 && i === 0) spend.youth++;
     else if (i % 2 === 0) spend.attack++;
@@ -201,6 +204,8 @@ function development(withDev: boolean) {
 // při strategii „všechno do jedné oblasti". Žádná oblast nesmí ostatní jasně dominovat.
 
 function areaValue() {
+  // `scouting` tu záměrně chybí: nekupuje λ, ale konfidenci hlášení – simulace hraje
+  // adaptivně dle scoutu, takže by měřila kvalitu `pickPlan`, ne hodnotu investice.
   const areas: (keyof DevSpend)[] = ["attack", "defense", "youth", "stadium"];
   console.log(
     `\n── 4) Kam investovat? ${CAREERS} kariér ze středu, ${MAX_SEASONS} sezón, vše do jedné oblasti ──`
@@ -225,7 +230,7 @@ function areaValue() {
         }
         reputation = updateReputation(reputation, summary);
         const pts = developmentPoints(summary, reputation, s.teams.length, s.devBonus);
-        const spend: DevSpend = { attack: 0, defense: 0, youth: 0, stadium: 0 };
+        const spend: DevSpend = { ...EMPTY_SPEND };
         spend[area] = pts;
         s = startNextSeason(s, spend);
       }

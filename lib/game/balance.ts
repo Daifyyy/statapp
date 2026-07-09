@@ -10,7 +10,7 @@
 // směru, ne přesná kalibrace. Než tyto hodnoty měnit na základě "pocitu" z pár her, počkej
 // na větší vzorek odehraných karier (desítky+) napříč různými hráči.
 
-import type { EuropeSpot, Plan } from "./types";
+import type { EuropeSpot, OppStyle, Plan } from "./types";
 
 /** Meze λ (očekávané góly) – stejné jako predikční jádro, pojistka proti extrémům. */
 export const MIN_LAMBDA = 0.2;
@@ -172,22 +172,69 @@ export const DEV_LEAGUE_CEILING = 1.05;
 /** Kondice 0–100, start 100. Náročné plány unavují, pasivní regenerují. */
 export const STARTING_FITNESS = 100;
 export const FITNESS_RECOVERY = 5;
+/**
+ * `counter` má stejnou únavu jako `balanced`. Dřív měl 2 (tj. regeneroval rychleji) a
+ * zároveň lepší základ λ → dominoval „Vyvážený" na VŠECH osách. `low_block` (0) zůstává
+ * jediným regeneračním plánem – tím se za pasivitu platí i vyplácí.
+ */
 export const PLAN_FATIGUE: Record<Plan, number> = {
   balanced: 3,
   open: 8,
   low_block: 0,
   press: 8,
-  counter: 2,
+  counter: 3,
 };
 /** Maximální postih λ při nulové kondici (plná kondice = bez postihu, nikdy bonus). */
 export const FITNESS_PENALTY = 0.1;
 
 // ───────────────────────── scouting / instrukce (Phase B) ─────────────────────────
+//
+// Konfidence scoutingu je **spojitá škála od mlhy k jistotě**, ne konstanta. Dřív byla
+// fixních 0.75 (a event ji zvedl na 0.95) → hlášení se nikdy nezměnilo a scouting byl
+// jen dekorace. Teď roste s tím, co o soupeři reálně můžeš vědět:
+//
+//   confidence = MIN + vzorek + známost + investice   (strop MAX, event → rovnou MAX)
+//
+// Na startu sezóny nikdo nic neodehrál → mlha; v odvetě proti známému týmu → jistota.
+// V turnaji to vychází samo (soupeř má 0–3 zápasy) bez jediné speciální větve.
 
-/** Pravděpodobnost, že scout nahlásí SKUTEČNÝ styl soupeře (jinak se splete). */
-export const SCOUT_CONFIDENCE = 0.75;
-/** Konfidence po investici do skautingu (event). */
-export const SCOUT_CONFIDENCE_BOOSTED = 0.95;
+/** Konfidence pro úplně neznámého soupeře (start sezóny, nulový vzorek). */
+export const SCOUT_CONFIDENCE_MIN = 0.45;
+/** Strop konfidence – ani zaplacená analýza nedá jistotu. */
+export const SCOUT_CONFIDENCE_MAX = 0.95;
+/** Konfidence po investici do skautingu (event) – nastaví se rovnou na strop. */
+export const SCOUT_CONFIDENCE_BOOSTED = SCOUT_CONFIDENCE_MAX;
+/** Kolik odehraných zápasů soupeře už dá plný vzorkový příspěvek. */
+export const SCOUT_SAMPLE_FULL = 6;
+/** Maximální příspěvek vzorku ke konfidenci. */
+export const SCOUT_SAMPLE_WEIGHT = 0.25;
+/** Skokový bonus, když jste se v téhle sezóně/turnaji už potkali (odveta). */
+export const SCOUT_FAMILIARITY_BONUS = 0.08;
+
+/**
+ * Investice do skautského oddělení (5. rozvojová oblast). **Nesahá na λ** – kupuje si
+ * informaci, ne sílu. Celý strop (5 bodů ≈ 1,5 sezóny rozpočtu) koupí +0.20 konfidence:
+ * znatelné (posune tě o kvalitativní stupeň dřív), ale bodově nekonkurenceschopné vůči
+ * útoku/obraně. Skauting je pojistka, ne dominantní strategie.
+ * ⚠️ `npm run sim-game` sekce 4 to NEZMĚŘÍ (žádný λ efekt) – ladí se playtestem.
+ */
+export const SCOUT_LEVEL_STEP = 0.04;
+export const SCOUT_LEVEL_MAX = 5;
+
+/**
+ * Prahy kvality hlášení (viz `ScoutQuality` ve `scouting.ts`). Pod `VAGUE` skauti styl
+ * vůbec neurčí; nad `DETAILED` vidí všechno a doporučí protitah.
+ */
+export const SCOUT_QUALITY_VAGUE = 0.6;
+export const SCOUT_QUALITY_DETAILED = 0.85;
+
+/**
+ * Jak výrazný musí trait být, aby ho skauti při dané kvalitě vůbec zmínili (0–1, viz
+ * `traitStrength` ve scouting.ts). `detailed` odhalí všechny. Skryté traity **pořád platí**
+ * (`resolveInstruction` čte pravdu) – proto je instrukce sázka, ne jistota.
+ */
+export const SCOUT_REVEAL_VAGUE = 0.6;
+export const SCOUT_REVEAL_STANDARD = 0.25;
 
 /** Efekt vedlejší instrukce – záměrně menší než counter plánu (±10 %). */
 export const INSTRUCTION_BONUS = 0.05;
@@ -198,19 +245,71 @@ export const INSTRUCTION_PENALTY = 0.02;
 /**
  * Základní efekt zápasového plánu na tvůj tým. `attack` = násobič vstřelených,
  * `concede` = násobič OBDRŽENÝCH (>1 = dostáváš víc). `balanced` = přesný no-op.
- * Countery proti stylu soupeře se přičítají zvlášť (viz plans.ts).
+ * Countery proti stylu soupeře se násobí zvlášť (`COUNTER_MATRIX` níže).
+ *
+ * `counter` platí GÓLY za solidnost (0.94/0.90). Dřív měl 1.02/0.90, což je zdarma lepší
+ * než `balanced` (1.0/1.0) v obou osách – a spolu s nižší únavou (2 vs 3) tak „Vyvážený"
+ * dominoval ve všech situacích. Cenu proto nese ÚTOK, ne obrana: `concede` zůstává na 0.90.
+ * Snížení na 0.88 zkoušeno – posunulo podlahu (0.88 × counter 0.90 × morálka × instrukce ×
+ * event) pod `ADJUST_MIN` a `sim-game` sekce 3 vyskočila z 0.1 % na 0.28 % clampnutých zápasů.
+ * Kryto testem „žádný plán nedominuje balanced".
  */
 export const PLAN_BASE: Record<Plan, { attack: number; concede: number }> = {
   balanced: { attack: 1.0, concede: 1.0 },
   open: { attack: 1.15, concede: 1.15 }, // otevřená hra: víc dáš i dostaneš
   low_block: { attack: 0.82, concede: 0.8 }, // nízký blok: zavři obranu, míň dáš
   press: { attack: 1.08, concede: 1.05 }, // presink: aktivní, mírné riziko vzadu
-  counter: { attack: 1.02, concede: 0.9 }, // kontry: pevná obrana, oportunní útok
+  counter: { attack: 0.94, concede: 0.9 }, // kontry: pevná obrana, oportunní útok
 };
 
-/** Síla counteru: správný protitah proti stylu soupeře = výhoda, špatný = postih. */
-export const COUNTER_BONUS = 0.1;
-export const COUNTER_PENALTY = 0.1;
+/**
+ * Mez, ve které musí ležet každá buňka `COUNTER_MATRIX`. Není to násobič (jako dřív
+ * `COUNTER_BONUS`/`COUNTER_PENALTY`), ale **dokumentovaný rozpočet counteru** – strážený
+ * testem. Bez něj by prohlubování matice tiše nafouklo efekt a začalo trefovat clamp
+ * `ADJUST_MIN/MAX` (viz komentář u něj níže).
+ */
+export const COUNTER_MAX_EFFECT = 0.12;
+
+/**
+ * Counter: efekt plánu proti STYLU soupeře. Násobí `PLAN_BASE`.
+ * `atk > 1` a `conc < 1` jsou pro tebe dobré.
+ *
+ * Dřív to byla funkce, která vracela jednu ze čtyř šablon (`up`/`down`/`risk`/`toothless`)
+ * a `balanced` necountroval vůbec. Explicitní tabulka dá každé dvojici vlastní tvar –
+ * `press` a `open` rozebírají zataženého soupeře jinak (press přes obranu, open přes útok),
+ * `low_block` a `counter` ustojí tlak jinak. Řádek `balanced` je záměrně samá 1.0: je to
+ * bezpečná volba bez counteru, ne zapomenutý řádek.
+ */
+export const COUNTER_MATRIX: Record<
+  Plan,
+  Record<OppStyle, { atk: number; conc: number }>
+> = {
+  balanced: {
+    attacking: { atk: 1.0, conc: 1.0 },
+    defensive: { atk: 1.0, conc: 1.0 },
+    balanced: { atk: 1.0, conc: 1.0 },
+  },
+  open: {
+    attacking: { atk: 1.02, conc: 1.12 }, // divoká přestřelka – jde to hlavně na tebe
+    defensive: { atk: 1.12, conc: 1.0 }, // otevři zataženého
+    balanced: { atk: 1.0, conc: 1.03 },
+  },
+  low_block: {
+    attacking: { atk: 0.95, conc: 0.88 }, // ustojíš tlak, ale nemáš čím trestat
+    defensive: { atk: 0.9, conc: 1.0 }, // dva zatažené týmy = nuda, ztrácíš čas
+    balanced: { atk: 1.0, conc: 0.98 },
+  },
+  press: {
+    attacking: { atk: 1.0, conc: 1.1 }, // presovat útočný tým = díry za obranou
+    defensive: { atk: 1.1, conc: 0.98 }, // rozeber pasivní tým vysokým blokem
+    balanced: { atk: 1.0, conc: 1.02 },
+  },
+  counter: {
+    attacking: { atk: 1.12, conc: 0.9 }, // trestej otevřeného – ideální protitah
+    defensive: { atk: 0.88, conc: 0.98 }, // není co chytat, zbytečně čekáš
+    balanced: { atk: 1.0, conc: 0.97 },
+  },
+};
 
 /** Morálka: rozkyv λ (±) při morálce 0 vs 100 oproti neutrálním 50. */
 export const MORALE_SWING = 0.06;

@@ -21,6 +21,23 @@ export type Instruction =
   | "set_pieces" // důraz na standardky
   | "high_line"; // vysoká obranná linie
 
+/**
+ * Herní styl soupeře – vstup pro counter logiku plánu (`COUNTER_MATRIX` v balance.ts).
+ * Žije tady, a ne ve `scouting.ts`, aby ho mohly číst `balance.ts` i `plans.ts`, aniž by
+ * na scouting vznikl cyklus (scouting od nich naopak potřebuje `recommendPlan`).
+ */
+export type OppStyle = "attacking" | "defensive" | "balanced";
+
+/** Konkrétní rys soupeře – cíl vedlejší instrukce (`MATCHUP` v instructions.ts). */
+export type Trait =
+  | "strongAttack"
+  | "weakDefense"
+  | "solidDefense"
+  | "inForm"
+  | "poorForm"
+  | "favourite"
+  | "underdog";
+
 /** Sezónní cíl vedení klubu (dle očekávaného umístění). Splnění → bonus k reputaci. */
 export interface Objective {
   kind: "title" | "europe" | "midtable" | "survival" | "promotion";
@@ -232,6 +249,12 @@ export interface SeasonState {
    * klubu se ztrácí – patří klubu, ne trenérovi.
    */
   youth: number;
+  /**
+   * Investice do skautského oddělení (0–`SCOUT_LEVEL_MAX`), kumulativně U TOHOTO KLUBU.
+   * Zvedá konfidenci skautského hlášení (`scoutConfidence`), na λ nesahá. Při převzetí
+   * jiného klubu se ztrácí – patří klubu, stejně jako akademie.
+   */
+  scouting: number;
   /** Bonus/malus k rozvojovým bodům na konci sezóny (z eventů). */
   devBonus: number;
   /** Sezónní cíl vedení (fixní pro celou sezónu). */
@@ -240,7 +263,7 @@ export interface SeasonState {
   modifiers: Modifier[];
   /**
    * Do kterého kola (včetně) má scouting zvýšenou spolehlivost (investice z eventu).
-   * `null` = běžná `SCOUT_CONFIDENCE`.
+   * `null` = konfidence se počítá běžně (`scoutConfidence`).
    */
   scoutBoostUntilRound: number | null;
   /** Nevyřešený event pro aktuální kolo (nutno zvolit před odehráním), nebo null. */
@@ -313,7 +336,7 @@ export interface ManagerProfile {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {

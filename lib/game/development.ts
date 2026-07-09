@@ -1,6 +1,6 @@
 // Rozvoj klubu mezi sezónami. Za odehranou sezónu dostaneš **rozvojové body** podle
 // výsledku (umístění, splnění cíle, titul/Evropa/postup, reputace) a rozdělíš je mezi
-// útok / obranu / mládež / stadion. Čisté funkce (žádné IO), konstanty v `balance.ts`.
+// útok / obranu / mládež / stadion / skauting. Čisté funkce (žádné IO), konstanty v `balance.ts`.
 //
 // Klíčový návrhový požadavek: **jedna dobrá sezóna nesmí udělat top tým.** Drží to tři
 // nezávislé stropy:
@@ -9,9 +9,11 @@
 //   3. `DEV_LEAGUE_CEILING` – nesmíš přeskočit špičku ligy o víc než 5 %.
 // Ze středu tabulky do Evropy kolem 5.–6. sezóny, medián titulu 7. (`npm run sim-game`).
 //
-// Čtyři oblasti se liší i TRVANLIVOSTÍ, ne jen výnosem. Útok a obrana mezisezónní drift
-// částečně smyje (regrese k průměru ligy), mládež ten propad tlumí, a `stadion` neregreduje
-// vůbec – proto má nejnižší okamžitý výnos na bod a společný strop `HOME_BOOST_CAP`.
+// Oblasti se liší i TRVANLIVOSTÍ, ne jen výnosem. Útok a obrana mezisezónní drift částečně
+// smyje (regrese k průměru ligy), mládež ten propad tlumí, a `stadion` neregreduje vůbec –
+// proto má nejnižší okamžitý výnos na bod a společný strop `HOME_BOOST_CAP`.
+// `skauting` stojí stranou téhle úvahy úplně: nekupuje λ, ale JISTOTU hlášení o soupeři
+// (`scoutConfidence`). Proto ho `applyDevelopment` ignoruje a `sim-game` ho nezměří.
 
 import {
   DEV_ATTACK_STEP,
@@ -29,6 +31,7 @@ import {
   DRIFT_REGRESSION,
   HOME_BOOST_CAP,
   MAX_DEV_POINTS,
+  SCOUT_LEVEL_MAX,
 } from "./balance";
 import type { GameTeam, SeasonSummary } from "./types";
 
@@ -38,15 +41,24 @@ export interface DevSpend {
   defense: number;
   youth: number;
   stadium: number;
+  /** Skautské oddělení – kupuje INFORMACI (konfidenci hlášení), ne sílu. Nesahá na λ. */
+  scouting: number;
 }
 
-export const EMPTY_SPEND: DevSpend = { attack: 0, defense: 0, youth: 0, stadium: 0 };
+export const EMPTY_SPEND: DevSpend = {
+  attack: 0,
+  defense: 0,
+  youth: 0,
+  stadium: 0,
+  scouting: 0,
+};
 
 export const DEV_AREA_LABEL: Record<keyof DevSpend, string> = {
   attack: "Útok",
   defense: "Obrana",
   youth: "Mládež",
   stadium: "Stadion",
+  scouting: "Skauting",
 };
 
 export const DEV_AREA_HINT: Record<keyof DevSpend, string> = {
@@ -54,11 +66,14 @@ export const DEV_AREA_HINT: Record<keyof DevSpend, string> = {
   defense: "Nižší obdržené góly. Mezi sezónami mírně regreduje k průměru ligy.",
   youth: "Tlumí mezisezónní propad ratingu — udrží, co jsi vydřel (patří klubu).",
   stadium: "Silnější domácí prostředí. Roste pomalu, ale je TRVALÝ — nikdy neklesne.",
+  scouting: "Spolehlivější hlášení o soupeři. Nezvýší sílu týmu — jen tvoji jistotu.",
 };
 
 /** Kolik bodů je celkem rozděleno. */
 export function spendTotal(spend: DevSpend): number {
-  return spend.attack + spend.defense + spend.youth + spend.stadium;
+  return (
+    spend.attack + spend.defense + spend.youth + spend.stadium + spend.scouting
+  );
 }
 
 /**
@@ -129,6 +144,14 @@ export function applyDevelopment(
 /** Nová hodnota mládeže po investici (kumulativní, se stropem). */
 export function nextYouth(youth: number, spend: DevSpend): number {
   return clamp(youth + spend.youth, 0, DEV_YOUTH_MAX);
+}
+
+/**
+ * Nová úroveň skautingu po investici (kumulativní, se stropem). Vědomě mimo
+ * `applyDevelopment` – skauting není rating, nesahá na λ ani na drift.
+ */
+export function nextScouting(scouting: number, spend: DevSpend): number {
+  return clamp(scouting + spend.scouting, 0, SCOUT_LEVEL_MAX);
 }
 
 function clamp(v: number, lo: number, hi: number): number {

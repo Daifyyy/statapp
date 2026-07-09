@@ -47,6 +47,8 @@ export function newSeason(
     leagueAccess?: LeagueAccess | null;
     /** Kumulativní investice do mládeže – přenáší se s klubem, ne s trenérem. */
     youth?: number;
+    /** Kumulativní investice do skautingu – také patří klubu. */
+    scouting?: number;
   } = {}
 ): SeasonState {
   const league = opts.teams ?? generateLeague(seed);
@@ -81,6 +83,7 @@ export function newSeason(
     morale: STARTING_MORALE,
     fitness: STARTING_FITNESS,
     youth: opts.youth ?? 0,
+    scouting: opts.scouting ?? 0,
     devBonus: 0,
     objective: seasonObjective(you, league, leagueId, leagueAccess),
     modifiers: [],

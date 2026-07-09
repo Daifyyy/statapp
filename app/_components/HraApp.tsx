@@ -34,7 +34,7 @@ import {
   nextTransition,
   EUROPE_LABEL,
 } from "@/lib/game/leagues";
-import { PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
+import { PLANS, PLAN_LABEL, PLAN_HINT } from "@/lib/game/plans";
 import {
   INSTRUCTIONS,
   INSTRUCTION_HINT,
@@ -48,11 +48,12 @@ import {
   EMPTY_SPEND,
   applyDevelopment,
   developmentPoints,
+  nextScouting,
   nextYouth,
   spendTotal,
 } from "@/lib/game/development";
 import type { DevSpend } from "@/lib/game/development";
-import { teamSeasonStats } from "@/lib/game/analysis";
+import { leagueGoalsPerTeamGame, teamSeasonStats, venueStats } from "@/lib/game/analysis";
 import { STYLE_LABEL } from "@/lib/game/scouting";
 import type { ScoutReport } from "@/lib/game/scouting";
 import { emptyProfile, startCareer, foldSeason, foldTournament } from "@/lib/game/profile";
@@ -84,6 +85,7 @@ import {
   DEV_YOUTH_MAX,
   HOME_BOOST_CAP,
   QUAL_ADVANCE,
+  SCOUT_LEVEL_MAX,
   STARTING_FITNESS,
   STARTING_REPUTATION,
 } from "@/lib/game/balance";
@@ -109,8 +111,6 @@ const NAV = [
   { href: "/predikce", label: "Tipy", emoji: "📈" },
   { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
 ];
-
-const PLANS: Plan[] = ["balanced", "open", "low_block", "press", "counter"];
 
 /** Data pro popup výsledku po odehraném kole. */
 interface ToastData {
@@ -147,7 +147,7 @@ async function saveEndpoint(next: SaveState): Promise<boolean> {
 function migrateSave(raw: unknown): SaveState | null {
   let save = raw as (SaveState & { version: number }) | null | undefined;
   if (!save) return null;
-  // Migrace se řetězí (5 → 6 → 7 → 8), ať starý save nezůstane viset na mezikroku.
+  // Migrace se řetězí (5 → 6 → 7 → 8 → 9), ať starý save nezůstane viset na mezikroku.
   if (save.version === 5) {
     save = {
       ...save,
@@ -178,6 +178,14 @@ function migrateSave(raw: unknown): SaveState | null {
       ...save,
       version: 8,
       current: save.current ? { ...save.current, rngSalt: RNG_SALT_LEAGUE } : null,
+    };
+  }
+  if (save.version === 8) {
+    // v9 přidal skauting jako 5. rozvojovou oblast (kumulativní investice klubu).
+    save = {
+      ...save,
+      version: 9,
+      current: save.current ? { ...save.current, scouting: 0 } : null,
     };
   }
   if (save.version === SAVE_VERSION) return save;
@@ -524,8 +532,10 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       teams: GameTeam[],
       teamId: number,
       leagueAccess: LeagueAccess | null,
-      // Postup/sestup si klub bereš s sebou → mládež jde s ním. Job market = nový klub → 0.
-      youth = 0
+      // Postup/sestup si klub bereš s sebou → akademie i skauti jdou s ním.
+      // Job market = nový klub → obojí od nuly (patří klubu, ne trenérovi).
+      youth = 0,
+      scouting = 0
     ) =>
       finishAndAdvance((_prev, current) =>
         newSeason(randomSeed(), teamId, {
@@ -535,6 +545,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           leagueAccess,
           season: current.season + 1,
           youth,
+          scouting,
         })
       ),
     [finishAndAdvance]
@@ -1110,7 +1121,8 @@ function GameView({
     teams: GameTeam[],
     teamId: number,
     leagueAccess: LeagueAccess | null,
-    youth?: number
+    youth?: number,
+    scouting?: number
   ) => void;
   onReset: () => void;
   /** Ukončí jen klubovou kariéru (reprezentace zůstane). */
@@ -1170,13 +1182,9 @@ function GameView({
         </div>
       </div>
 
-      {view !== "profile" && (
-        <ManagerSummaryBar save={save} managerName={managerName} />
-      )}
-
-      {view === "season" && !done && (
-        <RoleNote save={save} />
-      )}
+      {/* Přehled manažera (jméno, reputace, rekordy) žije v Profilu – tady by byl duplicita.
+          V Sezóně zůstává jen sezónní cíl; kontext angažmá je taky v Profilu. */}
+      {view === "season" && !done && <RoleNote state={s} />}
 
       {view === "profile" ? (
         <>
@@ -1185,6 +1193,7 @@ function GameView({
             reputation={save.manager.reputation}
             managerName={managerName}
             activeCareer
+            current={s}
             history={save.history}
             tournamentHistory={save.tournamentHistory ?? []}
           />
@@ -1267,92 +1276,48 @@ function Segment({
 }
 
 /** Rychlý přehled nad Sezóna/Kariéra tabem – ne totéž jako typ `ManagerProfile` z types.ts. */
-function ManagerSummaryBar({
-  save,
-  managerName,
-}: {
-  save: SaveState;
-  managerName: string | null;
-}) {
-  const rep = Math.round(save.manager.reputation);
-  const titles = save.history.filter((h) => h.champion).length;
-  const europe = save.history.filter((h) => h.europe !== "NONE").length;
+/**
+ * Jediné, co musí být vidět nad zápasem: co po tobě vedení chce. Prestiž klubu, očekávané
+ * umístění a dosah reputace se nemění během sezóny → patří do Profilu (`EngagementNote`),
+ * ne nad každý zápas.
+ */
+function RoleNote({ state }: { state: SeasonState }) {
   return (
-    <div className="mt-3 rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-foreground">
-            👔 {managerName || "Trenér"}
-          </div>
-          <div className="text-xs text-muted">{repTier(rep)}</div>
-        </div>
-        <div className="flex shrink-0 gap-3 text-center">
-          <ProfileStat label="Titulů" value={titles} accent={titles > 0} />
-          <ProfileStat label="Poháry" value={europe} />
-          <ProfileStat label="Sezón" value={save.history.length + 1} />
-        </div>
-      </div>
-      <div className="mt-2 flex items-center gap-2 text-xs">
-        <span className="text-muted">Reputace</span>
-        <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
-          <div
-            className="h-full rounded-full bg-positive"
-            style={{ width: `${rep}%` }}
-          />
-        </div>
-        <span className="tabular-nums font-semibold text-foreground">{rep}/100</span>
-      </div>
+    <div className="mt-2 flex items-center gap-1.5 rounded-xl border border-dashed border-border bg-surface/50 px-3 py-2 text-xs text-muted">
+      <span aria-hidden>🎯</span>
+      <span>
+        Cíl sezóny: <strong className="text-foreground">{state.objective.text}</strong>
+      </span>
     </div>
   );
 }
 
-function ProfileStat({
-  label,
-  value,
-  accent,
+/** Kontext angažmá pro Profil: koho vedeš, prestiž klubu, očekávání a dosah reputace. */
+function EngagementNote({
+  state,
+  reputation,
 }: {
-  label: string;
-  value: number;
-  accent?: boolean;
+  state: SeasonState;
+  reputation: number;
 }) {
+  const you = teamById(state.teams, state.yourTeamId);
+  const prestige = teamPrestige(you, state.leagueId, state.teams);
+  const exp = expectedRank(you, state.teams);
+  const reach = Math.round(reputation) + HIRE_MARGIN;
   return (
-    <div className="leading-tight">
-      <div
-        className={
-          "text-sm font-bold tabular-nums " +
-          (accent ? "text-warning" : "text-foreground")
-        }
-      >
-        {value}
+    <div>
+      <h3 className="text-xs font-semibold text-foreground">Aktuální angažmá</h3>
+      <div className="mt-2 rounded-xl border border-border bg-surface px-3 py-2.5 text-xs text-muted">
+        <p>
+          Vedeš <strong className="text-foreground">{you.name}</strong> ({state.leagueName}) —
+          prestiž klubu <strong className="text-foreground">{prestige}</strong>, očekává se{" "}
+          <strong className="text-foreground">{exp}. místo</strong>. S reputací tě teď osloví
+          kluby do prestiže ~{reach}.
+        </p>
+        <p className="mt-1">
+          Cíl sezóny: <strong className="text-foreground">{state.objective.text}</strong>
+        </p>
       </div>
-      <div className="text-[10px] text-muted">{label}</div>
-    </div>
-  );
-}
-
-/** Krátké přiblížení role: koho vedeš, prestiž klubu, očekávání a dosah reputace. */
-function RoleNote({ save }: { save: SaveState }) {
-  const s = save.current;
-  if (!s) return null;
-  const you = teamById(s.teams, s.yourTeamId);
-  const prestige = teamPrestige(you, s.leagueId, s.teams);
-  const exp = expectedRank(you, s.teams);
-  const reach = Math.round(save.manager.reputation) + HIRE_MARGIN;
-  return (
-    <div className="mt-2 rounded-xl border border-dashed border-border bg-surface/50 px-3 py-2 text-xs text-muted">
-      <p>
-        Vedeš <strong className="text-foreground">{you.name}</strong> ({s.leagueName}) —
-        prestiž klubu <strong className="text-foreground">{prestige}</strong>, očekává se{" "}
-        <strong className="text-foreground">{exp}. místo</strong>. S reputací tě teď osloví
-        kluby do prestiže ~{reach}.
-      </p>
-      <p className="mt-1 flex items-center gap-1.5">
-        <span aria-hidden>🎯</span>
-        <span>
-          Cíl sezóny:{" "}
-          <strong className="text-foreground">{s.objective.text}</strong>
-        </span>
-      </p>
     </div>
   );
 }
@@ -1433,8 +1398,13 @@ function NextMatch({
       {/* Aktivní dočasné efekty z eventů – jinak jsou pro hráče neviditelné */}
       <ActiveModifiers state={state} />
 
-      {/* Analýza z odehrané sezóny */}
-      <AnalysisPanel state={state} youId={you.id} oppId={next.opponent.id} />
+      {/* Objektivní čísla, kterými si hráč ověří skautovo hlášení */}
+      <EvidencePanel
+        state={state}
+        youId={you.id}
+        oppId={next.opponent.id}
+        isHome={next.isHome}
+      />
 
       {/* Zápasový plán */}
       <div className="mt-4">
@@ -1473,27 +1443,32 @@ function NextMatch({
 }
 
 /**
- * Scouting karta soupeře: HLÁŠENÝ styl + konfidence + traity.
- * Pozor: `scout.style` (pravda) se sem nesmí dostat – protitah by pak byl jistota.
+ * Scouting karta soupeře: HLÁŠENÝ styl + konfidence + odhalené traity (+ doporučení
+ * u detailního hlášení). Pozor: `scout.style` ani `scout.traits` (pravda) se sem nesmí
+ * dostat – protitah by pak byl jistota. Karta ukazuje jen `reported*`.
  */
 function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) {
   const pct = Math.round(scout.confidence * 100);
-  const sure = scout.confidence >= 0.9;
+  const q = scout.quality;
+  const confTone =
+    q === "detailed"
+      ? "bg-positive/15 text-positive"
+      : q === "standard"
+        ? "bg-border/60 text-muted"
+        : "bg-warning/15 text-warning";
   return (
     <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-foreground">🔍 Scouting</span>
         <span className="flex items-center gap-1.5">
           <span className="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium text-muted">
-            {sure ? "" : "spíš "}
-            {STYLE_LABEL[scout.reportedStyle]}
+            {scout.reportedStyle === null
+              ? "styl neznámý"
+              : (q === "detailed" ? "" : "spíš ") + STYLE_LABEL[scout.reportedStyle]}
           </span>
           <span
-            className={
-              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold " +
-              (sure ? "bg-positive/15 text-positive" : "bg-warning/15 text-warning")
-            }
-            title="Spolehlivost hlášení skautů. Zbytek času se mohou splést."
+            className={"rounded-full px-1.5 py-0.5 text-[10px] font-semibold " + confTone}
+            title={`Spolehlivost hlášení. Roste s tím, kolik toho soupeř odehrál (zatím ${scout.sample} zápasů), jestli jste se už potkali, a s investicí do skautingu.`}
           >
             {pct} %
           </span>
@@ -1502,6 +1477,16 @@ function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) 
       <p className="mt-1 text-[11px] text-muted">
         <span className="text-foreground">{oppName}:</span> {scout.note}
       </p>
+      {q !== "detailed" && (
+        <p className="mt-1 text-[10px] italic text-muted">
+          Skauti nemuseli vidět všechno — soupeř může mít i rysy, které nehlásí.
+        </p>
+      )}
+      {scout.suggestion && (
+        <p className="mt-2 rounded-lg bg-positive/10 px-2 py-1 text-[11px] text-foreground">
+          🎯 Skauti radí: <strong>{scout.suggestion.text}</strong>
+        </p>
+      )}
     </div>
   );
 }
@@ -1687,79 +1672,76 @@ function EventCard({
   );
 }
 
-function AnalysisPanel({
+/**
+ * Objektivní čísla, ze kterých `scoutOpponent` odvozuje styl soupeře — aby si hráč mohl
+ * skautovo (zašuměné) hlášení ověřit sám. Proto se ukazuje jen to, co s volbou taktiky
+ * souvisí, a **venue-specificky**: pro nadcházející zápas platí tvoje domácí čísla proti
+ * jeho venkovním, ne celkové průměry. Pozice/body/čistá konta jsou v tabulce, ne tady.
+ */
+function EvidencePanel({
   state,
   youId,
   oppId,
+  isHome,
 }: {
   state: SeasonState;
   youId: number;
   oppId: number;
+  /** Hraješ tenhle zápas doma? Řídí, která polovina statistik je relevantní. */
+  isHome: boolean;
 }) {
   const a = teamSeasonStats(state, youId);
   const b = teamSeasonStats(state, oppId);
   if (a.played === 0 && b.played === 0) {
     return (
       <p className="mt-3 text-center text-[11px] text-muted">
-        Analýza formy naskočí po prvních odehraných kolech.
+        Čísla soupeře naskočí po prvních odehraných kolech.
       </p>
     );
   }
-  const rows: { label: string; a: string; b: string; better?: "a" | "b" }[] = [
-    {
-      label: "Pozice",
-      a: a.rank ? `${a.rank}.` : "–",
-      b: b.rank ? `${b.rank}.` : "–",
-      better: a.rank && b.rank ? (a.rank < b.rank ? "a" : a.rank > b.rank ? "b" : undefined) : undefined,
-    },
-    { label: "Body", a: String(a.points), b: String(b.points), better: cmp(a.points, b.points) },
-    {
-      label: "Ø vstřelené",
-      a: a.avgFor.toFixed(2),
-      b: b.avgFor.toFixed(2),
-      better: cmp(a.avgFor, b.avgFor),
-    },
-    {
-      label: "Ø obdržené",
-      a: a.avgAgainst.toFixed(2),
-      b: b.avgAgainst.toFixed(2),
-      better: cmp(b.avgAgainst, a.avgAgainst), // méně = lépe
-    },
-    {
-      label: "Čistá konta",
-      a: `${a.cleanSheetPct} %`,
-      b: `${b.cleanSheetPct} %`,
-      better: cmp(a.cleanSheetPct, b.cleanSheetPct),
-    },
+  const you = venueStats(a, isHome);
+  const opp = venueStats(b, !isHome);
+  const leagueAvg = leagueGoalsPerTeamGame(state.results);
+  const rows: { label: string; a: number; b: number; lowerIsBetter?: boolean }[] = [
+    { label: "Ø vstřelené", a: you.avgFor, b: opp.avgFor },
+    { label: "Ø obdržené", a: you.avgAgainst, b: opp.avgAgainst, lowerIsBetter: true },
   ];
+
   return (
     <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
-      <div className="mb-1 text-center text-xs font-semibold text-foreground">
-        Analýza sezóny
+      <div className="mb-0.5 text-center text-xs font-semibold text-foreground">
+        Čísla soupeře
+      </div>
+      <div className="mb-2 text-center text-[10px] text-muted">
+        {isHome ? "ty doma · soupeř venku" : "ty venku · soupeř doma"} · ⌀ liga{" "}
+        {leagueAvg.toFixed(2)} gólu/zápas
       </div>
       <div className="space-y-1">
-        {rows.map((r) => (
-          <div key={r.label} className="grid grid-cols-3 items-center text-xs">
-            <span
-              className={
-                "text-left tabular-nums " +
-                (r.better === "a" ? "font-bold text-positive" : "text-foreground")
-              }
-            >
-              {r.a}
-            </span>
-            <span className="text-center text-[11px] text-muted">{r.label}</span>
-            <span
-              className={
-                "text-right tabular-nums " +
-                (r.better === "b" ? "font-bold text-positive" : "text-foreground")
-              }
-            >
-              {r.b}
-            </span>
-          </div>
-        ))}
-        {/* Forma */}
+        {rows.map((r) => {
+          // „Lepší" se poměřuje vůči LIZE, ne vůči soupeři – přesně tak, jak styl
+          // odvozuje scouting (útok/obrana proti ligovému průměru).
+          const aGood = r.lowerIsBetter ? r.a < leagueAvg : r.a > leagueAvg;
+          const bGood = r.lowerIsBetter ? r.b < leagueAvg : r.b > leagueAvg;
+          return (
+            <div key={r.label} className="grid grid-cols-3 items-center text-xs">
+              <span
+                className={
+                  "text-left tabular-nums " + (aGood ? "font-bold text-positive" : "text-muted")
+                }
+              >
+                {r.a.toFixed(2)}
+              </span>
+              <span className="text-center text-[11px] text-muted">{r.label}</span>
+              <span
+                className={
+                  "text-right tabular-nums " + (bGood ? "font-bold text-positive" : "text-muted")
+                }
+              >
+                {r.b.toFixed(2)}
+              </span>
+            </div>
+          );
+        })}
         <div className="grid grid-cols-3 items-center text-xs">
           <span className="flex gap-0.5">
             <FormDots form={a.form} />
@@ -1770,12 +1752,16 @@ function AnalysisPanel({
           </span>
         </div>
       </div>
+      <p className="mt-2 text-center text-[10px] text-muted">
+        Soupeř odehrál {b.played}{" "}
+        {b.played === 1 ? "zápas" : b.played < 5 ? "zápasy" : "zápasů"}
+        {opp.played !== b.played
+          ? ` (z toho ${opp.played} ${isHome ? "venku" : "doma"})`
+          : ""}
+        .
+      </p>
     </div>
   );
-}
-
-function cmp(x: number, y: number): "a" | "b" | undefined {
-  return x > y ? "a" : x < y ? "b" : undefined;
 }
 
 function FormDots({ form }: { form: ("W" | "D" | "L")[] }) {
@@ -1977,7 +1963,13 @@ async function fetchGameLeagueTeams(
   };
 }
 
-const DEV_AREAS: (keyof DevSpend)[] = ["attack", "defense", "youth", "stadium"];
+const DEV_AREAS: (keyof DevSpend)[] = [
+  "attack",
+  "defense",
+  "youth",
+  "stadium",
+  "scouting",
+];
 
 /**
  * Rozdělení rozvojových bodů mezi sezónami. Body dává výsledek sezóny (umístění, cíl,
@@ -1999,6 +1991,7 @@ function ClubOverview({ state }: { state: SeasonState }) {
   );
   const stadiumMaxed = you.homeBoost >= HOME_BOOST_CAP - 1e-9;
   const youthPct = Math.max(0, Math.min(1, state.youth / DEV_YOUTH_MAX));
+  const scoutPct = Math.max(0, Math.min(1, state.scouting / SCOUT_LEVEL_MAX));
 
   return (
     <div className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
@@ -2037,11 +2030,18 @@ function ClubOverview({ state }: { state: SeasonState }) {
           right={`${state.youth}/${DEV_YOUTH_MAX}`}
           tone="muted"
         />
+        <DevMeter
+          label="Skauting"
+          pct={scoutPct}
+          right={`${state.scouting}/${SCOUT_LEVEL_MAX}`}
+          tone="muted"
+        />
       </div>
 
       <p className="mt-2 text-[10px] leading-tight text-muted">
         Stadion je <strong className="text-foreground">trvalý</strong> (neregreduje). Útok a
         obrana se mezi sezónami mírně vrací k průměru ligy — mládež ten propad tlumí.
+        Skauting sílu nezvyšuje, jen zpřesňuje hlášení o soupeři.
       </p>
     </div>
   );
@@ -2113,6 +2113,7 @@ function DevelopmentPanel({
   spend,
   left,
   youth,
+  scouting,
   homeBoost,
   onChange,
 }: {
@@ -2120,6 +2121,7 @@ function DevelopmentPanel({
   spend: DevSpend;
   left: number;
   youth: number;
+  scouting: number;
   homeBoost: number;
   onChange: (s: DevSpend) => void;
 }) {
@@ -2140,10 +2142,12 @@ function DevelopmentPanel({
     const next = { ...spend, [area]: Math.max(0, spend[area] + delta) };
     // Nepřekroč přidělený rozpočet.
     if (spendTotal(next) > points) return;
-    // Mládež i stadion mají vlastní strop (kumulativní napříč sezónami) – bod nad strop
-    // by se tiše ztratil (`applyDevelopment` ho ořízne), tak ho radši nejde ani přidat.
+    // Mládež, stadion i skauting mají vlastní strop (kumulativní napříč sezónami) – bod nad
+    // strop by se tiše ztratil (`applyDevelopment`/`nextScouting` ho ořízne), tak ho radši
+    // nejde ani přidat.
     if (area === "youth" && youth + next.youth > DEV_YOUTH_MAX) return;
     if (area === "stadium" && next.stadium > stadiumRoom) return;
+    if (area === "scouting" && scouting + next.scouting > SCOUT_LEVEL_MAX) return;
     onChange(next);
   };
 
@@ -2164,12 +2168,16 @@ function DevelopmentPanel({
         {DEV_AREAS.map((area) => {
           const atYouthCap = area === "youth" && youth + spend.youth >= DEV_YOUTH_MAX;
           const atStadiumCap = area === "stadium" && spend.stadium >= stadiumRoom;
-          const atCap = atYouthCap || atStadiumCap;
+          const atScoutCap =
+            area === "scouting" && scouting + spend.scouting >= SCOUT_LEVEL_MAX;
+          const atCap = atYouthCap || atStadiumCap || atScoutCap;
           const hint = atYouthCap
             ? "Akademie na maximu"
             : atStadiumCap
               ? "Stadion na maximu"
-              : DEV_AREA_HINT[area];
+              : atScoutCap
+                ? "Skauti na maximu"
+                : DEV_AREA_HINT[area];
           return (
             <div key={area} className="flex items-center gap-2">
               <span className="w-20 shrink-0 text-xs text-foreground" title={DEV_AREA_HINT[area]}>
@@ -2226,7 +2234,8 @@ function SeasonDone({
     teams: GameTeam[],
     teamId: number,
     leagueAccess: LeagueAccess | null,
-    youth?: number
+    youth?: number,
+    scouting?: number
   ) => void;
   onError: (e: string | null) => void;
 }) {
@@ -2256,7 +2265,15 @@ function SeasonDone({
       // Investice se počítá vůči LIZE, ve které jsi ji vydělal (strop `DEV_LEAGUE_CEILING`).
       const developed = applyDevelopment(teamById(s.teams, s.yourTeamId), spend, s.teams);
       const roster = injectYourTeam(teams, developed);
-      onSwitch(targetId, targetName, roster, s.yourTeamId, leagueAccess, nextYouth(s.youth, spend));
+      onSwitch(
+        targetId,
+        targetName,
+        roster,
+        s.yourTeamId,
+        leagueAccess,
+        nextYouth(s.youth, spend),
+        nextScouting(s.scouting, spend)
+      );
     } catch (e) {
       onError(e instanceof Error ? e.message : "Nepodařilo se načíst ligu.");
       setMoving(false);
@@ -2344,6 +2361,7 @@ function SeasonDone({
             spend={spend}
             left={left}
             youth={s.youth}
+            scouting={s.scouting}
             homeBoost={teamById(s.teams, s.yourTeamId).homeBoost}
             onChange={setSpend}
           />
@@ -2802,6 +2820,8 @@ function TournamentView({
           reputation={save.manager.reputation}
           managerName={managerName}
           activeCareer
+          // Blok „Aktuální angažmá" se ukáže jen když paralelně běží i klubová kariéra.
+          current={save.current}
           history={save.history}
           tournamentHistory={save.tournamentHistory ?? []}
         />
@@ -3428,6 +3448,7 @@ function ProfilePanel({
   reputation,
   managerName,
   activeCareer,
+  current,
   history = [],
   tournamentHistory = [],
 }: {
@@ -3435,6 +3456,8 @@ function ProfilePanel({
   reputation: number | null;
   managerName: string | null;
   activeCareer: boolean;
+  /** Běžící klubová sezóna – zdroj bloku „Aktuální angažmá". Chybí v repre režimu. */
+  current?: SeasonState | null;
   /** Klubové sezóny (aktuální kariéra) – pro historii v přehledu manažera. */
   history?: SeasonSummary[];
   /** Dohrané reprezentační turnaje. */
@@ -3475,6 +3498,8 @@ function ProfilePanel({
           </div>
         )}
       </div>
+
+      {current && rep != null && <EngagementNote state={current} reputation={rep} />}
 
       {/* Kariérní rekordy */}
       <div>

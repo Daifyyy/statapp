@@ -47,3 +47,15 @@ export function recentCleanSheets(results: MatchResult[], teamId: number, n: num
 export function playedCount(results: MatchResult[], teamId: number): number {
   return teamMatches(results, teamId).length;
 }
+
+/**
+ * Potkaly se ty dva týmy už v téhle sezóně (turnaji)? Zdroj „známosti" pro konfidenci
+ * scoutingu – odvetu proti soupeři, kterého jsi už hrál, přečteš líp než premiéru.
+ */
+export function hasMet(results: MatchResult[], teamId: number, oppId: number): boolean {
+  return results.some(
+    (r) =>
+      (r.homeId === teamId && r.awayId === oppId) ||
+      (r.homeId === oppId && r.awayId === teamId)
+  );
+}

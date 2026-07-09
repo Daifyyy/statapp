@@ -436,7 +436,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`updateReputation` dle příčky+over/under-performance+**cíle**, `isHireable`/`expectedRank`/
   `HIRE_MARGIN`; **strop reputace** `applyCeiling`: kladný přírůstek nesmí vytlačit reputaci nad
   `prestiž vedeného týmu + REP_CEILING_MARGIN` → série titulů se slabým klubem nevynese na elitní
-  tým, viz níže „Paralelní kariéra"), `analysis.ts` (`teamSeasonStats`),
+  tým, viz níže „Paralelní kariéra"), `analysis.ts` (`teamSeasonStats` + `venueStats`/
+  `leagueGoalsPerTeamGame` pro panel „Čísla soupeře"),
   `development.ts`/`fitness.ts`/`instructions.ts`
   (Phase B, viz níže), `balance.ts` (**laditelné konstanty**).
 - **Agency je oddělená od ligy** (`lib/game/agency.ts`, příprava na reprezentační turnaje):
@@ -460,15 +461,27 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     6 kol × 8 soupeřů). Teď vnořeně `deriveSeed(deriveSeed(seed + rngSalt, 70000 + round), oppId)`,
     0 kolizí. Mění to determinismus scoutských omylů (ne balanc — `sim-game` sekce 1 je bit-identická).
 - **Manažerská agency (Phase 2):** `scouting.ts` (`scoutOpponent` → styl attacking/defensive/balanced
-  + traity + CZ popis; od Phase B hlásí styl **s konfidencí**), `plans.ts` (5 plánů
-  `balanced/open/low_block/press/counter`, `resolvePlan(plan, oppStyle)` = base × counter; správný
-  protitah = výhoda, špatný = postih, ±`COUNTER_*`), `morale.ts`
+  + traity + CZ popis; hlásí **s proměnlivou konfidencí**, viz „Scouting" níže), `plans.ts` (5 plánů
+  `balanced/open/low_block/press/counter`, `resolvePlan(plan, oppStyle)` = `PLAN_BASE` ×
+  `COUNTER_MATRIX[plan][styl]`), `morale.ts`
   (`moraleFactor` ±6 % λ, `updateMorale` po kole dle výsledku+překvapení), `events.ts` (deterministické
   eventy dle `(seed,round)`, `maybeEvent`/`applyEventChoice` → morálka / dočasný `Modifier{untilRound}`).
-  `SeasonState` nese `plan`/`morale`/`objective`/`modifiers`/`pendingEvent`. Empiricky: adaptivní plán
-  ~+2.4 b/sezónu vs vždy balanced (znatelné, ne overpowered).
-- **Kariéra + role:** UI ukazuje **profil trenéra** + „RoleNote" (koho vedeš, prestiž, očekávání, dosah
-  reputace, **sezónní cíl**). Konec sezóny → hodnocení (`seasonHeadline`/`seasonTone`) + změna reputace
+  `SeasonState` nese `plan`/`morale`/`objective`/`modifiers`/`pendingEvent`.
+  - **Counter je explicitní tabulka, ne čtyři šablony.** `COUNTER_MATRIX` (`balance.ts`) dá každé
+    dvojici plán×styl vlastní tvar; `balanced` je řádek samých 1.0 = vědomě bezpečná volba. Rozsah
+    hlídá `COUNTER_MAX_EFFECT` (0.12) + test — není to násobič, ale **dokumentovaný rozpočet**.
+  - **`counter` dřív dominoval `balanced`.** Základ 1.02/0.90 byl proti všem třem stylům zdarma lepší
+    než 1.0/1.0 a na kondici taky (`PLAN_FATIGUE` 2 vs 3) → „Vyvážený" byla mrtvá volba. Dnes
+    **0.94/0.90** (cenu nese útok) a únava 3. Obranu **nesnižovat na 0.88** – podlaha
+    `0.88 × counter 0.90 × morálka × instrukce × event` prorazí `ADJUST_MIN` a `sim-game` sekce 3
+    vyskočí z 0.16 % na 0.28 % clampnutých zápasů. Kryto testem „žádný plán nedominuje balanced"
+    (λ osy **i** `PLAN_FATIGUE`; jedinou povolenou výjimkou na kondici je pasivní `low_block`).
+  - `recommendPlan(styl)` = argmax `planScore` (útok − obdržené). Sdílí ho doporučení skautů
+    i `pickPlan` v `scripts/simGame.ts` → jeden zdroj pravdy.
+- **Kariéra + role:** UI ukazuje **sezónní cíl** („RoleNote" nad zápasem). Kdo tě vede, prestiž klubu,
+  očekávané umístění a dosah reputace se v sezóně nemění → jsou v Profilu (`EngagementNote`), ne nad
+  každým zápasem; **přehled manažera** (jméno/reputace/rekordy) je jen v Profilu, jinde byl duplicita.
+  Konec sezóny → hodnocení (`seasonHeadline`/`seasonTone`) + změna reputace
   (vč. bonusu za splněný cíl); pak **Pokračovat s klubem** (drift) nebo **Změnit tým** = job market
   (`isHireable`). **Start kariéry** je gated: nová kariéra startuje na `STARTING_REPUTATION` (~30) →
   první výběr klubu jde jen po `isHireable` (ne rovnou top klub).
@@ -495,16 +508,18 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   trvale. Reputace zůstává **per-kariéra** (žádné lifetime skóre).
 - **Perzistence = profil (DB), přihlášení povinné.** Tabulka `GameSave` (`userId @id`, `state Json`).
   API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `profile`/`plan`/`instruction`/
-  `morale`/`fitness`/… + `current` nullable + size cap 512 KB + rate-limit; ukládá **původní**
+  `morale`/`fitness`/`scouting`/… + `current` nullable + size cap 512 KB + rate-limit; ukládá **původní**
   objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version,
   profile:ManagerProfile, manager:{reputation}, current:SeasonState|null, history[]}`;
-  `SAVE_VERSION` = **8**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
-  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7 → 8) a jen doplní nová pole; teprve neznámá verze se
+  `SAVE_VERSION` = **9**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
+  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7 → 8 → 9) a jen doplní nová pole; teprve neznámá verze se
   zahodí. „Nová kariéra" nemaže profil (jen `current:null`).
 - **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; **bez aktivní kariéry → `ManagerHub`**
   (profil + „Začni kariéru" → gated výběr ligy→klubu, sekce „Nejvyšší ligy" / „2. ligy"); s kariérou →
-  sezóna (predikce + **scouting** (hlášený styl + konfidence) + **morálka** + **kondice** (`FitnessBar`,
-  ukazuje i posun kondice za kolo dle plánu) + analýza + **plán** + **vedlejší instrukce**
+  sezóna (predikce + **scouting** (`ScoutCard`: hlášený styl / „styl neznámý", konfidence obarvená dle
+  `quality`, odhalené traity, u `detailed` řádek „🎯 Skauti radí") + **morálka** + **kondice**
+  (`FitnessBar`, ukazuje i posun kondice za kolo dle plánu) + **„Čísla soupeře"** (`EvidencePanel`) +
+  **plán** + **vedlejší instrukce**
   (`InstructionPicker`) + **event karta**, popup `MatchResultToast`, tabulka, forma, cíl) +
   taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab): hlavička + kariérní rekordy +
   **klub vs reprezentace** (reprezentace = placeholder „🔜 připravujeme", Phase 4) + `AchievementsGrid`
@@ -541,13 +556,18 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Rozvoj klubu mezi sezónami** (`lib/game/development.ts`, čisté + testy; laděno `npm run sim-game`):
   za dohranou sezónu dostaneš **rozvojové body** (`developmentPoints`: percentil umístění + splněný
   cíl + titul/Evropa/postup + reputace ≥ 65, sestup ubírá, `devBonus` z eventů) a rozdělíš je mezi
-  **útok / obranu / mládež / stadion** (`DevSpend`, UI `DevelopmentPanel` v `SeasonDone`).
+  **útok / obranu / mládež / stadion / skauting** (`DevSpend`, UI `DevelopmentPanel` v `SeasonDone`).
   Progrese je záměrně pomalá — **jedna dobrá sezóna nesmí udělat top tým**. Drží to tři stropy:
   `MAX_DEV_POINTS` (6/sezónu), malý zisk na bod (`DEV_ATTACK_STEP` 0.08) a `DEV_LEAGUE_CEILING`
   (nesmíš přeskočit špičku ligy o víc než 5 %). Empiricky: ze středu 20týmové ligy do Evropy kolem
-  5.–6. sezóny, medián prvního titulu 7. sezóna; **bez rozvoje** tým visí na ~10. místě napořád.
-  Nevyužité body propadají; při **změně klubu** se ztrácí i mládež (patří klubu).
-  Postup/sestup si klub bereš s sebou → investice i mládež jdou s ním.
+  5.–6. sezóny, medián prvního titulu 7.–8. sezóna; **bez rozvoje** tým visí na ~10. místě napořád.
+  Nevyužité body propadají; při **změně klubu** se ztrácí mládež i skauting (patří klubu).
+  Postup/sestup si klub bereš s sebou → investice, mládež i skauti jdou s ním.
+  - **Skauting je jediná oblast, která nesahá na λ** (`SeasonState.scouting`, `nextScouting`,
+    strop `SCOUT_LEVEL_MAX` 5). Kupuje **informaci**: `SCOUT_LEVEL_STEP` (0.04/bod) zvedá konfidenci
+    hlášení. Bez investice se hráč nikdy nedostane na `detailed` (strop je 0.45 + vzorek 0.25 +
+    odveta 0.08 = 0.78) → **doporučení skautů je odměna za investici**. `applyDevelopment` ho proto
+    ignoruje a `sim-game` sekce 4 ho **nezměří** (nemá λ efekt) — ladí se playtestem.
   - Oblasti se liší **výnosem i trvanlivostí** (mezní hodnota 1 bodu, průměrný tým, 19+19 zápasů):
     útok **+1.02 b/sezónu**, obrana **+0.95**, stadion **+0.43 — zato navždy** (drift `homeBoost`
     neregreduje, na rozdíl od útoku/obrany). Mládež (`youthRegression`) je podpůrná: sama o sobě
@@ -557,7 +577,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   - **Útok vs obrana:** λ-parita kroků (`DEV_ATTACK_STEP == DEV_DEFENSE_STEP`) sama nestačila —
     dokud byla domácí výhoda multiplikativní, byl útok o ~38 % výnosnější bez ohledu na krok.
     Rozhodla až **aditivní domácí výhoda**. Dnes `sim-game` sekce 4 (vše do jedné oblasti,
-    10 sezón): útok Ø 4.2. místo / 64 titulů, obrana Ø 5.5. / 37, stadion Ø 6.9. / 10.
+    12 sezón): útok Ø 3.9. místo / 85 titulů, obrana Ø 5.2. / 32, stadion Ø 6.4. / 16.
     Zbylý náskok útoku je **fyzikální**: `DEV_LEAGUE_CEILING` dá průměrnému týmu 14 bodů prostoru
     v útoku, ale jen 10 v obraně — obranu zdola omezuje nula, útok shora nic.
 - **`driftTeams` (`career.ts`) — tři opravené chyby.** Mezisezónní drift teď regreduje ke
@@ -575,11 +595,24 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     (`PLAN_FATIGUE` 8), než stihne `FITNESS_RECOVERY` (5) doplnit; `low_block` regeneruje.
     `fitnessFactor` = **jen postih** (plná kondice 1.0, nula 0.9), skládá se jako morálka
     (útok ×, obdržené ÷). „Vždycky presuj" tím přestane být zadarmo.
-  - **Nejistý scouting** (`scoutOpponent` vrací `style` = pravda, `reportedStyle` + `confidence`
-    = co vidí hráč, `SCOUT_CONFIDENCE` 0.75). `resolvePlan` countruje podle **pravdy**, UI ukazuje
-    jen hlášení → protitah přestal být jistota. Deterministické dle `(seed, kolo, soupeř)`
-    (vlastní RNG stream, salt 70000) → stabilní přes rendery i reload. Event „Nabídka skautského
-    týmu" konfidenci dočasně zvedne (`scoutBoostUntilRound`).
+  - **Scouting = škála od mlhy k jistotě** (`scouting.ts`). `scoutOpponent` vrací **dvě vrstvy**:
+    pravdu (`style`, `traits` – čte je `resolvePlan`/`resolveInstruction`) a hlášení
+    (`reportedStyle`, `reportedTraits` – jen ty patří do UI). Konfidence **není konstanta**
+    (dřív fixních 0.75 → scouting byl dekorace): `scoutConfidence` = `SCOUT_CONFIDENCE_MIN` (0.45)
+    + vzorek odehraných zápasů soupeře (max +0.25) + odveta `hasMet` (+0.08) + investice
+    (`scouting × 0.04`), strop 0.95. Event „Nabídka skautského týmu" ji na pár kol vytáhne rovnou
+    na strop (`scoutBoostUntilRound`). V turnaji vychází nízká sama (soupeř má 0–3 zápasy) →
+    **žádná speciální větev**; `AgencyState.scouting?` je volitelné jako `youth?`.
+    - Z konfidence plyne `ScoutQuality`: **`vague`** (< 0.60) styl vůbec neurčí (`reportedStyle:
+      null`), **`standard`** (< 0.85) zašuměné hlášení, **`detailed`** = hlášení + **doporučený
+      protitah** (`suggestion` = `recommendPlan(reportedStyle)` + `recommendInstruction(reportedTraits)`).
+      Doporučení se staví **z hlášení, ne z pravdy** → nejde jím obejít nejistotu (kryto testem).
+    - **Traity nikdy nelžou, jen nemusí být vidět.** `reportedTraits ⊆ traits` podle *síly* traitu
+      (`SCOUT_REVEAL_VAGUE` 0.6 / `SCOUT_REVEAL_STANDARD` 0.25), deterministicky a **bez dalšího RNG**.
+      Skrytý `punishedBy` trait tě pokousá → **instrukce přestala být jistota** (dřív byla: šum
+      dostával jen styl). Tím má stejnou míru nejistoty jako counter plánu.
+    - Šum stylu je deterministický dle `(seed, kolo, soupeř)` (vlastní RNG stream, salt 70000) →
+      stabilní přes rendery i reload.
   - **Vedlejší instrukce** (`instructions.ts`, `Instruction`): druhá volba vedle plánu, která čte
     **dřív mechanicky mrtvé `scout.traits`** (do `resolvePlan` šel jen `style`). Správná instrukce
     proti odpovídajícímu traitu = bonus, špatná = postih; efekt ±5 % (menší než ±10 % u counteru).
@@ -600,6 +633,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   **Číselné efekty na kartě:** `describeEffect(effect)` rozloží volbu na barevné chip-y
   (Morálka +7 / Útok +6 % · 2 kola / Obrana pevnější / Kondice −8 / Scouting jistější / ±rozvojový
   bod; `concede<1` = dobré, `>1` = špatné) → `EventCard` je zobrazuje, hráč nevybírá naslepo.
+- **Panel „Čísla soupeře"** (`EvidencePanel` v `HraApp.tsx`, dřív „Analýza sezóny") = **objektivní
+  protiváha skautskému hlášení**. `scoutOpponent` odvozuje styl z útoku/obrany soupeře vůči ligovému
+  průměru, ale hlásí ho zašuměně → panel ukazuje **tatáž čísla**, aby si je hráč mohl ověřit sám:
+  Ø vstřelené / Ø obdržené **ve venue tohoto zápasu** (`venueStats` – ty doma × soupeř venku, dřív
+  mrtvá pole `homeAvgFor`/`awayAvgFor`) porovnané s `leagueGoalsPerTeamGame`, + forma a velikost
+  vzorku (ta koresponduje s konfidencí). Pozice, body a čistá konta z panelu **zmizely** – s volbou
+  taktiky nesouvisí a duplikovaly tabulku. Panel je jen v lize (`analysis.ts` importuje `engine.ts`).
 - **Turnajové jádro** (`lib/game/tournament.ts`, čisté + `tournament.test.ts`; sdílené pro
   reprezentační turnaje i budoucí klubový pohár): skupiny + vyřazovací pavouk, deterministické
   dle seedu, **offline**. Formáty `EURO_FORMAT` (6×4, top 2 + 4 nejlepší třetí = 16 → osmifinále)
@@ -676,7 +716,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     (`SeasonSummary.yourPrestige` = `teamPrestige`, `TournamentSummary.teamPrestige` = `nationPrestige`,
     fallback bez ní = strop 100). Ladicí konstanta – `sim-game` reputaci mezi ligami neměří.
 - **Přehled klubu** (`ClubOverview` v záložce Sezóna): síla útoku/obrany vs ⌀ ligy (barevně), hvězdy,
-  stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež + legenda co mezi
+  stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež, skauting + legenda co mezi
   sezónami regreduje. Čistě čte `SeasonState`. `DEV_AREA_HINT` texty zpřesněny o trvanlivost.
 - **Historie v profilu:** `ProfilePanel` ukazuje `SeasonRows` (klubové sezóny, vytknuto z `HistoryView`)
   i `TournamentRows` (reprezentační turnaje z `tournamentHistory`) — v Profil tabu klubu, v `ManagerHub`

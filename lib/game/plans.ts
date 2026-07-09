@@ -1,10 +1,13 @@
 // Zápasové plány trenéra (nahrazují původní Tactic). Každý plán má základní efekt na
-// λ tvého týmu (balance.ts) + COUNTER proti stylu soupeře: správný protitah = výhoda,
-// špatný = postih. Čisté funkce; výsledek čte simulate.ts přes SideAdjust.
+// λ tvého týmu (`PLAN_BASE`) + COUNTER proti stylu soupeře (`COUNTER_MATRIX`): správný
+// protitah = výhoda, špatný = postih. Čisté funkce; výsledek čte simulate.ts přes SideAdjust.
+//
+// Návrhový invariant: **žádný plán nesmí být lepší než `balanced` proti všem stylům.**
+// Každý za svou výhodu někde platí – jinak by „Vyvážený" byl mrtvá volba (to byl přesně
+// případ `counter`, dokud měl základ 1.02/0.90). Kryje to test „dominance".
 
-import { COUNTER_BONUS, COUNTER_PENALTY, PLAN_BASE } from "./balance";
-import type { OppStyle } from "./scouting";
-import type { Plan } from "./types";
+import { COUNTER_MATRIX, PLAN_BASE } from "./balance";
+import type { OppStyle, Plan } from "./types";
 
 export const PLAN_LABEL: Record<Plan, string> = {
   balanced: "Vyvážený",
@@ -15,53 +18,52 @@ export const PLAN_LABEL: Record<Plan, string> = {
 };
 
 export const PLAN_HINT: Record<Plan, string> = {
-  balanced: "Bez úprav – vyrovnaný přístup.",
-  open: "Víc dáš i dostaneš. Sedí na zataženého soupeře.",
-  low_block: "Zavři obranu a uber vzadu. Dobré proti silnému útoku.",
-  press: "Vysoký presink. Rozebere pasivní tým, ale riziko vzadu proti ofenzivnímu.",
-  counter: "Pevná obrana a rychlé protiútoky. Ideál proti otevřenému soupeři.",
+  balanced: "Bez úprav a bez rizika. Když o soupeři nic nevíš, nic neztratíš.",
+  open: "Nejvíc gólů na obou stranách. Otevře zataženého, proti útočnému je to divočina.",
+  low_block: "Zavři obranu a šetři síly (jediný plán, který regeneruje). Vepředu skoro nic.",
+  press: "Vysoký presink rozebere pasivní tým. Proti ofenzivnímu necháš díry za obranou.",
+  counter: "Vzadu pevný, vepředu opatrný. Proti otevřenému soupeři nejsilnější protitah.",
 };
 
-/** Efekt plánu s ohledem na styl soupeře. Multiplikativní úprava na PLAN_BASE. */
+/** Všechny plány k vykreslení v UI. */
+export const PLANS: Plan[] = ["balanced", "open", "low_block", "press", "counter"];
+
+/** Efekt plánu s ohledem na styl soupeře. Multiplikativní úprava na `PLAN_BASE`. */
 export function resolvePlan(
   plan: Plan,
   oppStyle: OppStyle
 ): { attack: number; concede: number } {
   const base = PLAN_BASE[plan];
-  const eff = counterEffect(plan, oppStyle);
+  const eff = COUNTER_MATRIX[plan][oppStyle];
   return {
     attack: base.attack * eff.atk,
     concede: base.concede * eff.conc,
   };
 }
 
-/** Násobky (1 = neutrál) za správný/špatný protitah vůči stylu soupeře. */
-function counterEffect(
-  plan: Plan,
-  oppStyle: OppStyle
-): { atk: number; conc: number } {
-  const up = 1 + COUNTER_BONUS; // útok nahoru = dobré
-  const down = 1 - COUNTER_BONUS; // obdržené dolů = dobré
-  const risk = 1 + COUNTER_PENALTY; // obdržené nahoru = špatné
-  const toothless = 1 - COUNTER_PENALTY; // útok dolů = špatné
-  switch (plan) {
-    case "counter":
-      if (oppStyle === "attacking") return { atk: up, conc: down }; // trestej otevřeného
-      if (oppStyle === "defensive") return { atk: toothless, conc: 1 }; // není co chytat
-      return { atk: 1, conc: 1 };
-    case "low_block":
-      if (oppStyle === "attacking") return { atk: 1, conc: down }; // ustojíš tlak
-      if (oppStyle === "defensive") return { atk: toothless, conc: 1 }; // zbytečně pasivní
-      return { atk: 1, conc: 1 };
-    case "press":
-      if (oppStyle === "defensive") return { atk: up, conc: 1 }; // rozeber pasivní
-      if (oppStyle === "attacking") return { atk: 1, conc: risk }; // riziko vzadu
-      return { atk: 1, conc: 1 };
-    case "open":
-      if (oppStyle === "defensive") return { atk: up, conc: 1 }; // otevři zataženého
-      if (oppStyle === "attacking") return { atk: 1, conc: risk }; // divoká přestřelka
-      return { atk: 1, conc: 1 };
-    default: // balanced – bez counteru
-      return { atk: 1, conc: 1 };
+/**
+ * Jak dobře plán sedí na daný styl – proxy na gólový rozdíl (útok − obdržené na škále λ).
+ * Slouží jen k **doporučení pro hráče** (`recommendPlan`), ne k simulaci.
+ * Vědomě ignoruje kondici: doporučení je zápasové, únava je rozpočet přes sezónu.
+ */
+export function planScore(plan: Plan, oppStyle: OppStyle): number {
+  const r = resolvePlan(plan, oppStyle);
+  return r.attack - r.concede;
+}
+
+/**
+ * Který plán skauti doporučí proti nahlášenému stylu. Bere **hlášený** styl, ne pravdu –
+ * doporučení je proto stejně omylné jako hlášení a nejde jím obejít nejistotu scoutingu.
+ */
+export function recommendPlan(oppStyle: OppStyle): Plan {
+  let best: Plan = "balanced";
+  let bestScore = -Infinity;
+  for (const p of PLANS) {
+    const s = planScore(p, oppStyle);
+    if (s > bestScore) {
+      bestScore = s;
+      best = p;
+    }
   }
+  return best;
 }

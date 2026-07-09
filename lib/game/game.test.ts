@@ -20,7 +20,7 @@ import {
   seasonHeadline,
 } from "./leagues";
 import { expectedRank, updateReputation, isHireable } from "./reputation";
-import { teamSeasonStats } from "./analysis";
+import { leagueGoalsPerTeamGame, teamSeasonStats, venueStats } from "./analysis";
 import { cleanSheetsOf } from "./career";
 import { roundRobin } from "./schedule";
 import { buildTable } from "./standings";
@@ -44,7 +44,7 @@ import {
   nextOpponentOf,
 } from "./engine";
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
-import { resolvePlan } from "./plans";
+import { PLANS, planScore, recommendPlan, resolvePlan } from "./plans";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, describeEffect, EVENTS, getEvent } from "./events";
 import { RNG_SALT_LEAGUE, RNG_SALT_TOURNAMENT } from "./agency";
@@ -53,20 +53,25 @@ import { mulberry32, randomSeed, deriveSeed } from "./rng";
 import {
   applyDevelopment,
   developmentPoints,
+  nextScouting,
   youthRegression,
+  EMPTY_SPEND,
 } from "./development";
 import { fitnessDelta, fitnessFactor, updateFitness } from "./fitness";
-import { INSTRUCTIONS, resolveInstruction } from "./instructions";
+import { INSTRUCTIONS, recommendInstruction, resolveInstruction } from "./instructions";
 import {
-  COUNTER_BONUS,
+  COUNTER_MATRIX,
+  COUNTER_MAX_EFFECT,
   DRIFT_REGRESSION,
   HOME_BOOST_CAP,
   MAX_DEV_POINTS,
-  SCOUT_CONFIDENCE,
+  PLAN_FATIGUE,
   SCOUT_CONFIDENCE_BOOSTED,
+  SCOUT_CONFIDENCE_MIN,
+  SCOUT_LEVEL_MAX,
 } from "./balance";
 import { ADJUST_MAX, ADJUST_MIN } from "./balance";
-import { scoutOpponent } from "./scouting";
+import { scoutConfidence, scoutOpponent, scoutQuality } from "./scouting";
 import { emptyProfile, foldSeason, coachedAllTop5, startCareer, TOP5_LEAGUE_IDS } from "./profile";
 import { newlyEarned, evaluateAchievements, ACHIEVEMENTS } from "./achievements";
 import type { GameTeam, MatchResult, SeasonState, SeasonSummary } from "./types";
@@ -755,6 +760,29 @@ describe("analysis – statistiky sezóny", () => {
     expect(stats.cleanSheetPct).toBeLessThanOrEqual(100);
     expect(stats.rank).toBeGreaterThanOrEqual(1);
   });
+
+  it("venueStats vybere polovinu statistik podle prostředí zápasu", () => {
+    const s = simulateToEnd(newSeason(8, 4));
+    const stats = teamSeasonStats(s, 4);
+    expect(venueStats(stats, true)).toEqual({
+      avgFor: stats.homeAvgFor,
+      avgAgainst: stats.homeAvgAgainst,
+      played: stats.homePlayed,
+    });
+    expect(venueStats(stats, false).played).toBe(stats.awayPlayed);
+    expect(stats.homePlayed + stats.awayPlayed).toBe(stats.played);
+  });
+
+  it("leagueGoalsPerTeamGame je gólů na TÝM a zápas (prázdná sezóna → 0)", () => {
+    expect(leagueGoalsPerTeamGame([])).toBe(0);
+    // 2 zápasy, dohromady 6 gólů → 6 / (2 × 2) = 1.5 gólu na tým a zápas.
+    expect(
+      leagueGoalsPerTeamGame([
+        { round: 0, homeId: 1, awayId: 2, homeGoals: 2, awayGoals: 1 },
+        { round: 0, homeId: 3, awayId: 4, homeGoals: 3, awayGoals: 0 },
+      ])
+    ).toBe(1.5);
+  });
 });
 
 describe("standingsToTeams", () => {
@@ -1138,15 +1166,15 @@ describe("development", () => {
 
   it("applyDevelopment nepřeskočí špičku ligy (DEV_LEAGUE_CEILING)", () => {
     const best = Math.max(...league.filter((t) => t.id !== mid.id).map((t) => t.attack));
-    const boosted = applyDevelopment(mid, { attack: 6, defense: 0, youth: 0, stadium: 0 }, league);
+    const boosted = applyDevelopment(mid, { ...EMPTY_SPEND, attack: 6 }, league);
     expect(boosted.attack).toBeLessThanOrEqual(best * 1.05 + 1e-9);
     expect(boosted.attack).toBeGreaterThan(mid.attack); // a přesto se posunul nahoru
   });
 
   it("applyDevelopment: obrana klesá (nižší = lepší), stadion má strop", () => {
-    const d = applyDevelopment(mid, { attack: 0, defense: 3, youth: 0, stadium: 0 }, league);
+    const d = applyDevelopment(mid, { ...EMPTY_SPEND, defense: 3 }, league);
     expect(d.defense).toBeLessThan(mid.defense);
-    const st = applyDevelopment(mid, { attack: 0, defense: 0, youth: 0, stadium: 99 }, league);
+    const st = applyDevelopment(mid, { ...EMPTY_SPEND, stadium: 99 }, league);
     expect(st.homeBoost).toBeLessThanOrEqual(1.3);
   });
 
@@ -1162,7 +1190,7 @@ describe("development", () => {
     const you = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a))[10];
     let s = newSeason(42, you.id, { teams });
     s = simulateToEnd(s);
-    s = startNextSeason(s, { attack: MAX_DEV_POINTS, defense: 0, youth: 0, stadium: 0 });
+    s = startNextSeason(s, { ...EMPTY_SPEND, attack: MAX_DEV_POINTS });
     const ranked = [...s.teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
     expect(ranked[0].id).not.toBe(you.id);
   });
@@ -1187,7 +1215,20 @@ describe("development", () => {
 
   // Regrese: `startNextSeason` dřív `leagueAccess` do další sezóny vůbec nepředal
   // → od 2. sezóny se tiše přepnulo na kurátorovaný fallback.
-  it("startNextSeason přenáší leagueAccess i mládež", () => {
+  it("nextScouting je kumulativní a má strop", () => {
+    expect(nextScouting(0, { ...EMPTY_SPEND, scouting: 2 })).toBe(2);
+    expect(nextScouting(2, { ...EMPTY_SPEND, scouting: 2 })).toBe(4);
+    expect(nextScouting(4, { ...EMPTY_SPEND, scouting: 99 })).toBe(SCOUT_LEVEL_MAX);
+  });
+
+  // Skauting kupuje informaci, ne sílu – `applyDevelopment` se ho nesmí ani dotknout.
+  it("investice do skautingu nesahá na ratingy", () => {
+    const before = applyDevelopment(mid, EMPTY_SPEND, league);
+    const after = applyDevelopment(mid, { ...EMPTY_SPEND, scouting: 5 }, league);
+    expect(after).toEqual(before);
+  });
+
+  it("startNextSeason přenáší leagueAccess, mládež i skauting", () => {
     const teams = generateLeague(11);
     const access = { slots: [{ rank: 1, spot: "UECL_Q" as const }], relegBottom: null };
     let s = newSeason(11, teams[3].id, {
@@ -1197,9 +1238,10 @@ describe("development", () => {
       leagueAccess: access,
     });
     s = simulateToEnd(s);
-    const next = startNextSeason(s, { attack: 0, defense: 0, youth: 2, stadium: 0 });
+    const next = startNextSeason(s, { ...EMPTY_SPEND, youth: 2, scouting: 1 });
     expect(next.leagueAccess).toEqual(access);
     expect(next.youth).toBe(2);
+    expect(next.scouting).toBe(1);
   });
 });
 
@@ -1422,7 +1464,7 @@ describe("domácí výhoda", () => {
     const league = generateLeague(3);
     let me = { ...league[0], homeBoost: 1.1 };
     for (let season = 0; season < 30; season++) {
-      me = applyDevelopment(me, { attack: 0, defense: 0, youth: 0, stadium: 6 }, league);
+      me = applyDevelopment(me, { ...EMPTY_SPEND, stadium: 6 }, league);
     }
     expect(me.homeBoost).toBeLessThanOrEqual(HOME_BOOST_CAP);
     expect(me.homeBoost).toBeCloseTo(HOME_BOOST_CAP);
@@ -1482,8 +1524,8 @@ describe("instructions", () => {
   it("efekt instrukce nikdy nepřebije counter plánu", () => {
     for (const i of INSTRUCTIONS) {
       const r = resolveInstruction(i, ["strongAttack", "poorForm"]);
-      expect(Math.abs(r.attack - 1)).toBeLessThanOrEqual(COUNTER_BONUS);
-      expect(Math.abs(r.concede - 1)).toBeLessThanOrEqual(COUNTER_BONUS);
+      expect(Math.abs(r.attack - 1)).toBeLessThanOrEqual(COUNTER_MAX_EFFECT);
+      expect(Math.abs(r.concede - 1)).toBeLessThanOrEqual(COUNTER_MAX_EFFECT);
     }
   });
 
@@ -1526,19 +1568,25 @@ describe("instructions", () => {
 
 describe("scouting – nejistota", () => {
   const teams = generateLeague(5);
+  /** Sezóna s odehranými koly – bez nich má každý soupeř nulový vzorek (= mlha). */
+  const played = (rounds: number): SeasonState => {
+    let s = newSeason(5, teams[0].id, { teams });
+    for (let i = 0; i < rounds; i++) s = playRound({ ...s, pendingEvent: null });
+    return s;
+  };
 
   it("hlášený styl je stabilní přes rendery a někdy se liší od pravdy", () => {
-    const s = newSeason(5, teams[0].id, { teams });
-    const a = scoutOpponent(s, teams[1].id);
-    const b = scoutOpponent(s, teams[1].id);
+    const base = played(8);
+    const a = scoutOpponent(base, teams[1].id);
+    const b = scoutOpponent(base, teams[1].id);
     expect(a.reportedStyle).toBe(b.reportedStyle);
-    expect(a.confidence).toBeCloseTo(SCOUT_CONFIDENCE);
 
     let wrong = 0;
     let total = 0;
     for (let round = 0; round < 30; round++) {
       for (const t of teams.slice(1)) {
-        const r = scoutOpponent({ ...s, round }, t.id);
+        const r = scoutOpponent({ ...base, round }, t.id);
+        if (r.reportedStyle === null) continue; // vague hlášení styl neurčí vůbec
         total++;
         if (r.reportedStyle !== r.style) wrong++;
       }
@@ -1547,10 +1595,88 @@ describe("scouting – nejistota", () => {
     expect(wrong / total).toBeLessThan(0.45); // ale ani ruleta
   });
 
-  it("investice do skautingu zvedne konfidenci", () => {
+  it("zaplacená analýza (event) vytáhne konfidenci rovnou na strop", () => {
     const s = newSeason(5, teams[0].id, { teams });
     const boosted = scoutOpponent({ ...s, scoutBoostUntilRound: s.round + 2 }, teams[1].id);
     expect(boosted.confidence).toBeCloseTo(SCOUT_CONFIDENCE_BOOSTED);
+    expect(boosted.quality).toBe("detailed");
+  });
+
+  // Jádro nového scoutingu: konfidence NENÍ konstanta. Roste s tím, co jde o soupeři vědět.
+  it("konfidence roste se vzorkem, známostí i investicí", () => {
+    const fresh = newSeason(5, teams[0].id, { teams });
+    const cold = scoutConfidence(fresh, teams[1].id);
+    expect(cold).toBeCloseTo(SCOUT_CONFIDENCE_MIN); // nikdo nic neodehrál
+
+    const warm = scoutConfidence(played(8), teams[1].id);
+    expect(warm).toBeGreaterThan(cold);
+
+    // Investice do skautingu posune tutéž situaci výš.
+    const invested = scoutConfidence({ ...fresh, scouting: SCOUT_LEVEL_MAX }, teams[1].id);
+    expect(invested).toBeGreaterThan(cold);
+
+    // Odveta proti známému soupeři: `hasMet` skokem přidá.
+    const late = played(8);
+    const opp = late.results.find(
+      (r) => r.homeId === late.yourTeamId || r.awayId === late.yourTeamId
+    )!;
+    const met = opp.homeId === late.yourTeamId ? opp.awayId : opp.homeId;
+    const stranger = late.teams.find(
+      (t) => t.id !== late.yourTeamId && !late.results.some(
+        (r) =>
+          (r.homeId === late.yourTeamId && r.awayId === t.id) ||
+          (r.awayId === late.yourTeamId && r.homeId === t.id)
+      )
+    )!;
+    expect(scoutConfidence(late, met)).toBeGreaterThan(scoutConfidence(late, stranger.id));
+  });
+
+  it("vague hlášení neurčí styl a nedá doporučení; detailed dá obojí", () => {
+    const fresh = newSeason(5, teams[0].id, { teams });
+    const vague = scoutOpponent(fresh, teams[1].id);
+    expect(vague.quality).toBe("vague");
+    expect(vague.reportedStyle).toBeNull();
+    expect(vague.suggestion).toBeUndefined();
+
+    const detailed = scoutOpponent(
+      { ...fresh, scoutBoostUntilRound: fresh.round },
+      teams[1].id
+    );
+    expect(detailed.quality).toBe("detailed");
+    expect(detailed.reportedStyle).not.toBeNull();
+    expect(detailed.suggestion).toBeDefined();
+  });
+
+  it("scoutQuality respektuje prahy", () => {
+    expect(scoutQuality(0.45)).toBe("vague");
+    expect(scoutQuality(0.7)).toBe("standard");
+    expect(scoutQuality(0.95)).toBe("detailed");
+  });
+
+  // Skauti nikdy nelžou o traitech – jen nemusí vidět všechny. Skrytý `punishedBy` trait
+  // pak instrukci pokousá, aniž bychom kamkoliv přidali další náhodu.
+  it("reportedTraits jsou vždy podmnožinou skutečných traitů a s kvalitou jich přibývá", () => {
+    const s = played(8);
+    let anyHidden = false;
+    for (const t of s.teams.slice(1)) {
+      const vague = scoutOpponent({ ...s, scouting: 0 }, t.id);
+      const detailed = scoutOpponent({ ...s, scoutBoostUntilRound: s.round }, t.id);
+      for (const tr of vague.reportedTraits) expect(vague.traits).toContain(tr);
+      expect(detailed.reportedTraits).toEqual(detailed.traits);
+      if (vague.reportedTraits.length < vague.traits.length) anyHidden = true;
+    }
+    expect(anyHidden, "při nízké kvalitě musí nějaký trait zůstat skrytý").toBe(true);
+  });
+
+  // Anti-exploit: doporučení nesmí prozradit pravdu – staví se jen z hlášení.
+  it("doporučení je funkcí HLÁŠENÍ, ne skutečného stylu", () => {
+    const s = played(8);
+    for (const t of s.teams.slice(1)) {
+      const r = scoutOpponent({ ...s, scoutBoostUntilRound: s.round }, t.id);
+      if (!r.suggestion || !r.reportedStyle) continue;
+      expect(r.suggestion.plan).toBe(recommendPlan(r.reportedStyle));
+      expect(r.suggestion.instruction).toBe(recommendInstruction(r.reportedTraits));
+    }
   });
 
   it("náhled predikce neprozradí plán ani instrukci (nejde proklikat nejlepší %)", () => {
@@ -1560,5 +1686,60 @@ describe("scouting – nejistota", () => {
     expect(a!.probs).toEqual(b!.probs);
     const c = yourNextMatch(setInstruction(base, "wing_play"));
     expect(a!.probs).toEqual(c!.probs);
+  });
+});
+
+describe("zápasové plány – balanc", () => {
+  const STYLES = ["attacking", "defensive", "balanced"] as const;
+
+  it("counter matice se vejde do rozpočtu COUNTER_MAX_EFFECT", () => {
+    const budget = COUNTER_MAX_EFFECT + 1e-9; // 1.12 − 1 není v plovoucí čárce přesně 0.12
+    for (const p of PLANS) {
+      for (const st of STYLES) {
+        const c = COUNTER_MATRIX[p][st];
+        expect(Math.abs(c.atk - 1), `${p} vs ${st}`).toBeLessThanOrEqual(budget);
+        expect(Math.abs(c.conc - 1), `${p} vs ${st}`).toBeLessThanOrEqual(budget);
+      }
+    }
+  });
+
+  it("balanced necountruje (je to vědomě bezpečná volba, ne zapomenutý řádek)", () => {
+    for (const st of STYLES) {
+      expect(COUNTER_MATRIX.balanced[st]).toEqual({ atk: 1, conc: 1 });
+    }
+  });
+
+  /**
+   * Regrese: `counter` míval základ 1.02/0.90 a únavu 2, takže byl proti VŠEM stylům lepší
+   * než `balanced` v obou osách i na kondici → „Vyvážený" byla mrtvá volba. Každý plán teď
+   * musí někde platit.
+   */
+  it("žádný plán nedominuje balanced (vždy někde platí)", () => {
+    for (const p of PLANS) {
+      if (p === "balanced") continue;
+      const dominates = STYLES.every((st) => {
+        const r = resolvePlan(p, st);
+        return r.attack >= 1 && r.concede <= 1;
+      });
+      expect(dominates, `${p} je proti všem stylům zdarma lepší než balanced`).toBe(false);
+      // A na ose kondice nesmí být lepší než balanced (jediná výjimka je pasivní low_block).
+      if (p !== "low_block") {
+        expect(PLAN_FATIGUE[p], `${p} regeneruje víc než balanced`).toBeGreaterThanOrEqual(
+          PLAN_FATIGUE.balanced
+        );
+      }
+    }
+  });
+
+  it("recommendPlan doporučí kontry na útočného a presink na zataženého", () => {
+    expect(recommendPlan("attacking")).toBe("counter");
+    expect(recommendPlan("defensive")).toBe("press");
+    // Doporučení = argmax planScore, ne libovolná volba.
+    for (const st of STYLES) {
+      const best = recommendPlan(st);
+      for (const p of PLANS) {
+        expect(planScore(best, st)).toBeGreaterThanOrEqual(planScore(p, st));
+      }
+    }
   });
 });

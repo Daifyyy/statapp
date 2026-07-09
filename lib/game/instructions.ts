@@ -3,12 +3,16 @@
 // reportu – ty se do téhle chvíle počítaly a vykreslovaly, ale mechanicky nic nedělaly.
 //
 // Efekt je záměrně menší než counter plánu (±5 % vs ±10 %): instrukce má rozhodování
-// prohloubit, ne přebít plán. A protože scout hlásí styl jen s určitou konfidencí
-// (`SCOUT_CONFIDENCE`), není ani jedna volba jistota.
+// prohloubit, ne přebít plán.
+//
+// **Instrukce není jistota**, i když traity nikdy nelžou: `resolveInstruction` čte
+// SKUTEČNÉ traity, ale scout jich při nízké kvalitě hlášení část **neodhalí**
+// (`ScoutReport.reportedTraits ⊆ traits`). Můžeš tedy narazit na `punishedBy` trait,
+// o kterém jsi nevěděl. Tím má instrukce stejnou míru nejistoty jako counter plánu,
+// aniž bychom kamkoliv přidali další náhodu.
 
 import { INSTRUCTION_BONUS, INSTRUCTION_PENALTY } from "./balance";
-import type { Trait } from "./scouting";
-import type { Instruction } from "./types";
+import type { Instruction, Trait } from "./types";
 
 export const INSTRUCTION_LABEL: Record<Instruction, string> = {
   none: "Bez instrukce",
@@ -27,7 +31,7 @@ export const INSTRUCTION_HINT: Record<Instruction, string> = {
 };
 
 /** Který trait instrukce trestá (bonus), a který ji naopak trestá (postih). */
-const MATCHUP: Record<
+export const MATCHUP: Record<
   Exclude<Instruction, "none">,
   { rewards: Trait; punishedBy: Trait; effect: "attack" | "concede" }
 > = {
@@ -77,3 +81,19 @@ export const INSTRUCTIONS: Instruction[] = [
   "set_pieces",
   "high_line",
 ];
+
+/**
+ * Kterou instrukci skauti doporučí podle traitů, které NAHLÁSILI. Vybírá první, jejíž
+ * `rewards` trait v hlášení je a `punishedBy` není. Protože hlášení může být neúplné,
+ * doporučení může sedět na skrytý postih – stejně jako doporučení plánu na špatný styl.
+ */
+export function recommendInstruction(reportedTraits: Trait[]): Instruction {
+  for (const i of INSTRUCTIONS) {
+    if (i === "none") continue;
+    const m = MATCHUP[i];
+    if (reportedTraits.includes(m.rewards) && !reportedTraits.includes(m.punishedBy)) {
+      return i;
+    }
+  }
+  return "none";
+}

@@ -6,7 +6,13 @@ import { newSeason, currentTable } from "./engine";
 import { teamById } from "./teams";
 import { evaluateSeason, teamPrestige } from "./leagues";
 import { expectedRank } from "./reputation";
-import { applyDevelopment, nextYouth, youthRegression, EMPTY_SPEND } from "./development";
+import {
+  applyDevelopment,
+  nextScouting,
+  nextYouth,
+  youthRegression,
+  EMPTY_SPEND,
+} from "./development";
 import type { DevSpend } from "./development";
 import {
   DRIFT_NOISE,
@@ -169,6 +175,7 @@ export function startNextSeason(state: SeasonState, spend: DevSpend = EMPTY_SPEN
     leagueName: state.leagueName,
     leagueAccess: state.leagueAccess,
     youth: nextYouth(state.youth, spend),
+    scouting: nextScouting(state.scouting, spend),
   });
 }
 
