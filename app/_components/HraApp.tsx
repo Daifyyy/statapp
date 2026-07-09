@@ -99,6 +99,7 @@ import type {
   SaveState,
   SeasonState,
   SeasonSummary,
+  TournamentSummary,
 } from "@/lib/game/types";
 
 type GameView = "season" | "history" | "profile";
@@ -198,6 +199,12 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+  /** Roste s každým novým výsledkem → `key` remountuje toast (odhalení začne od zapečetěno). */
+  const [toastSeq, setToastSeq] = useState(0);
+  const showToast = useCallback((d: ToastData) => {
+    setToast(d);
+    setToastSeq((n) => n + 1);
+  }, []);
   const [hasUnseenAchievement, setHasUnseenAchievement] = useState(false);
   /** Který režim se zobrazuje, když běží klub i reprezentace paralelně. */
   const [careerMode, setCareerMode] = useState<"club" | "nation">("club");
@@ -341,13 +348,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             oppGoals: isHome ? yourLast.awayGoals : yourLast.homeGoals,
             moraleDelta: (nextActive?.morale ?? prevMorale) - prevMorale,
           };
-          queueMicrotask(() => setToast(data));
+          queueMicrotask(() => showToast(data));
         }
         return next;
       });
       setBusy(false);
     }, 0);
-  }, [trackSave]);
+  }, [trackSave, showToast]);
 
   const onTournSimToEnd = useCallback(() => {
     if (
@@ -428,13 +435,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             oppGoals: isHome ? r.awayGoals : r.homeGoals,
             moraleDelta: after.morale - prevMorale,
           };
-          queueMicrotask(() => setToast(data));
+          queueMicrotask(() => showToast(data));
         }
         return next;
       });
       setBusy(false);
     }, 0);
-  }, [trackSave]);
+  }, [trackSave, showToast]);
 
   const onSimulateToEnd = useCallback(() => {
     const planLabel = save?.current ? PLAN_LABEL[save.current.plan] : "";
@@ -716,12 +723,16 @@ export function HraApp({ user }: { user: SessionUser | null }) {
         </>
       )}
 
-      <MatchResultToast toast={toast} onClose={() => setToast(null)} />
+      <MatchResultToast key={toastSeq} toast={toast} onClose={() => setToast(null)} />
     </main>
   );
 }
 
-/** Popup výsledku po odehraném kole (fixní overlay dole, auto-dismiss ~2.2 s). */
+/**
+ * Popup výsledku po odehraném kole. Napínavější na odhalení: nejdřív se ukáže „zapečetěná"
+ * obálka (soupeř + tlukoucí `?–?`, bez barvy výsledku, ať nic neprozradí), pak se skóre
+ * po krátké prodlevě samo odhalí `pop` animací — nebo hráč klepne a odhalí ho hned.
+ */
 function MatchResultToast({
   toast,
   onClose,
@@ -729,47 +740,73 @@ function MatchResultToast({
   toast: ToastData | null;
   onClose: () => void;
 }) {
+  // Komponenta se remountuje na každý nový výsledek (`key` v HraApp) → `revealed` startuje
+  // false bez resetu ve `useEffect` (ten by porušil react-hooks/set-state-in-effect).
+  const [revealed, setRevealed] = useState(false);
+
+  // Po krátké prodlevě se skóre samo odhalí (klepnutí ho odhalí dřív).
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(onClose, 2200);
+    const t = setTimeout(() => setRevealed(true), 1100);
     return () => clearTimeout(t);
-  }, [toast, onClose]);
+  }, [toast]);
+
+  // Po odhalení chvíli počkej a zavři.
+  useEffect(() => {
+    if (!toast || !revealed) return;
+    const t = setTimeout(onClose, 2600);
+    return () => clearTimeout(t);
+  }, [toast, revealed, onClose]);
 
   if (!toast) return null;
+
   const outcome =
     toast.yourGoals > toast.oppGoals
-      ? { label: "Výhra", cls: "border-positive bg-positive/15 text-positive" }
+      ? { label: "Výhra 🎉", cls: "border-positive bg-positive/15 text-positive" }
       : toast.yourGoals < toast.oppGoals
-        ? { label: "Prohra", cls: "border-negative bg-negative/15 text-negative" }
-        : { label: "Remíza", cls: "border-border bg-surface text-muted" };
+        ? { label: "Prohra 😞", cls: "border-negative bg-negative/15 text-negative" }
+        : { label: "Remíza 😐", cls: "border-border bg-surface text-muted" };
+
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
-      <div
-        className={
-          "fade-in pointer-events-auto flex items-center gap-3 rounded-full border px-5 py-2.5 shadow-lg backdrop-blur " +
-          outcome.cls
-        }
-        role="status"
-      >
-        <span className="text-sm font-bold">{outcome.label}</span>
-        <span className="tabular-nums text-base font-bold text-foreground">
-          {toast.yourGoals}:{toast.oppGoals}
-        </span>
-        <span className="max-w-[45vw] truncate text-xs text-muted">
-          vs {toast.oppName}
-        </span>
-        {toast.moraleDelta !== 0 && (
-          <span
-            className={
-              "text-xs font-semibold tabular-nums " +
-              (toast.moraleDelta > 0 ? "text-positive" : "text-negative")
-            }
-          >
-            {toast.moraleDelta > 0 ? "+" : ""}
-            {toast.moraleDelta} morálka
+      {!revealed ? (
+        <button
+          type="button"
+          onClick={() => setRevealed(true)}
+          className="fade-in pointer-events-auto flex items-center gap-3 rounded-full border border-border bg-surface/90 px-5 py-2.5 shadow-lg backdrop-blur transition hover:border-foreground/30"
+          aria-label="Odhalit výsledek zápasu"
+        >
+          <span className="text-sm font-bold text-foreground">⚽ Konec zápasu</span>
+          <span className="animate-pulse tabular-nums text-base font-bold text-muted">?–?</span>
+          <span className="max-w-[35vw] truncate text-xs text-muted">vs {toast.oppName}</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted">klepni</span>
+        </button>
+      ) : (
+        <div
+          className={
+            "fade-in pointer-events-auto flex items-center gap-3 rounded-full border px-5 py-2.5 shadow-lg backdrop-blur " +
+            outcome.cls
+          }
+          role="status"
+        >
+          <span className="text-sm font-bold">{outcome.label}</span>
+          <span className="reveal-pop tabular-nums text-lg font-bold text-foreground">
+            {toast.yourGoals}:{toast.oppGoals}
           </span>
-        )}
-      </div>
+          <span className="max-w-[40vw] truncate text-xs text-muted">vs {toast.oppName}</span>
+          {toast.moraleDelta !== 0 && (
+            <span
+              className={
+                "text-xs font-semibold tabular-nums " +
+                (toast.moraleDelta > 0 ? "text-positive" : "text-negative")
+              }
+            >
+              {toast.moraleDelta > 0 ? "+" : ""}
+              {toast.moraleDelta} morálka
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1148,6 +1185,8 @@ function GameView({
             reputation={save.manager.reputation}
             managerName={managerName}
             activeCareer
+            history={save.history}
+            tournamentHistory={save.tournamentHistory ?? []}
           />
           <CareerManagement endLabel="klubovou kariéru" onEnd={onEndClub} onReset={onReset} />
         </>
@@ -2496,7 +2535,6 @@ function reputationDeltas(history: SeasonSummary[]): number[] {
 
 function HistoryView({ save }: { save: SaveState }) {
   const stats = careerStats(save.history);
-  const repDeltas = reputationDeltas(save.history);
   if (!stats) {
     return (
       <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
@@ -2526,43 +2564,99 @@ function HistoryView({ save }: { save: SaveState }) {
       </div>
 
       <h3 className="mt-4 text-xs font-semibold text-foreground">Odehrané sezóny</h3>
-      <div className="mt-2 space-y-1.5">
-        {[...save.history].reverse().map((h, i) => {
-          const tone = seasonTone(h);
-          const toneClass =
-            tone === "good"
-              ? "bg-positive/15 text-positive"
-              : tone === "bad"
-                ? "bg-negative/15 text-negative"
-                : "bg-border/60 text-muted";
-          const delta = repDeltas[save.history.length - 1 - i];
-          return (
-            <div
-              key={`${h.season}-${h.leagueId}-${h.yourTeamId}`}
-              className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+      <SeasonRows history={save.history} />
+    </div>
+  );
+}
+
+/** Seznam odehraných klubových sezón (nejnovější první) – sdílené HistoryView i ProfilePanel. */
+function SeasonRows({ history }: { history: SeasonSummary[] }) {
+  const repDeltas = reputationDeltas(history);
+  return (
+    <div className="mt-2 space-y-1.5">
+      {[...history].reverse().map((h, i) => {
+        const tone = seasonTone(h);
+        const toneClass =
+          tone === "good"
+            ? "bg-positive/15 text-positive"
+            : tone === "bad"
+              ? "bg-negative/15 text-negative"
+              : "bg-border/60 text-muted";
+        const delta = repDeltas[history.length - 1 - i];
+        return (
+          <div
+            key={`${h.season}-${h.leagueId}-${h.yourTeamId}-${i}`}
+            className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+          >
+            <span className="w-8 shrink-0 text-xs text-muted">S{h.season}</span>
+            <span className="w-7 shrink-0 text-xs text-muted">{h.yourRank}.</span>
+            {/* Klub jen logem – název je v title/alt, řádek zůstane úzký i na mobilu. */}
+            <span className="shrink-0" title={h.yourName}>
+              <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">{h.leagueName}</span>
+            <span className="shrink-0 text-xs tabular-nums text-muted" title="Body na zápas">
+              {(h.yourPoints / (h.win + h.draw + h.loss)).toFixed(2)} PPG
+            </span>
+            <RepDelta delta={delta} />
+            <span
+              className={"shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass}
             >
-              <span className="w-8 shrink-0 text-xs text-muted">S{h.season}</span>
-              <span className="w-7 shrink-0 text-xs text-muted">{h.yourRank}.</span>
-              {/* Klub jen logem – název je v title/alt, řádek zůstane úzký i na mobilu. */}
-              <span className="shrink-0" title={h.yourName}>
-                <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
-              </span>
-              <span className="min-w-0 flex-1 truncate text-xs text-muted">{h.leagueName}</span>
-              <span className="shrink-0 text-xs tabular-nums text-muted" title="Body na zápas">
-                {(h.yourPoints / (h.win + h.draw + h.loss)).toFixed(2)} PPG
-              </span>
-              <RepDelta delta={delta} />
-              <span
-                className={
-                  "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass
-                }
-              >
-                {seasonHeadline(h)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+              {seasonHeadline(h)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Hlavní odznak reprezentačního běhu (mistr / finalista / fáze / nekvalifikace). */
+function tournamentHeadline(t: TournamentSummary): { text: string; tone: "good" | "ok" | "bad" } {
+  if (t.champion) return { text: "Mistr 🏆", tone: "good" };
+  if (!t.qualified) return { text: "Nekvalifikace", tone: "bad" };
+  if (t.stageReached === "final") return { text: "Finalista 🥈", tone: "good" };
+  if (t.stageReached === "sf") return { text: STAGE_LABEL.sf, tone: "good" };
+  if (t.stageReached === "group") return { text: "Skupina", tone: "ok" };
+  return { text: STAGE_LABEL[t.stageReached as keyof typeof STAGE_LABEL] ?? "—", tone: "ok" };
+}
+
+/** Seznam dohraných reprezentačních turnajů (nejnovější první). */
+function TournamentRows({ history }: { history: TournamentSummary[] }) {
+  return (
+    <div className="mt-2 space-y-1.5">
+      {[...history].reverse().map((t, i) => {
+        const h = tournamentHeadline(t);
+        const toneClass =
+          h.tone === "good"
+            ? "bg-positive/15 text-positive"
+            : h.tone === "bad"
+              ? "bg-negative/15 text-negative"
+              : "bg-border/60 text-muted";
+        const comp = COMPETITIONS[t.competitionId as CompetitionId];
+        return (
+          <div
+            key={`${t.competitionId}-${t.edition}-${t.teamId}-${i}`}
+            className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+          >
+            <span className="w-6 shrink-0 text-center text-sm" title={comp?.name ?? t.competitionName}>
+              {comp?.emoji ?? "🏆"}
+            </span>
+            <span className="shrink-0" title={t.teamName}>
+              <TeamLogo src={t.teamLogo} alt={t.teamName} size={18} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">{t.teamName}</span>
+            <span className="shrink-0 text-xs tabular-nums text-muted">
+              {t.win}-{t.draw}-{t.loss}
+            </span>
+            <span
+              className={"shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass}
+            >
+              {h.text}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2614,6 +2708,7 @@ function StatTile({
 
 function TournamentView({
   save,
+  managerName,
   run,
   busy,
   onPlayRound,
@@ -2654,6 +2749,7 @@ function TournamentView({
       : run.phase === "final" && run.tournament
         ? STAGE_LABEL[run.tournament.yourStage]
         : "Konec";
+  const [showProfile, setShowProfile] = useState(false);
 
   return (
     <div className="mt-5">
@@ -2669,6 +2765,9 @@ function TournamentView({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
+          <Segment active={showProfile} onClick={() => setShowProfile((v) => !v)}>
+            Profil
+          </Segment>
           {onTakeClub && (
             <button
               type="button"
@@ -2697,7 +2796,16 @@ function TournamentView({
         </div>
       </div>
 
-      {over ? (
+      {showProfile ? (
+        <ProfilePanel
+          profile={save.profile}
+          reputation={save.manager.reputation}
+          managerName={managerName}
+          activeCareer
+          history={save.history}
+          tournamentHistory={save.tournamentHistory ?? []}
+        />
+      ) : over ? (
         <TournamentDone run={run} save={save} onFinish={onFinish} />
       ) : eliminated ? (
         <>
@@ -3198,6 +3306,8 @@ function ManagerHub({
         reputation={null}
         managerName={managerName}
         activeCareer={false}
+        history={save?.history ?? []}
+        tournamentHistory={save?.tournamentHistory ?? []}
       />
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <button
@@ -3318,11 +3428,17 @@ function ProfilePanel({
   reputation,
   managerName,
   activeCareer,
+  history = [],
+  tournamentHistory = [],
 }: {
   profile: ManagerProfile;
   reputation: number | null;
   managerName: string | null;
   activeCareer: boolean;
+  /** Klubové sezóny (aktuální kariéra) – pro historii v přehledu manažera. */
+  history?: SeasonSummary[];
+  /** Dohrané reprezentační turnaje. */
+  tournamentHistory?: TournamentSummary[];
 }) {
   const a = profile.allTime;
   const rep = reputation != null ? Math.round(reputation) : null;
@@ -3408,6 +3524,22 @@ function ProfilePanel({
           )}
         </div>
       </div>
+
+      {/* Historie – klubové sezóny */}
+      {history.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold text-foreground">Historie sezón (klub)</h3>
+          <SeasonRows history={history} />
+        </div>
+      )}
+
+      {/* Historie – reprezentační turnaje */}
+      {tournamentHistory.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold text-foreground">Historie turnajů (reprezentace)</h3>
+          <TournamentRows history={tournamentHistory} />
+        </div>
+      )}
 
       {/* Achievementy */}
       <AchievementsGrid earned={profile.achievements} />

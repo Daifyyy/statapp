@@ -213,4 +213,30 @@ describe("reprezentační achievementy", () => {
     expect(ALL_ACHIEVEMENTS.length).toBe(ACHIEVEMENTS.length + TOURNAMENT_ACHIEVEMENTS.length);
     expect(new Set(ALL_ACHIEVEMENTS.map((a) => a.id)).size).toBe(ALL_ACHIEVEMENTS.length);
   });
+
+  it("underdog: semifinále s prestiží ≤ 65, ne se špičkou", () => {
+    const base = { allTime: emptyProfile().allTime, reputation: 60 };
+    expect(
+      evaluateTournamentAchievements({ ...base, last: tsummary({ stageReached: "sf", teamPrestige: 55 }) })
+    ).toContain("nat_underdog");
+    expect(
+      evaluateTournamentAchievements({ ...base, last: tsummary({ stageReached: "sf", teamPrestige: 90 }) })
+    ).not.toContain("nat_underdog");
+  });
+
+  it("neporažený mistr / gólová smršť", () => {
+    const base = { allTime: emptyProfile().allTime, reputation: 70 };
+    expect(
+      evaluateTournamentAchievements({
+        ...base,
+        last: tsummary({ champion: true, stageReached: "final", loss: 0 }),
+      })
+    ).toContain("nat_invincible");
+    expect(
+      evaluateTournamentAchievements({ ...base, last: tsummary({ goalsFor: 16 }) })
+    ).toContain("nat_goals");
+    expect(
+      evaluateTournamentAchievements({ ...base, last: tsummary({ goalsFor: 8 }) })
+    ).not.toContain("nat_goals");
+  });
 });

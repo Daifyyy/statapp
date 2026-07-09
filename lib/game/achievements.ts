@@ -251,6 +251,41 @@ export const TOURNAMENT_ACHIEVEMENTS: TournamentAchievement[] = [
     tier: "silver",
     check: (c) => (c.allTime.nationsCoached ?? []).length >= 3,
   },
+  {
+    id: "nat_underdog",
+    title: "David proti Goliášovi",
+    desc: "Dojdi aspoň do semifinále s outsiderskou reprezentací (prestiž ≤ 65).",
+    icon: "🐜",
+    tier: "gold",
+    check: (c) =>
+      c.last.qualified &&
+      (c.last.stageReached === "sf" || c.last.stageReached === "final") &&
+      (c.last.teamPrestige ?? 100) <= 65,
+  },
+  {
+    id: "nat_invincible",
+    title: "Neporažený mistr",
+    desc: "Vyhraj turnaj bez jediné prohry (vč. kvalifikace).",
+    icon: "🛡️",
+    tier: "gold",
+    check: (c) => c.last.champion && c.last.loss === 0,
+  },
+  {
+    id: "nat_goals",
+    title: "Ofenzivní smršť",
+    desc: "Nastřílej 15+ gólů v jednom reprezentačním běhu.",
+    icon: "🎯",
+    tier: "silver",
+    check: (c) => c.last.goalsFor >= 15,
+  },
+  {
+    id: "nat_five_nations",
+    title: "Kočovný selektor",
+    desc: "Veď 5 různých reprezentací.",
+    icon: "🗺️",
+    tier: "gold",
+    check: (c) => (c.allTime.nationsCoached ?? []).length >= 5,
+  },
 ];
 
 /** Ids reprezentačních achievementů splněných v daném kontextu. */
