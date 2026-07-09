@@ -269,6 +269,46 @@ export const EXTRA_TIME_LAMBDA = 30 / 90;
 export const PENALTY_ATTACK_WEIGHT = 0.08;
 export const PENALTY_MAX_EDGE = 0.1;
 
+// ───────────────────────── reprezentační kvalifikace (Phase 4 / T4) ─────────────────────────
+//
+// Kvalifikace je vědomé ZJEDNODUŠENÍ reálných (cyklus od cyklu se měnících) formátů: hráč
+// hraje JEDNU kvalifikační skupinu své konfederace dvoukolově (doma/venku – tady `homeBoost`
+// konečně dává smysl a použije se, ne 1). Postoupí, když skončí do `QUAL_ADVANCE`. místa.
+// Zbytek závěrečného pole (ostatní konfederace + doplnění tvé) obsadí LOS VÁŽENÝ RATINGEM.
+
+/** Velikost kvalifikační skupiny hráče (sudá kvůli dvoukolovému round-robinu). */
+export const QUAL_GROUP_SIZE = 6;
+/** Kolik prvních míst skupiny postupuje na závěrečný turnaj. */
+export const QUAL_ADVANCE = 3;
+/**
+ * Domácí výhoda v kvalifikaci: reprezentace mají ve snapshotu `homeBoost: 1` (turnaj =
+ * neutrál), ale kvalifikace se hraje doma/venku → dáme jim společný fallback, ať prostředí
+ * na λ vůbec zabere. Pořadatelský efekt závěrečného turnaje sdílí totéž číslo.
+ */
+export const QUAL_HOME_BOOST = HOME_BOOST_FALLBACK;
+
+// ───────────────────────── reprezentační reputace (Phase 4 / T5) ─────────────────────────
+
+/** Reputace za neúspěch v kvalifikaci (nedostal ses na turnaj). */
+export const TOURN_MISS_REP = -5;
+/** Reputace za samotný postup na závěrečný turnaj. */
+export const TOURN_QUALIFY_REP = 3;
+/** Bonus za vítězství v turnaji (nad rámec dosažení finále). */
+export const TOURN_CHAMPION_REP = 8;
+/**
+ * Reputace za nejdál dosaženou fázi (kumulativní se `QUALIFY` + případně `CHAMPION`).
+ * `final` = finalista; mistr dostane navíc `TOURN_CHAMPION_REP`.
+ */
+export const TOURN_STAGE_REP: Record<string, number> = {
+  group: 0,
+  r32: 1,
+  r16: 2,
+  qf: 4,
+  sf: 6,
+  final: 8,
+  done: 0,
+};
+
 // ───────────────────────── kariéra (Phase 1C) ─────────────────────────
 
 /** Reputace nového profilu na startu kariéry (gatuje výběr prvního klubu). */

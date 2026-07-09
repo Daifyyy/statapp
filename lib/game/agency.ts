@@ -23,6 +23,12 @@ import type {
  */
 export const RNG_SALT_LEAGUE = 0;
 export const RNG_SALT_TOURNAMENT = 1_000_000;
+/**
+ * Kvalifikace běží pod stejným `seed` jako závěrečný turnaj (jeden `TournamentRun`), ale
+ * je to samostatný `AgencyState` s vlastními koly 0…N. Bez odděleného proudu by kvalifikační
+ * kolo 0 a turnajové kolo 0 dostaly identický RNG (eventy i výsledky by korelovaly).
+ */
+export const RNG_SALT_QUALIFICATION = 2_000_000;
 
 /** Všechno, co agency potřebuje ke stanovení λ tvého týmu a k losu eventů. */
 export interface AgencyState {
