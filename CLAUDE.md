@@ -678,6 +678,15 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Přehled klubu** (`ClubOverview` v záložce Sezóna): síla útoku/obrany vs ⌀ ligy (barevně), hvězdy,
   stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež + legenda co mezi
   sezónami regreduje. Čistě čte `SeasonState`. `DEV_AREA_HINT` texty zpřesněny o trvanlivost.
+- **Historie v profilu:** `ProfilePanel` ukazuje `SeasonRows` (klubové sezóny, vytknuto z `HistoryView`)
+  i `TournamentRows` (reprezentační turnaje z `tournamentHistory`) — v Profil tabu klubu, v `ManagerHub`
+  i přes přepínač „Profil" v `TournamentView` (jinak by národní režim profil neměl).
+- **Napínavější odhalení výsledku** (`MatchResultToast`): dvoufázové — zapečetěná obálka (soupeř +
+  tlukoucí „?–?" **bez barvy výsledku**), skóre se po ~1,1 s samo odhalí `reveal-pop` animací
+  (globals.css) nebo klepnutím. Remount přes `key={toastSeq}` (žádný `setState` v effectu).
+- **Reprezentační achievementy** (12 v `TOURNAMENT_ACHIEVEMENTS`): vč. „David proti Goliášovi"
+  (semifinále s prestiží ≤ 65 — čte `TournamentSummary.teamPrestige`), „Neporažený mistr", „Ofenzivní
+  smršť" (15+ gólů), „Kočovný selektor" (5 národů). Slučují se s ligovými v `ALL_ACHIEVEMENTS`.
 - **Možná rozšíření (TODO):** klubový pohár / Liga mistrů (znovupoužije `tournament.ts`);
   víc soutěží (Copa/AFCON…) = položka v `COMPETITIONS`.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
