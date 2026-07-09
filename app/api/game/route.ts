@@ -62,6 +62,10 @@ const saveSchema = z.object({
   // null = bez aktivní kariéry (po resetu / nový uživatel).
   current: seasonSchema.nullable(),
   history: z.array(z.object({}).passthrough()).max(1000),
+  // Reprezentační běh + historie (Phase 4) – loose (klient generuje z lib/game),
+  // volitelné/nullable kvůli starým v8 save. Invariant „current XOR tournament" drží klient.
+  tournament: z.object({}).passthrough().nullable().optional(),
+  tournamentHistory: z.array(z.object({}).passthrough()).max(1000).optional(),
 });
 
 /** GET – načte uloženou hru přihlášeného uživatele (nebo `{ save: null }`). */

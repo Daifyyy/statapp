@@ -2,7 +2,12 @@
 // kariérami. Foldují se sem dohrané sezóny; přežívá „Novou kariéru". Rekordy pohání
 // profilový panel i vyhodnocení achievementů. Žádné IO.
 
-import type { AllTimeRecords, ManagerProfile, SeasonSummary } from "./types";
+import type {
+  AllTimeRecords,
+  ManagerProfile,
+  SeasonSummary,
+  TournamentSummary,
+} from "./types";
 
 /** Prázdný profil nového trenéra. */
 export function emptyProfile(): ManagerProfile {
@@ -26,6 +31,10 @@ export function emptyProfile(): ManagerProfile {
       bestReputation: 0,
       leaguesCoached: [],
       invincibleSeasons: 0,
+      tournamentsPlayed: 0,
+      majorTitles: 0,
+      finalsReached: 0,
+      nationsCoached: [],
     },
     achievements: [],
   };
@@ -74,6 +83,30 @@ export function foldSeason(
       bestReputation: Math.max(a.bestReputation, Math.round(reputationAfter)),
       leaguesCoached,
       invincibleSeasons: a.invincibleSeasons + (invincible ? 1 : 0),
+    },
+  };
+}
+
+/**
+ * Přičte jeden dohraný reprezentační turnaj do trvalých rekordů. Sahá JEN na reprezentační
+ * pole (`tournamentsPlayed`/`majorTitles`/`finalsReached`/`nationsCoached`) – ligové rekordy
+ * (`titles`/`bestRank`/`leaguesCoached`) zůstávají nedotčené. Volitelná pole default `?? 0`
+ * kvůli starým profilům. Čistá funkce.
+ */
+export function foldTournament(
+  profile: ManagerProfile,
+  summary: TournamentSummary
+): ManagerProfile {
+  const a = profile.allTime;
+  const nations = a.nationsCoached ?? [];
+  return {
+    ...profile,
+    allTime: {
+      ...a,
+      tournamentsPlayed: (a.tournamentsPlayed ?? 0) + 1,
+      majorTitles: (a.majorTitles ?? 0) + (summary.champion ? 1 : 0),
+      finalsReached: (a.finalsReached ?? 0) + (summary.stageReached === "final" ? 1 : 0),
+      nationsCoached: nations.includes(summary.teamId) ? nations : [...nations, summary.teamId],
     },
   };
 }

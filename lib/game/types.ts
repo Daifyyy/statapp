@@ -1,6 +1,9 @@
 // Typy herního modulu „Manažer" (klubový simulátor ligy). Čistě serializovatelné –
 // celý SaveState putuje do DB (Json) bez ztráty. Žádné metody/třídy.
 
+// `import type` je při kompilaci ERASED → žádný runtime cyklus (types ↔ nationalCompetitions).
+import type { TournamentRun } from "./nationalCompetitions";
+
 /**
  * Zápasový plán tvého týmu – hlavní páka trenéra. Proti stylu soupeře funguje jako
  * counter (správný protitah = výhoda, špatný = postih; viz plans.ts).
@@ -159,6 +162,33 @@ export interface SeasonSummary {
   objectiveMet: boolean;
 }
 
+/**
+ * Kompaktní souhrn dohraného reprezentačního „běhu" (kvalifikace + turnaj) do síně slávy.
+ * Vzniká **paralelně** k `SeasonSummary` – recyklovat ligový souhrn nejde, `champion: true`
+ * z poháru by rozbil `AllTimeRecords.titles` i ligové achievementy.
+ */
+export interface TournamentSummary {
+  competitionId: string;
+  competitionName: string;
+  /** Pořadové číslo turnaje v reprezentační kariéře (1-based). */
+  edition: number;
+  teamId: number;
+  teamName: string;
+  teamLogo?: string;
+  /** Prošel jsi kvalifikací na závěrečný turnaj? */
+  qualified: boolean;
+  /** Nejdál dosažená fáze (Stage z tournament.ts); `group` = nedostal ses z kvalifikace/skupiny. */
+  stageReached: string;
+  /** Vyhrál jsi turnaj? */
+  champion: boolean;
+  played: number;
+  win: number;
+  draw: number;
+  loss: number;
+  goalsFor: number;
+  goalsAgainst: number;
+}
+
 /** Stav probíhající sezóny. */
 export interface SeasonState {
   /** 1-based pořadí sezóny v kariéře. */
@@ -258,6 +288,15 @@ export interface AllTimeRecords {
   leaguesCoached: number[];
   /** Počet sezón bez jediné prohry. */
   invincibleSeasons: number;
+  // ── reprezentační scéna (Phase 4) – vlastní pole, NEmíchá se s ligovými rekordy ──
+  /** Kolik reprezentačních turnajů jsi absolvoval (vč. neúspěšné kvalifikace). Volitelné = staré profily. */
+  tournamentsPlayed?: number;
+  /** Vyhrané velké turnaje (Euro/MS). */
+  majorTitles?: number;
+  /** Kolikrát ses dostal do finále turnaje. */
+  finalsReached?: number;
+  /** Distinct id reprezentací, které jsi vedl. */
+  nationsCoached?: number[];
 }
 
 /** Trvalý manažerský profil – síň slávy. Přežívá „Novou kariéru". */
@@ -275,9 +314,18 @@ export interface SaveState {
   /** Trvalý profil (rekordy + achievementy) – přežije reset kariéry. */
   profile: ManagerProfile;
   manager: Manager;
-  /** Aktuální sezóna, nebo null = bez aktivní kariéry (po resetu / nový uživatel). */
+  /** Aktuální ligová sezóna, nebo null = bez aktivní klubové kariéry. */
   current: SeasonState | null;
   history: SeasonSummary[];
+  /**
+   * Probíhající reprezentační běh (kvalifikace + turnaj), nebo null. **Invariant:** `current`
+   * a `tournament` nejsou nikdy oba non-null (v jednu chvíli vedeš buď klub, nebo reprezentaci).
+   * `import type` (erased) → žádný runtime cyklus types ↔ nationalCompetitions. Volitelné =
+   * staré v8 save bez tohoto pole (čte se s `?? null`).
+   */
+  tournament?: TournamentRun | null;
+  /** Historie dohraných reprezentačních turnajů (síň slávy). Volitelné = staré save. */
+  tournamentHistory?: TournamentSummary[];
 }
 
 /** Liga nabízená ve výběru (job market / start kariéry). */

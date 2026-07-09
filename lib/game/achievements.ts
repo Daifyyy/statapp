@@ -3,7 +3,7 @@
 // Vyhodnocuje se na konci sezóny; odemčené se ukládají do trvalého profilu.
 
 import { coachedAllTop5 } from "./profile";
-import type { AllTimeRecords, SeasonSummary } from "./types";
+import type { AllTimeRecords, SeasonSummary, TournamentSummary } from "./types";
 
 export type AchievementTier = "bronze" | "silver" | "gold";
 
@@ -163,6 +163,121 @@ export const ACHIEVEMENTS: Achievement[] = [
     tier: "silver",
     check: (c) => c.allTime.seasons >= 10,
   },
+];
+
+// ───────────────────────── reprezentační achievementy (Phase 4) ─────────────────────────
+//
+// Druhý registr s vlastním kontextem (TournamentSummary). `EarnedAchievement.id` je plochý
+// string → jeden `owned` set pokryje oba registry beze změny perzistence; sloučí se až v UI.
+
+export interface TournamentCtx {
+  allTime: AllTimeRecords;
+  /** Právě dohraný reprezentační turnaj. */
+  last: TournamentSummary;
+  reputation: number;
+}
+
+export interface TournamentAchievement {
+  id: string;
+  title: string;
+  desc: string;
+  icon: string;
+  tier: AchievementTier;
+  check: (ctx: TournamentCtx) => boolean;
+}
+
+export const TOURNAMENT_ACHIEVEMENTS: TournamentAchievement[] = [
+  {
+    id: "nat_debut",
+    title: "Reprezentační debut",
+    desc: "Převezmi reprezentaci a odehraj s ní kvalifikaci.",
+    icon: "🌐",
+    tier: "bronze",
+    check: (c) => (c.allTime.tournamentsPlayed ?? 0) >= 1,
+  },
+  {
+    id: "nat_qualify",
+    title: "Jedeme na turnaj",
+    desc: "Proboj se s reprezentací na závěrečný turnaj.",
+    icon: "🎫",
+    tier: "bronze",
+    check: (c) => c.last.qualified,
+  },
+  {
+    id: "nat_knockout",
+    title: "Vyřazovací boje",
+    desc: "Postup ze skupiny do vyřazovací fáze turnaje.",
+    icon: "⚔️",
+    tier: "silver",
+    check: (c) => c.last.qualified && c.last.stageReached !== "group",
+  },
+  {
+    id: "nat_final",
+    title: "Až do finále",
+    desc: "Dovedení reprezentace do finále velkého turnaje.",
+    icon: "🥈",
+    tier: "silver",
+    check: (c) => c.last.stageReached === "final",
+  },
+  {
+    id: "nat_euro",
+    title: "Král Evropy",
+    desc: "Vyhraj mistrovství Evropy.",
+    icon: "🏆",
+    tier: "gold",
+    check: (c) => c.last.champion && c.last.competitionId === "EURO",
+  },
+  {
+    id: "nat_world",
+    title: "Mistr světa",
+    desc: "Vyhraj mistrovství světa.",
+    icon: "🌍",
+    tier: "gold",
+    check: (c) => c.last.champion && c.last.competitionId === "WC",
+  },
+  {
+    id: "nat_dynasty",
+    title: "Reprezentační dynastie",
+    desc: "Vyhraj 2 velké turnaje napříč kariérou.",
+    icon: "👑",
+    tier: "gold",
+    check: (c) => (c.allTime.majorTitles ?? 0) >= 2,
+  },
+  {
+    id: "nat_globetrotter",
+    title: "Selekce světa",
+    desc: "Veď 3 různé reprezentace.",
+    icon: "🧭",
+    tier: "silver",
+    check: (c) => (c.allTime.nationsCoached ?? []).length >= 3,
+  },
+];
+
+/** Ids reprezentačních achievementů splněných v daném kontextu. */
+export function evaluateTournamentAchievements(ctx: TournamentCtx): string[] {
+  return TOURNAMENT_ACHIEVEMENTS.filter((a) => a.check(ctx)).map((a) => a.id);
+}
+
+/** Reprezentační achievementy, které se právě odemkly. */
+export function newlyEarnedTournament(
+  ownedIds: string[],
+  ctx: TournamentCtx
+): TournamentAchievement[] {
+  const owned = new Set(ownedIds);
+  return TOURNAMENT_ACHIEVEMENTS.filter((a) => !owned.has(a.id) && a.check(ctx));
+}
+
+/** Zobrazovací tvar achievementu (bez `check`) – sjednocuje oba registry pro UI grid. */
+export type AchievementDisplay = Omit<Achievement, "check">;
+
+function toDisplay(a: Achievement | TournamentAchievement): AchievementDisplay {
+  return { id: a.id, title: a.title, desc: a.desc, icon: a.icon, tier: a.tier };
+}
+
+/** Všechny achievementy (ligové + reprezentační) pro zobrazení v profilu. */
+export const ALL_ACHIEVEMENTS: AchievementDisplay[] = [
+  ...ACHIEVEMENTS.map(toDisplay),
+  ...TOURNAMENT_ACHIEVEMENTS.map(toDisplay),
 ];
 
 /** Vyhledá achievement dle id (pro UI render z EarnedAchievement). */

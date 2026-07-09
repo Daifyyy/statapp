@@ -17,8 +17,12 @@ import {
   RELEGATION_REP,
   REP_PERF_CLAMP,
   REP_PERF_WEIGHT,
+  TOURN_CHAMPION_REP,
+  TOURN_MISS_REP,
+  TOURN_QUALIFY_REP,
+  TOURN_STAGE_REP,
 } from "./balance";
-import type { GameTeam, SeasonSummary } from "./types";
+import type { GameTeam, SeasonSummary, TournamentSummary } from "./types";
 
 /** O kolik smí prestiž týmu přesáhnout reputaci, aby tě přesto najal (mírné natažení). */
 export const HIRE_MARGIN = 4;
@@ -52,6 +56,25 @@ export function updateReputation(
   );
   const delta =
     euroRep + championRep + relegRep + promotionRep + objectiveRep + performance * REP_PERF_WEIGHT;
+  return clamp(Math.round(prev + delta), 0, 100);
+}
+
+/**
+ * Nová reputace po reprezentačním turnaji. Paralelní k `updateReputation` (ta čte 6 ligových
+ * polí → nevolatelná). Neúspěch v kvalifikaci reputaci ubere; postup ji zvedne, dál pak dle
+ * nejdál dosažené fáze, s bonusem za titul. Clamp 0–100.
+ */
+export function updateReputationTournament(
+  prev: number,
+  summary: TournamentSummary
+): number {
+  let delta: number;
+  if (!summary.qualified) {
+    delta = TOURN_MISS_REP;
+  } else {
+    const stageRep = TOURN_STAGE_REP[summary.stageReached] ?? 0;
+    delta = TOURN_QUALIFY_REP + stageRep + (summary.champion ? TOURN_CHAMPION_REP : 0);
+  }
   return clamp(Math.round(prev + delta), 0, 100);
 }
 

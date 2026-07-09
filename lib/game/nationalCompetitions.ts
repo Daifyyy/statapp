@@ -49,7 +49,15 @@ import {
   nationalsByConfed,
 } from "./nationalTeams";
 import type { ConfedCode, NationalSeed } from "./nationalTeams";
-import type { Fixture, GameTeam, Instruction, MatchResult, Modifier, Plan } from "./types";
+import type {
+  Fixture,
+  GameTeam,
+  Instruction,
+  MatchResult,
+  Modifier,
+  Plan,
+  TournamentSummary,
+} from "./types";
 
 // ───────────────────────── registr soutěží ─────────────────────────
 
@@ -557,6 +565,35 @@ export function stageReachedOf(run: TournamentRun): Stage {
   if (run.phase !== "done") return run.tournament?.yourStage ?? "group";
   if (!run.qualified) return "group";
   return run.tournament?.yourStage ?? "group";
+}
+
+/**
+ * Souhrn dohraného běhu do síně slávy. Zápasové statistiky agregují **kvalifikaci i turnaj**
+ * (jinak by nekvalifikovaný trenér měl `played: 0`). `champion` = vyhrál jsi celý turnaj.
+ */
+export function summarizeRun(run: TournamentRun): TournamentSummary {
+  const comp = COMPETITIONS[run.competitionId];
+  const qual = tallyMatches(run.qualification.results, run.yourTeamId);
+  const finals = run.tournament
+    ? tallyMatches(run.tournament.results, run.yourTeamId)
+    : { played: 0, win: 0, draw: 0, loss: 0, goalsFor: 0, goalsAgainst: 0 };
+  return {
+    competitionId: comp.id,
+    competitionName: comp.name,
+    edition: run.edition,
+    teamId: run.yourTeamId,
+    teamName: run.yourName,
+    teamLogo: run.yourLogo,
+    qualified: run.qualified,
+    stageReached: stageReachedOf(run),
+    champion: run.tournament?.champion === run.yourTeamId,
+    played: qual.played + finals.played,
+    win: qual.win + finals.win,
+    draw: qual.draw + finals.draw,
+    loss: qual.loss + finals.loss,
+    goalsFor: qual.goalsFor + finals.goalsFor,
+    goalsAgainst: qual.goalsAgainst + finals.goalsAgainst,
+  };
 }
 
 export { STAGE_LABEL };
