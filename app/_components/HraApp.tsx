@@ -5,8 +5,23 @@ import { AppHeader } from "./AppHeader";
 import { TeamLogo } from "./TeamLogo";
 import type { SessionUser } from "./sessionUser";
 import { HistoryView, ManagerHub, NationPicker, ProfilePanel } from "./hra/Profile";
+import { shareOrCopy } from "./share";
 import { teamById, injectYourTeam } from "@/lib/game/teams";
 import { randomSeed } from "@/lib/game/rng";
+import {
+  CLUB_CUP_FORMAT,
+  CLUB_CUP_NAME,
+  clubQualifies,
+  cupPreview,
+  isCupRunOver,
+  playCupRunRound,
+  setCupInstruction,
+  setCupPlan,
+  simulateCupRunToEnd,
+  startCupRun,
+  summarizeCupRun,
+} from "@/lib/game/clubCup";
+import type { CupRun } from "@/lib/game/clubCup";
 import { RNG_SALT_LEAGUE } from "@/lib/game/agency";
 import {
   newSeason,
@@ -52,9 +67,10 @@ import type { DevSpend } from "@/lib/game/development";
 import { leagueGoalsPerTeamGame, teamSeasonStats, venueStats } from "@/lib/game/analysis";
 import { STYLE_LABEL } from "@/lib/game/scouting";
 import type { ScoutReport } from "@/lib/game/scouting";
-import { emptyProfile, startCareer, foldSeason, foldTournament } from "@/lib/game/profile";
-import { newlyEarned, newlyEarnedTournament } from "@/lib/game/achievements";
-import { updateReputationTournament } from "@/lib/game/reputation";
+import type { OppStyle } from "@/lib/game/types";
+import { emptyProfile, startCareer, foldSeason, foldTournament, foldCup } from "@/lib/game/profile";
+import { newlyEarned, newlyEarnedTournament, newlyEarnedCup } from "@/lib/game/achievements";
+import { updateReputationTournament, updateReputationCup } from "@/lib/game/reputation";
 import {
   COMPETITIONS,
   startRun,
@@ -72,7 +88,7 @@ import {
 } from "@/lib/game/nationalCompetitions";
 import type { CompetitionId, TournamentRun } from "@/lib/game/nationalCompetitions";
 import { groupIndexOf, groupTableOf } from "@/lib/game/tournament";
-import type { Stage } from "@/lib/game/tournament";
+import type { Stage, TournamentFormat, TournamentState } from "@/lib/game/tournament";
 import { SAVE_VERSION } from "@/lib/game/types";
 import {
   DEV_STADIUM_STEP,
@@ -94,7 +110,7 @@ import type {
   SeasonState,
 } from "@/lib/game/types";
 
-type GameView = "season" | "history" | "profile";
+type GameView = "season" | "history" | "profile" | "cup";
 
 const NAV = [
   { href: "/", label: "Zápasy", emoji: "📅" },
@@ -144,7 +160,7 @@ async function saveEndpoint(next: SaveState): Promise<boolean> {
 function migrateSave(raw: unknown): SaveState | null {
   let save = raw as (SaveState & { version: number }) | null | undefined;
   if (!save) return null;
-  // Migrace se řetězí (5 → 6 → 7 → 8 → 9), ať starý save nezůstane viset na mezikroku.
+  // Migrace se řetězí (5 → 6 → 7 → 8 → 9 → 10), ať starý save nezůstane viset na mezikroku.
   if (save.version === 5) {
     save = {
       ...save,
@@ -184,6 +200,10 @@ function migrateSave(raw: unknown): SaveState | null {
       version: 9,
       current: save.current ? { ...save.current, scouting: 0 } : null,
     };
+  }
+  if (save.version === 9) {
+    // v10 přidal klubový pohár (paralelní k reprezentačnímu turnaji) – čistě aditivní.
+    save = { ...save, version: 10, cup: save.cup ?? null, cupHistory: save.cupHistory ?? [] };
   }
   if (save.version === SAVE_VERSION) return save;
   return null;
@@ -293,6 +313,9 @@ export function HraApp({ user }: { user: SessionUser | null }) {
           // Paralelní reprezentační běh zůstává (invariant XOR zrušen).
           tournament: prev?.tournament ?? null,
           tournamentHistory: prev?.tournamentHistory ?? [],
+          // Nová klubová kariéra = žádný rozjetý pohár (patřil starému klubu); síň slávy zůstává.
+          cup: null,
+          cupHistory: prev?.cupHistory ?? [],
         };
         trackSave(next);
         return next;
@@ -315,6 +338,15 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     setSave((prev) => {
       if (!prev || !prev.tournament) return prev;
       const next = { ...prev, tournament: fn(prev.tournament) };
+      trackSave(next);
+      return next;
+    });
+  }, [trackSave]);
+
+  const mutateCup = useCallback((fn: (r: CupRun) => CupRun) => {
+    setSave((prev) => {
+      if (!prev || !prev.cup) return prev;
+      const next = { ...prev, cup: fn(prev.cup) };
       trackSave(next);
       return next;
     });
@@ -441,6 +473,96 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     setView("season");
   }, [trackSave]);
 
+  // ── Klubový pohár (paralelní k sezóně, viz `finishAndAdvance`) ──
+  const onCupPlayRound = useCallback(() => {
+    setBusy(true);
+    setTimeout(() => {
+      setSave((prev) => {
+        if (!prev || !prev.cup || isCupRunOver(prev.cup)) return prev;
+        const before = prev.cup;
+        const prevMorale = before.tournament.morale;
+        const after = playCupRunRound(before);
+        const next = { ...prev, cup: after };
+        trackSave(next);
+        const yourLast = [...after.tournament.results]
+          .reverse()
+          .find((r) => r.homeId === before.yourTeamId || r.awayId === before.yourTeamId);
+        if (yourLast) {
+          const isHome = yourLast.homeId === before.yourTeamId;
+          const opp = teamById(after.tournament.teams, isHome ? yourLast.awayId : yourLast.homeId);
+          const data: ToastData = {
+            oppName: opp.name,
+            yourGoals: isHome ? yourLast.homeGoals : yourLast.awayGoals,
+            oppGoals: isHome ? yourLast.awayGoals : yourLast.homeGoals,
+            moraleDelta: after.tournament.morale - prevMorale,
+          };
+          queueMicrotask(() => showToast(data));
+        }
+        return next;
+      });
+      setBusy(false);
+    }, 0);
+  }, [trackSave, showToast]);
+
+  const onCupSimToEnd = useCallback(() => {
+    setConfirmDialog({
+      message:
+        "Dohrát celý pohár s aktuálním plánem? Zbývající zápasy se odehrají najednou, události se přeskočí a akci nejde vrátit.",
+      confirmLabel: "Dohrát pohár",
+      onConfirm: () => {
+        setBusy(true);
+        setTimeout(() => {
+          mutateCup((r) => simulateCupRunToEnd(r));
+          setBusy(false);
+        }, 0);
+      },
+    });
+  }, [mutateCup]);
+
+  const onCupPlan = useCallback((p: Plan) => mutateCup((r) => setCupPlan(r, p)), [mutateCup]);
+  const onCupInstruction = useCallback(
+    (i: Instruction) => mutateCup((r) => setCupInstruction(r, i)),
+    [mutateCup]
+  );
+  const onCupEventChoice = useCallback(
+    (choiceIndex: number) =>
+      mutateCup((r) => ({ ...r, tournament: applyEventChoice(r.tournament, choiceIndex) })),
+    [mutateCup]
+  );
+
+  // Uzavře pohár: souhrn + reputace + fold do profilu + achievementy, pak zpět do sezóny.
+  const onFinishCup = useCallback(() => {
+    setSave((prev) => {
+      if (!prev || !prev.cup) return prev;
+      const summary = summarizeCupRun(prev.cup);
+      const reputation = updateReputationCup(prev.manager.reputation, summary);
+      const folded = foldCup(prev.profile, summary);
+      const earned = newlyEarnedCup(prev.profile.achievements.map((a) => a.id), {
+        allTime: folded.allTime,
+        last: summary,
+        reputation,
+      });
+      const nowIso = new Date().toISOString();
+      const profile: ManagerProfile = {
+        ...folded,
+        achievements: [
+          ...folded.achievements,
+          ...earned.map((a) => ({ id: a.id, season: summary.season, date: nowIso })),
+        ],
+      };
+      const next: SaveState = {
+        ...prev,
+        profile,
+        manager: { reputation },
+        cup: null,
+        cupHistory: [...(prev.cupHistory ?? []), summary],
+      };
+      trackSave(next);
+      if (earned.length > 0) setHasUnseenAchievement(true);
+      return next;
+    });
+  }, [trackSave]);
+
   const onPlayRound = useCallback(() => {
     setBusy(true);
     // setTimeout (ne přímo synchronně) nechá prohlížeč nejdřív vykreslit `busy`
@@ -523,12 +645,37 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             ...earned.map((a) => ({ id: a.id, season: summary.season, date: nowIso })),
           ],
         };
+        const nextSeason = buildNext(prev, prev.current);
+        // Klubový pohár se sestaví hned na konci sezóny (ne líně při dalším vstupu), ať
+        // hráč uvidí "postup do poháru" rovnou v souhrnu sezóny. Nerozjetý pohár se nikdy
+        // nepřepíše (dohrát/uzavřít ho řeší samostatná akce) – ANI když bys tuhle sezónou
+        // do Evropy nepostoupil, běžící pohár z dřívějška zůstává. Kvalifikace patří KLUBU,
+        // ne trenérovi: job market na jiný klub (`onSwitch` s jiným `yourTeamId`) ji nebere
+        // s sebou, stejně jako se nebere akademie/skauting – jen postup/sestup se STEJNÝM
+        // klubem (`s.yourTeamId` beze změny) kvalifikaci zachová. Odchod k jinému klubu
+        // (`!sameClub`) i rozjetý pohár zahodí – vedeš teď jiný klub, dohrávat cizí pohár
+        // by nedávalo smysl. Fáze bez UI: reálně na to hráč zatím nenarazí (ke ztrátě
+        // rozjetého poháru přes job market dojde, až Fáze 3 UI umožní pohár vidět/hrát).
+        const sameClub = nextSeason.yourTeamId === prev.current.yourTeamId;
+        const cup = !sameClub
+          ? null
+          : (prev.cup ??
+            (clubQualifies(summary.europe)
+              ? startCupRun(
+                  randomSeed(),
+                  teamById(nextSeason.teams, nextSeason.yourTeamId),
+                  nextSeason.season,
+                  (prev.cupHistory?.length ?? 0) + 1,
+                  summary.yourPrestige
+                )
+              : null));
         const next: SaveState = {
           ...prev,
           profile,
           manager: { reputation },
-          current: buildNext(prev, prev.current),
+          current: nextSeason,
           history: [...prev.history, summary],
+          cup,
         };
         trackSave(next);
         if (earned.length > 0) setHasUnseenAchievement(true);
@@ -587,6 +734,8 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             history: [],
             tournament: null,
             tournamentHistory: [],
+            cup: null,
+            cupHistory: [],
           };
           trackSave(next);
           return next;
@@ -607,7 +756,8 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       onConfirm: () => {
         setSave((prev) => {
           if (!prev) return prev;
-          const next: SaveState = { ...prev, current: null, history: [] };
+          // Pohár patří klubu (viz `finishAndAdvance`) → ukončení klubu ho zahodí spolu s ním.
+          const next: SaveState = { ...prev, current: null, history: [], cup: null, cupHistory: [] };
           trackSave(next);
           return next;
         });
@@ -752,6 +902,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
               onError={setError}
               hasUnseenAchievement={hasUnseenAchievement}
               onDismissUnseenAchievement={() => setHasUnseenAchievement(false)}
+              cup={save.cup ?? null}
+              onCupPlayRound={onCupPlayRound}
+              onCupSimulateToEnd={onCupSimToEnd}
+              onCupPlan={onCupPlan}
+              onCupInstruction={onCupInstruction}
+              onCupEventChoice={onCupEventChoice}
+              onCupFinish={onFinishCup}
             />
           ) : null}
         </>
@@ -803,6 +960,51 @@ function ConfirmDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Tlačítko „Sdílet výsledek" pro dohranou sezónu/turnaj. Sestaví veřejnou URL
+ * na `/hra/vysledek` (query-string driven, žádný DB lookup na druhé straně, viz
+ * `app/hra/vysledek/page.tsx`) a spustí nativní share sheet / clipboard fallback
+ * (`shareOrCopy`, sdílené s `AppHeader`'s `ShareButton`).
+ */
+function ShareResultButton({
+  club,
+  headline,
+  context,
+  titles,
+}: {
+  club: string;
+  headline: string;
+  context: string;
+  titles?: number;
+}) {
+  const [state, setState] = useState<"idle" | "copied" | "error">("idle");
+
+  async function share() {
+    const params = new URLSearchParams({ club, headline, context });
+    if (titles) params.set("titles", String(titles));
+    const url = `${window.location.origin}/hra/vysledek?${params.toString()}`;
+    const outcome = await shareOrCopy(url, `${club} — ${headline}`);
+    if (outcome === "copied") {
+      setState("copied");
+      setTimeout(() => setState("idle"), 1500);
+    } else if (outcome === "error") {
+      setState("error");
+      setTimeout(() => setState("idle"), 2500);
+    }
+  }
+
+  const label = state === "copied" ? "Zkopírováno" : state === "error" ? "Nešlo zkopírovat" : "Sdílet výsledek";
+  return (
+    <button
+      type="button"
+      onClick={share}
+      className="mt-3 rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-muted transition hover:text-foreground"
+    >
+      <span aria-hidden>🔗</span> {label}
+    </button>
   );
 }
 
@@ -1170,6 +1372,13 @@ function GameView({
   onError,
   hasUnseenAchievement,
   onDismissUnseenAchievement,
+  cup,
+  onCupPlayRound,
+  onCupSimulateToEnd,
+  onCupPlan,
+  onCupInstruction,
+  onCupEventChoice,
+  onCupFinish,
 }: {
   save: SaveState;
   managerName: string | null;
@@ -1199,6 +1408,14 @@ function GameView({
   onError: (e: string | null) => void;
   hasUnseenAchievement: boolean;
   onDismissUnseenAchievement: () => void;
+  /** Probíhající klubový pohár, nebo null (tab se ukáže jen když existuje). */
+  cup: CupRun | null;
+  onCupPlayRound: () => void;
+  onCupSimulateToEnd: () => void;
+  onCupPlan: (p: Plan) => void;
+  onCupInstruction: (i: Instruction) => void;
+  onCupEventChoice: (choiceIndex: number) => void;
+  onCupFinish: () => void;
 }) {
   const s = save.current;
   if (!s) return null; // GameView se renderuje jen s aktivní kariérou
@@ -1226,6 +1443,11 @@ function GameView({
           <Segment active={view === "history"} onClick={() => setView("history")}>
             Kariéra
           </Segment>
+          {cup && (
+            <Segment active={view === "cup"} onClick={() => setView("cup")}>
+              🏆 Pohár
+            </Segment>
+          )}
           <Segment
             active={view === "profile"}
             dot={hasUnseenAchievement}
@@ -1263,11 +1485,24 @@ function GameView({
             current={s}
             history={save.history}
             tournamentHistory={save.tournamentHistory ?? []}
+            cupHistory={save.cupHistory ?? []}
           />
           <CareerManagement endLabel="klubovou kariéru" onEnd={onEndClub} onReset={onReset} />
         </>
       ) : view === "history" ? (
         <HistoryView save={save} />
+      ) : view === "cup" && cup ? (
+        <CupView
+          cup={cup}
+          save={save}
+          busy={busy}
+          onPlayRound={onCupPlayRound}
+          onSimulateToEnd={onCupSimulateToEnd}
+          onPlan={onCupPlan}
+          onInstruction={onCupInstruction}
+          onEventChoice={onCupEventChoice}
+          onFinish={onCupFinish}
+        />
       ) : done ? (
         <SeasonDone
           save={save}
@@ -1515,6 +1750,7 @@ function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) 
       <p className="mt-1 text-[11px] text-muted">
         <span className="text-foreground">{oppName}:</span> {scout.note}
       </p>
+      <StyleCompass reportedStyle={scout.reportedStyle} confidence={scout.confidence} />
       {q !== "detailed" && (
         <p className="mt-1 text-[10px] italic text-muted">
           Skauti nemuseli vidět všechno — soupeř může mít i rysy, které nehlásí.
@@ -1525,6 +1761,58 @@ function ScoutCard({ scout, oppName }: { scout: ScoutReport; oppName: string }) 
           🎯 Skauti radí: <strong>{scout.suggestion.text}</strong>
         </p>
       )}
+    </div>
+  );
+}
+
+const COMPASS_ZONES: { key: OppStyle; label: string; pos: number }[] = [
+  { key: "attacking", label: "Útočný", pos: 16.7 },
+  { key: "balanced", label: "Vyrovnaný", pos: 50 },
+  { key: "defensive", label: "Defenzivní", pos: 83.3 },
+];
+
+/**
+ * Vizuální "kompas" HLÁŠENÉHO stylu soupeře. Ukazuje jen `reportedStyle`/`confidence`
+ * (nikdy pravdu, viz komentář u `ScoutCard`) – nejistota se řeší vizuálně (rozmazaná,
+ * širší "skvrna" místo přesného bodu), ne skrytím čísla. `reportedStyle === null`
+ * (kvalita `vague`) = žádná značka, jen spektrum bez odpovědi.
+ */
+function StyleCompass({
+  reportedStyle,
+  confidence,
+}: {
+  reportedStyle: OppStyle | null;
+  confidence: number;
+}) {
+  const pos = reportedStyle ? COMPASS_ZONES.find((z) => z.key === reportedStyle)!.pos : 50;
+  // Nízká spolehlivost → větší, průhlednější "skvrna" nejistoty; vysoká → těsný bod.
+  const halo = 10 + (1 - confidence) * 34;
+  return (
+    <div className="mt-2">
+      <div className="relative h-3 overflow-hidden rounded-full bg-border/40">
+        <div className="absolute inset-0 flex">
+          {COMPASS_ZONES.map((z) => (
+            <div key={z.key} className="flex-1 border-r border-background/60 last:border-r-0" />
+          ))}
+        </div>
+        {reportedStyle && (
+          <>
+            <div
+              className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-warning"
+              style={{ left: `${pos}%`, width: halo, height: halo, opacity: 0.12 }}
+            />
+            <div
+              className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-warning"
+              style={{ left: `${pos}%`, opacity: 0.35 + confidence * 0.65 }}
+            />
+          </>
+        )}
+      </div>
+      <div className="mt-1 flex justify-between text-[9px] text-muted">
+        {COMPASS_ZONES.map((z) => (
+          <span key={z.key}>{z.label}</span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1754,29 +2042,47 @@ const EvidencePanel = memo(function EvidencePanel({
         {isHome ? "ty doma · soupeř venku" : "ty venku · soupeř doma"} · ⌀ liga{" "}
         {leagueAvg.toFixed(2)} gólu/zápas
       </div>
-      <div className="space-y-1">
+      <div className="space-y-2">
         {rows.map((r) => {
           // „Lepší" se poměřuje vůči LIZE, ne vůči soupeři – přesně tak, jak styl
           // odvozuje scouting (útok/obrana proti ligovému průměru).
           const aGood = r.lowerIsBetter ? r.a < leagueAvg : r.a > leagueAvg;
           const bGood = r.lowerIsBetter ? r.b < leagueAvg : r.b > leagueAvg;
+          // Relativní pruh ty-vs-soupeř: u "lower is better" metrik se poměr počítá
+          // z převrácených hodnot, ať širší úsek vždy znamená "lepší", ne "vyšší číslo".
+          const va = r.lowerIsBetter ? 1 / (r.a + 0.05) : r.a;
+          const vb = r.lowerIsBetter ? 1 / (r.b + 0.05) : r.b;
+          const total = va + vb;
+          const ratio = total > 0 ? va / total : 0.5;
           return (
-            <div key={r.label} className="grid grid-cols-3 items-center text-xs">
-              <span
-                className={
-                  "text-left tabular-nums " + (aGood ? "font-bold text-positive" : "text-muted")
-                }
-              >
-                {r.a.toFixed(2)}
-              </span>
-              <span className="text-center text-[11px] text-muted">{r.label}</span>
-              <span
-                className={
-                  "text-right tabular-nums " + (bGood ? "font-bold text-positive" : "text-muted")
-                }
-              >
-                {r.b.toFixed(2)}
-              </span>
+            <div key={r.label}>
+              <div className="grid grid-cols-3 items-center text-xs">
+                <span
+                  className={
+                    "text-left tabular-nums " + (aGood ? "font-bold text-positive" : "text-muted")
+                  }
+                >
+                  {r.a.toFixed(2)}
+                </span>
+                <span className="text-center text-[11px] text-muted">{r.label}</span>
+                <span
+                  className={
+                    "text-right tabular-nums " + (bGood ? "font-bold text-positive" : "text-muted")
+                  }
+                >
+                  {r.b.toFixed(2)}
+                </span>
+              </div>
+              <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-border/40">
+                <div
+                  className={"bar-fill " + (aGood ? "bg-positive" : "bg-muted/40")}
+                  style={{ width: `${ratio * 100}%` }}
+                />
+                <div
+                  className={"bar-fill " + (bGood ? "bg-positive" : "bg-muted/40")}
+                  style={{ width: `${(1 - ratio) * 100}%` }}
+                />
+              </div>
             </div>
           );
         })}
@@ -2367,6 +2673,11 @@ function SeasonDone({
         <p className="mt-1 text-sm text-muted">
           Mistr: <strong className="text-foreground">{champ.name}</strong>
         </p>
+        {clubQualifies(summary.europe) && (
+          <p className="mt-2 rounded-lg bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">
+            🎟️ Postup do {CLUB_CUP_NAME}! (Pokud pokračuješ se stejným klubem.)
+          </p>
+        )}
         <p className="mt-2 text-xs">
           Reputace{" "}
           <strong className={repDelta >= 0 ? "text-positive" : "text-negative"}>
@@ -2375,6 +2686,12 @@ function SeasonDone({
           </strong>{" "}
           → {projectedRep}
         </p>
+        <ShareResultButton
+          club={teamById(s.teams, s.yourTeamId).name}
+          headline={seasonHeadline(summary)}
+          context={`Sezóna ${summary.season} · ${s.leagueName}`}
+          titles={folded.allTime.titles}
+        />
         {earned.length > 0 && (
           <div className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3">
             <div className="text-xs font-semibold text-warning">🏅 Odemčeno</div>
@@ -2675,6 +2992,7 @@ function TournamentView({
           current={save.current}
           history={save.history}
           tournamentHistory={save.tournamentHistory ?? []}
+          cupHistory={save.cupHistory ?? []}
         />
       ) : over ? (
         <TournamentDone run={run} save={save} onFinish={onFinish} />
@@ -2691,7 +3009,11 @@ function TournamentView({
           >
             {busy ? "Simuluje se…" : "Dohrát turnaj do konce"}
           </button>
-          <TournamentBracket run={run} />
+          <TournamentBracket
+            tournament={run.tournament!}
+            yourTeamId={run.yourTeamId}
+            format={comp.format}
+          />
         </>
       ) : (
         <>
@@ -2719,7 +3041,11 @@ function TournamentView({
           {run.phase === "qualification" ? (
             <QualTable run={run} />
           ) : (
-            <TournamentBracket run={run} />
+            <TournamentBracket
+              tournament={run.tournament!}
+              yourTeamId={run.yourTeamId}
+              format={comp.format}
+            />
           )}
         </>
       )}
@@ -2836,13 +3162,21 @@ function QualTable({ run }: { run: TournamentRun }) {
 }
 
 /** Skupinová tabulka + tvoje cesta pavoukem v závěrečném turnaji. */
-const TournamentBracket = memo(function TournamentBracket({ run }: { run: TournamentRun }) {
-  const t = run.tournament;
-  if (!t) return null;
-  const format = COMPETITIONS[run.competitionId].format;
-
+/**
+ * Skupina + pavouk z libovolného `TournamentState` (reprezentační turnaj i klubový pohár
+ * sdílejí stejný typ, viz `tournament.ts`) – sdílené mezi `TournamentView` a `CupView`.
+ */
+const TournamentBracket = memo(function TournamentBracket({
+  tournament: t,
+  yourTeamId,
+  format,
+}: {
+  tournament: TournamentState;
+  yourTeamId: number;
+  format: TournamentFormat;
+}) {
   // Skupinová fáze → tvoje skupina; pak už jen cesta pavoukem.
-  const gi = groupIndexOf(t, run.yourTeamId);
+  const gi = groupIndexOf(t, yourTeamId);
   const showGroup = gi >= 0;
   const groupRows =
     showGroup && t.stage !== "done"
@@ -2857,7 +3191,7 @@ const TournamentBracket = memo(function TournamentBracket({ run }: { run: Tourna
 
   // Tvoje vyřazovací zápasy (odehrané) + nejbližší dvojice.
   const yourKo = t.knockout.filter(
-    (k) => k.homeId === run.yourTeamId || k.awayId === run.yourTeamId
+    (k) => k.homeId === yourTeamId || k.awayId === yourTeamId
   );
 
   return (
@@ -2867,7 +3201,7 @@ const TournamentBracket = memo(function TournamentBracket({ run }: { run: Tourna
           <h3 className="text-xs font-semibold text-foreground">
             Skupina · postupují {format.advancePerGroup}
           </h3>
-          <MiniTable rows={groupRows} yourId={run.yourTeamId} qualifyTop={format.advancePerGroup} />
+          <MiniTable rows={groupRows} yourId={yourTeamId} qualifyTop={format.advancePerGroup} />
         </div>
       )}
       {yourKo.length > 0 && (
@@ -2875,11 +3209,11 @@ const TournamentBracket = memo(function TournamentBracket({ run }: { run: Tourna
           <h3 className="text-xs font-semibold text-foreground">Tvoje cesta pavoukem</h3>
           <div className="mt-2 space-y-1.5">
             {yourKo.map((k, i) => {
-              const isHome = k.homeId === run.yourTeamId;
+              const isHome = k.homeId === yourTeamId;
               const oppId = isHome ? k.awayId : k.homeId;
               const yourGoals = isHome ? k.homeGoals : k.awayGoals;
               const oppGoals = isHome ? k.awayGoals : k.homeGoals;
-              const won = k.winnerId === run.yourTeamId;
+              const won = k.winnerId === yourTeamId;
               return (
                 <div
                   key={i}
@@ -3033,6 +3367,263 @@ function TournamentDone({
           </strong>{" "}
           → {projectedRep}
         </p>
+        <ShareResultButton
+          club={run.yourName}
+          headline={headline}
+          context={COMPETITIONS[run.competitionId].name}
+          titles={folded.allTime.majorTitles}
+        />
+        {earned.length > 0 && (
+          <div className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3">
+            <div className="text-xs font-semibold text-warning">🏅 Odemčeno</div>
+            <div className="mt-2 flex flex-wrap justify-center gap-1.5">
+              {earned.map((a) => (
+                <span
+                  key={a.id}
+                  className="flex items-center gap-1 rounded-full border border-warning/40 bg-surface px-2 py-1 text-[11px] font-medium text-foreground"
+                  title={a.desc}
+                >
+                  <span aria-hidden>{a.icon}</span>
+                  {a.title}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onFinish}
+          className="mt-4 rounded-full bg-positive px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+        >
+          Dokončit →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────── klubový pohár (UI) ─────────────────────────
+
+/** Sub-tab uvnitř klubového režimu (vedle Sezóna/Kariéra/Profil) – jen když `cup` existuje. */
+function CupView({
+  cup,
+  save,
+  busy,
+  onPlayRound,
+  onSimulateToEnd,
+  onPlan,
+  onInstruction,
+  onEventChoice,
+  onFinish,
+}: {
+  cup: CupRun;
+  save: SaveState;
+  busy: boolean;
+  onPlayRound: () => void;
+  onSimulateToEnd: () => void;
+  onPlan: (p: Plan) => void;
+  onInstruction: (i: Instruction) => void;
+  onEventChoice: (choiceIndex: number) => void;
+  onFinish: () => void;
+}) {
+  const t = cup.tournament;
+  const over = isCupRunOver(cup);
+  // Vypadl jsi v pavouku, ale pohár ještě běží (dohrává se, aby byl znám vítěz).
+  const eliminated = !over && t.eliminated;
+  const pendingEvent = t.pendingEvent;
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2">
+        <TeamLogo src={cup.yourLogo} alt={cup.yourName} size={30} />
+        <div className="leading-tight">
+          <div className="text-sm font-semibold text-foreground">{cup.yourName}</div>
+          <div className="text-xs text-muted">
+            🏆 {CLUB_CUP_NAME} · {STAGE_LABEL[t.yourStage]}
+          </div>
+        </div>
+      </div>
+
+      {over ? (
+        <CupDone cup={cup} save={save} onFinish={onFinish} />
+      ) : eliminated ? (
+        <>
+          <div className="mt-4 rounded-2xl border border-negative/40 bg-negative/10 p-4 text-center text-sm text-negative">
+            Tvůj klub v poháru vypadl. Pohár se dohraje, aby byl znám vítěz.
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onSimulateToEnd}
+            className="mt-3 w-full rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+          >
+            {busy ? "Simuluje se…" : "Dohrát pohár do konce"}
+          </button>
+          <TournamentBracket tournament={t} yourTeamId={cup.yourTeamId} format={CLUB_CUP_FORMAT} />
+        </>
+      ) : (
+        <>
+          {pendingEvent && <EventCard event={pendingEvent} onChoice={onEventChoice} />}
+          <CupNextMatch cup={cup} onPlan={onPlan} onInstruction={onInstruction} />
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={busy || Boolean(pendingEvent)}
+              onClick={onPlayRound}
+              title={pendingEvent ? "Nejdřív vyřeš událost výše" : undefined}
+              className="flex-1 rounded-full bg-positive px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-50"
+            >
+              {busy ? "Simuluje se…" : "Odehrát zápas"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onSimulateToEnd}
+              className="rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-50"
+            >
+              {busy ? "Simuluje se…" : "Dohrát pohár"}
+            </button>
+          </div>
+          <TournamentBracket tournament={t} yourTeamId={cup.yourTeamId} format={CLUB_CUP_FORMAT} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Náhled nejbližšího zápasu poháru + agency (obdoba `TournamentNextMatch`/`NextMatch`). */
+function CupNextMatch({
+  cup,
+  onPlan,
+  onInstruction,
+}: {
+  cup: CupRun;
+  onPlan: (p: Plan) => void;
+  onInstruction: (i: Instruction) => void;
+}) {
+  const preview = cupPreview(cup);
+  const t = cup.tournament;
+  if (!preview) return null;
+  const { you, opponent, isHome, probs } = preview;
+
+  return (
+    <div className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+        Nejbližší zápas {isHome ? "(doma)" : "(venku)"}
+      </div>
+      <div className="mt-2 flex items-center justify-center gap-3">
+        <TeamBadge team={isHome ? you : opponent} size={30} />
+        <span className="max-w-[35%] truncate text-sm font-medium text-foreground">
+          {isHome ? you.name : opponent.name}
+        </span>
+        <span className="text-xs text-muted">vs</span>
+        <span className="max-w-[35%] truncate text-sm font-medium text-foreground">
+          {isHome ? opponent.name : you.name}
+        </span>
+        <TeamBadge team={isHome ? opponent : you} size={30} />
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1 text-center text-xs text-muted">Predikce modelu</div>
+        <div className="flex items-center justify-between text-sm font-bold tabular-nums">
+          <span className="text-home">{Math.round(probs.homeWin * 100)} %</span>
+          <span className="text-muted">{Math.round(probs.draw * 100)} %</span>
+          <span className="text-away">{Math.round(probs.awayWin * 100)} %</span>
+        </div>
+        <div className="mt-1 flex h-2.5 overflow-hidden rounded-full bg-border/60">
+          <div className="bar-fill bg-home/80" style={{ width: `${probs.homeWin * 100}%` }} />
+          <div className="bar-fill bg-muted/50" style={{ width: `${probs.draw * 100}%` }} />
+          <div className="bar-fill bg-away/80" style={{ width: `${probs.awayWin * 100}%` }} />
+        </div>
+      </div>
+
+      <ScoutCard scout={preview.scout} oppName={opponent.name} />
+      <MoraleBar morale={t.morale} />
+      <FitnessBar fitness={t.fitness} plan={t.plan} />
+      <ActiveModifiers state={{ modifiers: t.modifiers, round: t.round }} />
+
+      <div className="mt-4">
+        <div className="mb-1.5 text-xs font-semibold text-foreground">Zápasový plán</div>
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+          {PLANS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              aria-pressed={t.plan === p}
+              onClick={() => onPlan(p)}
+              className={
+                "rounded-lg px-2 py-1.5 text-xs font-medium transition " +
+                (t.plan === p
+                  ? "bg-foreground text-background"
+                  : "border border-border bg-surface text-muted hover:text-foreground")
+              }
+            >
+              {PLAN_LABEL[p]}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-center text-[11px] text-muted">{PLAN_HINT[t.plan]}</p>
+        <InstructionPicker value={t.instruction} onPick={onInstruction} disabled={false} />
+      </div>
+    </div>
+  );
+}
+
+/** Souhrn dohraného poháru (obdoba `TournamentDone`). */
+function CupDone({
+  cup,
+  save,
+  onFinish,
+}: {
+  cup: CupRun;
+  save: SaveState;
+  onFinish: () => void;
+}) {
+  const summary = summarizeCupRun(cup);
+  const projectedRep = updateReputationCup(save.manager.reputation, summary);
+  const repDelta = projectedRep - Math.round(save.manager.reputation);
+  const folded = foldCup(save.profile, summary);
+  const earned = newlyEarnedCup(save.profile.achievements.map((a) => a.id), {
+    allTime: folded.allTime,
+    last: summary,
+    reputation: projectedRep,
+  });
+
+  const good = summary.champion || summary.stageReached === "final" || summary.stageReached === "sf";
+  const headline = summary.champion
+    ? "Mistr! 🏆"
+    : summary.stageReached === "final"
+      ? "Finalista 🥈"
+      : `Konec ve fázi: ${STAGE_LABEL[summary.stageReached as Stage]}`;
+  const emoji = summary.champion ? "🏆" : good ? "🎉" : "🏁";
+  const toneClass = summary.champion || good ? "text-positive" : "text-foreground";
+
+  return (
+    <div className="mt-4">
+      <div className="rounded-2xl border border-border bg-surface p-5 text-center shadow-sm">
+        <p className="text-3xl">{emoji}</p>
+        <p className="mt-2 text-sm font-semibold text-foreground">
+          {CLUB_CUP_NAME} · {cup.yourName}
+        </p>
+        <p className={"mt-1 text-base font-bold " + toneClass}>{headline}</p>
+        <p className="mt-1 text-sm text-muted">
+          {summary.win}-{summary.draw}-{summary.loss} · {summary.goalsFor}:{summary.goalsAgainst} ·{" "}
+          {summary.played} zápasů
+        </p>
+        <p className="mt-2 text-xs">
+          Reputace{" "}
+          <strong className={repDelta >= 0 ? "text-positive" : "text-negative"}>
+            {repDelta >= 0 ? "+" : ""}
+            {repDelta}
+          </strong>{" "}
+          → {projectedRep}
+        </p>
+        <ShareResultButton
+          club={cup.yourName}
+          headline={headline}
+          context={CLUB_CUP_NAME}
+          titles={folded.allTime.cupTitles}
+        />
         {earned.length > 0 && (
           <div className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3">
             <div className="text-xs font-semibold text-warning">🏅 Odemčeno</div>

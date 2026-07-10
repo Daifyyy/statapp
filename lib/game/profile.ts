@@ -4,6 +4,7 @@
 
 import type {
   AllTimeRecords,
+  CupSummary,
   ManagerProfile,
   SeasonSummary,
   TournamentSummary,
@@ -35,6 +36,8 @@ export function emptyProfile(): ManagerProfile {
       majorTitles: 0,
       finalsReached: 0,
       nationsCoached: [],
+      cupsPlayed: 0,
+      cupTitles: 0,
     },
     achievements: [],
   };
@@ -107,6 +110,23 @@ export function foldTournament(
       majorTitles: (a.majorTitles ?? 0) + (summary.champion ? 1 : 0),
       finalsReached: (a.finalsReached ?? 0) + (summary.stageReached === "final" ? 1 : 0),
       nationsCoached: nations.includes(summary.teamId) ? nations : [...nations, summary.teamId],
+    },
+  };
+}
+
+/**
+ * Přičte jeden dohraný klubový pohár do trvalých rekordů. Sahá JEN na vlastní pole
+ * (`cupsPlayed`/`cupTitles`) – ligové (`titles`) zůstávají nedotčené, stejně jako
+ * `foldTournament` nesahá na ligové rekordy. Čistá funkce.
+ */
+export function foldCup(profile: ManagerProfile, summary: CupSummary): ManagerProfile {
+  const a = profile.allTime;
+  return {
+    ...profile,
+    allTime: {
+      ...a,
+      cupsPlayed: (a.cupsPlayed ?? 0) + 1,
+      cupTitles: (a.cupTitles ?? 0) + (summary.champion ? 1 : 0),
     },
   };
 }

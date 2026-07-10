@@ -386,6 +386,15 @@ export const QUAL_ADVANCE = 3;
  */
 export const QUAL_HOME_BOOST = HOME_BOOST_FALLBACK;
 
+// ───────────────────────── klubový pohár (reputace) ─────────────────────────
+
+/** Reputace za samotnou účast v poháru (analogie `TOURN_QUALIFY_REP`). */
+export const CUP_PARTICIPATE_REP = 3;
+/** Bonus za vítězství v poháru (nad rámec `TOURN_STAGE_REP` nejdál dosažené fáze). */
+export const CUP_CHAMPION_REP = 8;
+// Fáze (`TOURN_STAGE_REP` níže) se sdílí s reprezentačním turnajem – stejný `Stage` typ
+// (`tournament.ts`), stejná logika "jak daleko ses dostal". Ladí se dohromady.
+
 // ───────────────────────── reprezentační reputace (Phase 4 / T5) ─────────────────────────
 
 /** Reputace za neúspěch v kvalifikaci (nedostal ses na turnaj). */

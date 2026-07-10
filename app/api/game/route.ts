@@ -67,6 +67,9 @@ const saveSchema = z.object({
   // volitelné/nullable kvůli starým v8 save. Invariant „current XOR tournament" drží klient.
   tournament: z.object({}).passthrough().nullable().optional(),
   tournamentHistory: z.array(z.object({}).passthrough()).max(1000).optional(),
+  // Klubový pohár – stejně loose/volitelné jako `tournament`, volitelné kvůli starým v9 save.
+  cup: z.object({}).passthrough().nullable().optional(),
+  cupHistory: z.array(z.object({}).passthrough()).max(1000).optional(),
 });
 
 /** GET – načte uloženou hru přihlášeného uživatele (nebo `{ save: null }`). */

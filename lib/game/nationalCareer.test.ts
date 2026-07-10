@@ -7,6 +7,7 @@ import {
   ALL_ACHIEVEMENTS,
   ACHIEVEMENTS,
   TOURNAMENT_ACHIEVEMENTS,
+  CUP_ACHIEVEMENTS,
 } from "./achievements";
 import { simulateRunToEnd, startRun, summarizeRun } from "./nationalCompetitions";
 import {
@@ -209,8 +210,10 @@ describe("reprezentační achievementy", () => {
     expect(evaluateTournamentAchievements(ctxEuro)).not.toContain("nat_world");
   });
 
-  it("ALL_ACHIEVEMENTS sjednocuje oba registry bez kolize id", () => {
-    expect(ALL_ACHIEVEMENTS.length).toBe(ACHIEVEMENTS.length + TOURNAMENT_ACHIEVEMENTS.length);
+  it("ALL_ACHIEVEMENTS sjednocuje všechny registry bez kolize id", () => {
+    expect(ALL_ACHIEVEMENTS.length).toBe(
+      ACHIEVEMENTS.length + TOURNAMENT_ACHIEVEMENTS.length + CUP_ACHIEVEMENTS.length
+    );
     expect(new Set(ALL_ACHIEVEMENTS.map((a) => a.id)).size).toBe(ALL_ACHIEVEMENTS.length);
   });
 

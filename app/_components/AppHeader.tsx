@@ -3,10 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { track } from "@vercel/analytics";
 import { ThemeToggle } from "./ThemeToggle";
 import { AccountMenu } from "./AccountMenu";
 import type { SessionUser } from "./sessionUser";
+import { shareOrCopy } from "./share";
 
 /**
  * Sdílená hlavička obou stránek. Akční prvky jsou na mobilu jen ikony
@@ -62,23 +62,11 @@ export function AppHeader({
 function ShareButton() {
   const [state, setState] = useState<"idle" | "copied" | "error">("idle");
   async function share() {
-    const url = window.location.href;
-    track("share");
-    // Mobil: nativní share sheet (jen v secure kontextu). Zrušení uživatelem
-    // (AbortError) bereme jako tichý konec; jinou chybu řeší fallback na schránku.
-    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      try {
-        await navigator.share({ title: "Predictapp — porovnání týmů", url });
-        return;
-      } catch (e) {
-        if (e instanceof Error && e.name === "AbortError") return;
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url);
+    const outcome = await shareOrCopy(window.location.href, "Predictapp — porovnání týmů");
+    if (outcome === "copied") {
       setState("copied");
       setTimeout(() => setState("idle"), 1500);
-    } catch {
+    } else if (outcome === "error") {
       setState("error");
       setTimeout(() => setState("idle"), 2500);
     }

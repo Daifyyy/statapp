@@ -18,6 +18,7 @@ import { COMPETITIONS, nationOptions, STAGE_LABEL } from "@/lib/game/nationalCom
 import type { CompetitionId } from "@/lib/game/nationalCompetitions";
 import { STARTING_REPUTATION } from "@/lib/game/balance";
 import type {
+  CupSummary,
   EarnedAchievement,
   ManagerProfile,
   SaveState,
@@ -184,6 +185,52 @@ function TournamentRows({ history }: { history: TournamentSummary[] }) {
   );
 }
 
+/** Hlavní odznak dohraného klubového poháru (mistr / finalista / fáze). */
+function cupHeadline(c: CupSummary): { text: string; tone: "good" | "ok" | "bad" } {
+  if (c.champion) return { text: "Mistr 🏆", tone: "good" };
+  if (c.stageReached === "final") return { text: "Finalista 🥈", tone: "good" };
+  if (c.stageReached === "sf") return { text: STAGE_LABEL.sf, tone: "good" };
+  if (c.stageReached === "group") return { text: "Skupina", tone: "ok" };
+  return { text: STAGE_LABEL[c.stageReached as keyof typeof STAGE_LABEL] ?? "—", tone: "ok" };
+}
+
+/** Seznam dohraných klubových pohárů (nejnovější první). */
+function CupRows({ history }: { history: CupSummary[] }) {
+  return (
+    <div className="mt-2 space-y-1.5">
+      {[...history].reverse().map((c, i) => {
+        const h = cupHeadline(c);
+        const toneClass =
+          h.tone === "good"
+            ? "bg-positive/15 text-positive"
+            : h.tone === "bad"
+              ? "bg-negative/15 text-negative"
+              : "bg-border/60 text-muted";
+        return (
+          <div
+            key={`${c.cupId}-${c.edition}-${c.teamId}-${i}`}
+            className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+          >
+            <span className="w-8 shrink-0 text-xs text-muted">S{c.season}</span>
+            <span className="shrink-0" title={c.teamName}>
+              <TeamLogo src={c.teamLogo} alt={c.teamName} size={18} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs text-muted">{c.teamName}</span>
+            <span className="shrink-0 text-xs tabular-nums text-muted">
+              {c.win}-{c.draw}-{c.loss}
+            </span>
+            <span
+              className={"shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass}
+            >
+              {h.text}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Reputační zisk/ztráta za sezónu (barevný odznak). */
 function RepDelta({ delta }: { delta: number }) {
   const cls =
@@ -279,6 +326,7 @@ export function ManagerHub({
         activeCareer={false}
         history={save?.history ?? []}
         tournamentHistory={save?.tournamentHistory ?? []}
+        cupHistory={save?.cupHistory ?? []}
       />
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <button
@@ -402,6 +450,7 @@ export function ProfilePanel({
   current,
   history = [],
   tournamentHistory = [],
+  cupHistory = [],
 }: {
   profile: ManagerProfile;
   reputation: number | null;
@@ -413,6 +462,8 @@ export function ProfilePanel({
   history?: SeasonSummary[];
   /** Dohrané reprezentační turnaje. */
   tournamentHistory?: TournamentSummary[];
+  /** Dohrané klubové poháry. */
+  cupHistory?: CupSummary[];
 }) {
   const a = profile.allTime;
   const rep = reputation != null ? Math.round(reputation) : null;
@@ -469,8 +520,8 @@ export function ProfilePanel({
         </div>
       </div>
 
-      {/* Klubová vs reprezentační scéna */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {/* Klubová vs reprezentační vs evropská (pohárová) scéna */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
         <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
           <div className="text-xs font-semibold text-foreground">🏟️ Klubová scéna</div>
           <p className="mt-1 text-[11px] text-muted">
@@ -499,6 +550,14 @@ export function ProfilePanel({
             </p>
           )}
         </div>
+        <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+          <div className="text-xs font-semibold text-foreground">🏆 Klubový pohár</div>
+          <p className="mt-1 text-[11px] text-muted">
+            {(a.cupsPlayed ?? 0) > 0
+              ? `${a.cupTitles ?? 0}× titul · ${a.cupsPlayed ?? 0} účastí`
+              : "Zatím žádný klubový pohár."}
+          </p>
+        </div>
       </div>
 
       {/* Historie – klubové sezóny */}
@@ -514,6 +573,14 @@ export function ProfilePanel({
         <div>
           <h3 className="text-xs font-semibold text-foreground">Historie turnajů (reprezentace)</h3>
           <TournamentRows history={tournamentHistory} />
+        </div>
+      )}
+
+      {/* Historie – klubové poháry */}
+      {cupHistory.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold text-foreground">Historie klubových pohárů</h3>
+          <CupRows history={cupHistory} />
         </div>
       )}
 

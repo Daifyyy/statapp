@@ -10,6 +10,8 @@
 import { teamPrestige, teamStrengthScore } from "./leagues";
 import {
   CHAMPION_REP,
+  CUP_CHAMPION_REP,
+  CUP_PARTICIPATE_REP,
   EUROPE_REP,
   MIN_HIREABLE_PRESTIGE,
   OBJECTIVE_MET_REP,
@@ -23,7 +25,7 @@ import {
   TOURN_QUALIFY_REP,
   TOURN_STAGE_REP,
 } from "./balance";
-import type { GameTeam, SeasonSummary, TournamentSummary } from "./types";
+import type { CupSummary, GameTeam, SeasonSummary, TournamentSummary } from "./types";
 
 /** O kolik smí prestiž týmu přesáhnout reputaci, aby tě přesto najal (mírné natažení). */
 export const HIRE_MARGIN = 4;
@@ -88,6 +90,19 @@ export function updateReputationTournament(
     const stageRep = TOURN_STAGE_REP[summary.stageReached] ?? 0;
     delta = TOURN_QUALIFY_REP + stageRep + (summary.champion ? TOURN_CHAMPION_REP : 0);
   }
+  return applyCeiling(prev, delta, summary.teamPrestige);
+}
+
+/**
+ * Nová reputace po klubovém poháru. Na rozdíl od `updateReputationTournament` nemá
+ * "neúspěch v kvalifikaci" větev – do poháru se dostaneš jen tím, že už jsi kvalifikaci
+ * odehrál v lize (`clubQualifies`), takže `CupRun` existuje jen když ses skutečně účastnil.
+ * Sdílí `TOURN_STAGE_REP` (stejný `Stage` typ z tournament.ts) – jedna tabulka pro obě
+ * podoby "jak daleko ses ve vyřazovačce dostal".
+ */
+export function updateReputationCup(prev: number, summary: CupSummary): number {
+  const stageRep = TOURN_STAGE_REP[summary.stageReached] ?? 0;
+  const delta = CUP_PARTICIPATE_REP + stageRep + (summary.champion ? CUP_CHAMPION_REP : 0);
   return applyCeiling(prev, delta, summary.teamPrestige);
 }
 

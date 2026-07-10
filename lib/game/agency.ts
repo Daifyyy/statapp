@@ -29,6 +29,8 @@ export const RNG_SALT_TOURNAMENT = 1_000_000;
  * kolo 0 a turnajové kolo 0 dostaly identický RNG (eventy i výsledky by korelovaly).
  */
 export const RNG_SALT_QUALIFICATION = 2_000_000;
+/** Klubový pohár – vlastní proud, ať los pole i eventy nekolidují s ligou/reprezentací. */
+export const RNG_SALT_CUP = 3_000_000;
 
 /** Všechno, co agency potřebuje ke stanovení λ tvého týmu a k losu eventů. */
 export interface AgencyState {

@@ -3,7 +3,7 @@
 // Vyhodnocuje se na konci sezóny; odemčené se ukládají do trvalého profilu.
 
 import { coachedAllTop5 } from "./profile";
-import type { AllTimeRecords, SeasonSummary, TournamentSummary } from "./types";
+import type { AllTimeRecords, CupSummary, SeasonSummary, TournamentSummary } from "./types";
 
 export type AchievementTier = "bronze" | "silver" | "gold";
 
@@ -302,17 +302,100 @@ export function newlyEarnedTournament(
   return TOURNAMENT_ACHIEVEMENTS.filter((a) => !owned.has(a.id) && a.check(ctx));
 }
 
-/** Zobrazovací tvar achievementu (bez `check`) – sjednocuje oba registry pro UI grid. */
+// ───────────────────────── klubový pohár – achievementy ─────────────────────────
+//
+// Třetí registr, stejný princip jako reprezentační: vlastní kontext (`CupSummary`),
+// plochý `id` sdílí jeden `owned` set se zbylými dvěma registry.
+
+export interface CupCtx {
+  allTime: AllTimeRecords;
+  /** Právě dohraný klubový pohár. */
+  last: CupSummary;
+  reputation: number;
+}
+
+export interface CupAchievement {
+  id: string;
+  title: string;
+  desc: string;
+  icon: string;
+  tier: AchievementTier;
+  check: (ctx: CupCtx) => boolean;
+}
+
+export const CUP_ACHIEVEMENTS: CupAchievement[] = [
+  {
+    id: "cup_debut",
+    title: "Evropská premiéra",
+    desc: "Odehraj svůj první klubový pohár.",
+    icon: "🎟️",
+    tier: "bronze",
+    check: (c) => (c.allTime.cupsPlayed ?? 0) >= 1,
+  },
+  {
+    id: "cup_knockout",
+    title: "Do vyřazovačky",
+    desc: "Postup ze skupiny klubového poháru do vyřazovací fáze.",
+    icon: "⚔️",
+    tier: "silver",
+    check: (c) => c.last.stageReached !== "group",
+  },
+  {
+    id: "cup_final",
+    title: "Evropské finále",
+    desc: "Dovedení klubu do finále klubového poháru.",
+    icon: "🥈",
+    tier: "silver",
+    check: (c) => c.last.stageReached === "final",
+  },
+  {
+    id: "cup_champion",
+    title: "Vládce Evropy",
+    desc: "Vyhraj klubový pohár.",
+    icon: "🏆",
+    tier: "gold",
+    check: (c) => c.last.champion,
+  },
+  {
+    id: "cup_dynasty",
+    title: "Evropská dynastie",
+    desc: "Vyhraj klubový pohár 2× napříč kariérami.",
+    icon: "👑",
+    tier: "gold",
+    check: (c) => (c.allTime.cupTitles ?? 0) >= 2,
+  },
+  {
+    id: "cup_underdog",
+    title: "David v Evropě",
+    desc: "Dojdi aspoň do semifinále klubového poháru s klubem prestiže ≤ 65.",
+    icon: "🐜",
+    tier: "gold",
+    check: (c) =>
+      (c.last.stageReached === "sf" || c.last.stageReached === "final") &&
+      (c.last.teamPrestige ?? 100) <= 65,
+  },
+];
+
+/** Klubové poháry, které se právě odemkly. */
+export function newlyEarnedCup(ownedIds: string[], ctx: CupCtx): CupAchievement[] {
+  const owned = new Set(ownedIds);
+  return CUP_ACHIEVEMENTS.filter((a) => !owned.has(a.id) && a.check(ctx));
+}
+
+/** Zobrazovací tvar achievementu (bez `check`) – sjednocuje všechny registry pro UI grid. */
 export type AchievementDisplay = Omit<Achievement, "check">;
 
-function toDisplay(a: Achievement | TournamentAchievement): AchievementDisplay {
+function toDisplay(
+  a: Achievement | TournamentAchievement | CupAchievement
+): AchievementDisplay {
   return { id: a.id, title: a.title, desc: a.desc, icon: a.icon, tier: a.tier };
 }
 
-/** Všechny achievementy (ligové + reprezentační) pro zobrazení v profilu. */
+/** Všechny achievementy (ligové + reprezentační + klubový pohár) pro zobrazení v profilu. */
 export const ALL_ACHIEVEMENTS: AchievementDisplay[] = [
   ...ACHIEVEMENTS.map(toDisplay),
   ...TOURNAMENT_ACHIEVEMENTS.map(toDisplay),
+  ...CUP_ACHIEVEMENTS.map(toDisplay),
 ];
 
 /** Vyhledá achievement dle id (pro UI render z EarnedAchievement). */

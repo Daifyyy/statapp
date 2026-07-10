@@ -3,6 +3,7 @@
 
 // `import type` je při kompilaci ERASED → žádný runtime cyklus (types ↔ nationalCompetitions).
 import type { TournamentRun } from "./nationalCompetitions";
+import type { CupRun } from "./clubCup";
 
 /**
  * Zápasový plán tvého týmu – hlavní páka trenéra. Proti stylu soupeře funguje jako
@@ -213,6 +214,34 @@ export interface TournamentSummary {
   teamPrestige?: number;
 }
 
+/**
+ * Kompaktní souhrn dohraného klubového poháru do síně slávy. Paralelní k
+ * `TournamentSummary` (reprezentace) – vlastní typ, ne reuse, ze stejného důvodu:
+ * `champion: true` z poháru nesmí spadnout do ligových `AllTimeRecords.titles`.
+ */
+export interface CupSummary {
+  cupId: string;
+  cupName: string;
+  /** Pořadové číslo poháru v klubové kariéře (1-based). */
+  edition: number;
+  /** Sezóna klubové kariéry, za kterou byl pohár sestaven (návaznost na `SeasonSummary`). */
+  season: number;
+  teamId: number;
+  teamName: string;
+  teamLogo?: string;
+  /** Nejdál dosažená fáze (`Stage` z tournament.ts). */
+  stageReached: string;
+  champion: boolean;
+  played: number;
+  win: number;
+  draw: number;
+  loss: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  /** Prestiž klubu v době kvalifikace – strop pro kladný přírůstek reputace. Volitelné. */
+  teamPrestige?: number;
+}
+
 /** Stav probíhající sezóny. */
 export interface SeasonState {
   /** 1-based pořadí sezóny v kariéře. */
@@ -327,6 +356,11 @@ export interface AllTimeRecords {
   finalsReached?: number;
   /** Distinct id reprezentací, které jsi vedl. */
   nationsCoached?: number[];
+  // ── klubový pohár – vlastní pole, NEmíchá se s ligovými rekordy (viz `TournamentSummary`). ──
+  /** Kolik klubových pohárů jsi odehrál. Volitelné = staré profily. */
+  cupsPlayed?: number;
+  /** Vyhrané klubové poháry. */
+  cupTitles?: number;
 }
 
 /** Trvalý manažerský profil – síň slávy. Přežívá „Novou kariéru". */
@@ -336,7 +370,7 @@ export interface ManagerProfile {
 }
 
 /** Verze tvaru save – bump při nekompatibilní změně (starý save se zahodí). */
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 
 /** Kompletní uložená hra (v DB na profil). */
 export interface SaveState {
@@ -356,6 +390,14 @@ export interface SaveState {
   tournament?: TournamentRun | null;
   /** Historie dohraných reprezentačních turnajů (síň slávy). Volitelné = staré save. */
   tournamentHistory?: TournamentSummary[];
+  /**
+   * Probíhající klubový pohár (kvalifikace se vyhodnotí, ne odehrává – viz `clubCup.ts`),
+   * nebo null. Běží nezávisle na `current` (klubová sezóna) – hráč mezi nimi přepíná stejně
+   * jako mezi klubem a reprezentací. Volitelné = staré v9 save bez tohoto pole (`?? null`).
+   */
+  cup?: CupRun | null;
+  /** Historie dohraných klubových pohárů (síň slávy). Volitelné = staré save. */
+  cupHistory?: CupSummary[];
 }
 
 /** Liga nabízená ve výběru (job market / start kariéry). */
