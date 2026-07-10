@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "./AppHeader";
 import { TeamLogo } from "./TeamLogo";
 import type { SessionUser } from "./sessionUser";
+import { HistoryView, ManagerHub, NationPicker, ProfilePanel } from "./hra/Profile";
 import { teamById, injectYourTeam } from "@/lib/game/teams";
 import { randomSeed } from "@/lib/game/rng";
 import { RNG_SALT_LEAGUE } from "@/lib/game/agency";
@@ -18,13 +19,8 @@ import {
   yourNextMatch,
   yourResults,
 } from "@/lib/game/engine";
-import { summarizeSeason, startNextSeason, careerStats } from "@/lib/game/career";
-import {
-  updateReputation,
-  isHireable,
-  expectedRank,
-  HIRE_MARGIN,
-} from "@/lib/game/reputation";
+import { summarizeSeason, startNextSeason } from "@/lib/game/career";
+import { updateReputation, isHireable } from "@/lib/game/reputation";
 import {
   teamPrestige,
   seasonHeadline,
@@ -57,8 +53,7 @@ import { leagueGoalsPerTeamGame, teamSeasonStats, venueStats } from "@/lib/game/
 import { STYLE_LABEL } from "@/lib/game/scouting";
 import type { ScoutReport } from "@/lib/game/scouting";
 import { emptyProfile, startCareer, foldSeason, foldTournament } from "@/lib/game/profile";
-import { ALL_ACHIEVEMENTS, newlyEarned, newlyEarnedTournament } from "@/lib/game/achievements";
-import type { AchievementTier } from "@/lib/game/achievements";
+import { newlyEarned, newlyEarnedTournament } from "@/lib/game/achievements";
 import { updateReputationTournament } from "@/lib/game/reputation";
 import {
   COMPETITIONS,
@@ -73,7 +68,6 @@ import {
   summarizeRun,
   stageReachedOf,
   qualTable,
-  nationOptions,
   STAGE_LABEL,
 } from "@/lib/game/nationalCompetitions";
 import type { CompetitionId, TournamentRun } from "@/lib/game/nationalCompetitions";
@@ -89,9 +83,7 @@ import {
   STARTING_FITNESS,
   STARTING_REPUTATION,
 } from "@/lib/game/balance";
-import { leagueName as leagueNameFor } from "@/lib/game/leagues";
 import type {
-  EarnedAchievement,
   GameTeam,
   Instruction,
   LeagueAccess,
@@ -100,8 +92,6 @@ import type {
   Plan,
   SaveState,
   SeasonState,
-  SeasonSummary,
-  TournamentSummary,
 } from "@/lib/game/types";
 
 type GameView = "season" | "history" | "profile";
@@ -119,6 +109,13 @@ interface ToastData {
   oppGoals: number;
   /** Změna morálky za tento zápas (±), aby efekt výsledku nebyl jen tichá aktualizace baru. */
   moraleDelta: number;
+}
+
+/** Data pro potvrzovací dialog destruktivní akce (náhrada za nativní `confirm()`). */
+interface ConfirmDialogData {
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
 }
 
 /**
@@ -192,14 +189,6 @@ function migrateSave(raw: unknown): SaveState | null {
   return null;
 }
 
-function repTier(r: number): string {
-  if (r >= 85) return "Elitní trenér";
-  if (r >= 65) return "Zvučné jméno";
-  if (r >= 45) return "Zavedený";
-  if (r >= 25) return "Nadějný";
-  return "Začínající";
-}
-
 export function HraApp({ user }: { user: SessionUser | null }) {
   const [loading, setLoading] = useState(Boolean(user));
   const [save, setSave] = useState<SaveState | null>(null);
@@ -221,13 +210,43 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   /** Stav, který se nepodařilo uložit na server – zůstává, dokud "Zkusit znovu" neuspěje. */
   const [saveError, setSaveError] = useState<SaveState | null>(null);
 
-  const trackSave = useCallback((next: SaveState) => {
-    saveEndpoint(next).then((ok) => setSaveError(ok ? null : next));
+  /**
+   * Fronta pro ukládání: nejvýš jeden PUT rozjetý najednou, vždy se posílá jen
+   * nejnovější stav. Bez tohohle by rychlé po sobě jdoucí akce (dvojklik, dva
+   * otevřené taby) mohly poslat dva požadavky souběžně a starší odpověď by mohla
+   * dorazit později a tiše přepsat novější rozehraný stav v DB.
+   */
+  const pendingSaveRef = useRef<SaveState | null>(null);
+  const savingRef = useRef(false);
+
+  const flushSave = useCallback(async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    // Smyčka (ne rekurze): dokud mezitím dorazí novější stav, pošli i ten – vždy
+    // nejvýš jeden PUT rozjetý najednou, žádné souběžné/přeskakující se požadavky.
+    while (pendingSaveRef.current) {
+      const state = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      const ok = await saveEndpoint(state);
+      setSaveError(ok ? null : state);
+    }
+    savingRef.current = false;
   }, []);
+
+  const trackSave = useCallback(
+    (next: SaveState) => {
+      pendingSaveRef.current = next;
+      void flushSave();
+    },
+    [flushSave]
+  );
 
   const retrySave = useCallback(() => {
     if (saveError) trackSave(saveError);
   }, [saveError, trackSave]);
+
+  /** Náhrada za nativní `confirm()` u destruktivních akcí – konzistentní vzhled s toastem. */
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogData | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -365,17 +384,18 @@ export function HraApp({ user }: { user: SessionUser | null }) {
   }, [trackSave, showToast]);
 
   const onTournSimToEnd = useCallback(() => {
-    if (
-      !confirm(
-        "Dohrát celý turnaj s aktuálním plánem? Zbývající zápasy se odehrají najednou, události se přeskočí a akci nejde vrátit."
-      )
-    )
-      return;
-    setBusy(true);
-    setTimeout(() => {
-      mutateRun((r) => simulateRunToEnd(r));
-      setBusy(false);
-    }, 0);
+    setConfirmDialog({
+      message:
+        "Dohrát celý turnaj s aktuálním plánem? Zbývající zápasy se odehrají najednou, události se přeskočí a akci nejde vrátit.",
+      confirmLabel: "Dohrát turnaj",
+      onConfirm: () => {
+        setBusy(true);
+        setTimeout(() => {
+          mutateRun((r) => simulateRunToEnd(r));
+          setBusy(false);
+        }, 0);
+      },
+    });
   }, [mutateRun]);
 
   const onTournPlan = useCallback((p: Plan) => mutateRun((r) => setRunPlan(r, p)), [mutateRun]);
@@ -453,17 +473,17 @@ export function HraApp({ user }: { user: SessionUser | null }) {
 
   const onSimulateToEnd = useCallback(() => {
     const planLabel = save?.current ? PLAN_LABEL[save.current.plan] : "";
-    if (
-      !confirm(
-        `Dohrát celou sezónu s aktuálně zvoleným plánem (${planLabel})? Zbývající zápasy se odehrají najednou se stejným plánem, náhodné události se přeskočí a akci nejde vrátit zpět.`
-      )
-    )
-      return;
-    setBusy(true);
-    setTimeout(() => {
-      mutateSeason((s) => simulateToEnd(s));
-      setBusy(false);
-    }, 0);
+    setConfirmDialog({
+      message: `Dohrát celou sezónu s aktuálně zvoleným plánem (${planLabel})? Zbývající zápasy se odehrají najednou se stejným plánem, náhodné události se přeskočí a akci nejde vrátit zpět.`,
+      confirmLabel: "Dohrát sezónu",
+      onConfirm: () => {
+        setBusy(true);
+        setTimeout(() => {
+          mutateSeason((s) => simulateToEnd(s));
+          setBusy(false);
+        }, 0);
+      },
+    });
   }, [mutateSeason, save]);
 
   const onPlan = useCallback(
@@ -553,62 +573,65 @@ export function HraApp({ user }: { user: SessionUser | null }) {
 
   // Úplný restart „od nuly": smaže obě kariéry i reputaci (síň slávy zůstává).
   const onReset = useCallback(() => {
-    if (
-      !confirm(
-        "Nová kariéra od nuly? Rozehraný klub i reprezentace, jejich historie a reputace se smažou. Síň slávy (rekordy + achievementy) zůstane."
-      )
-    )
-      return;
-    setSave((prev) => {
-      if (!prev) return prev;
-      const next: SaveState = {
-        ...prev,
-        manager: { reputation: STARTING_REPUTATION },
-        current: null,
-        history: [],
-        tournament: null,
-        tournamentHistory: [],
-      };
-      trackSave(next);
-      return next;
+    setConfirmDialog({
+      message:
+        "Nová kariéra od nuly? Rozehraný klub i reprezentace, jejich historie a reputace se smažou. Síň slávy (rekordy + achievementy) zůstane.",
+      confirmLabel: "Začít od nuly",
+      onConfirm: () => {
+        setSave((prev) => {
+          if (!prev) return prev;
+          const next: SaveState = {
+            ...prev,
+            manager: { reputation: STARTING_REPUTATION },
+            current: null,
+            history: [],
+            tournament: null,
+            tournamentHistory: [],
+          };
+          trackSave(next);
+          return next;
+        });
+        setView("season");
+        setCareerMode("club");
+        setHasUnseenAchievement(false);
+      },
     });
-    setView("season");
-    setCareerMode("club");
-    setHasUnseenAchievement(false);
   }, [trackSave]);
 
   // Ukončí JEN klubovou kariéru (reprezentace i sdílená reputace zůstávají).
   const onEndClub = useCallback(() => {
-    if (
-      !confirm(
-        "Ukončit klubovou kariéru? Rozehraná sezóna a její historie se smažou; reputace, síň slávy i případná reprezentace zůstanou."
-      )
-    )
-      return;
-    setSave((prev) => {
-      if (!prev) return prev;
-      const next: SaveState = { ...prev, current: null, history: [] };
-      trackSave(next);
-      return next;
+    setConfirmDialog({
+      message:
+        "Ukončit klubovou kariéru? Rozehraná sezóna a její historie se smažou; reputace, síň slávy i případná reprezentace zůstanou.",
+      confirmLabel: "Ukončit klub",
+      onConfirm: () => {
+        setSave((prev) => {
+          if (!prev) return prev;
+          const next: SaveState = { ...prev, current: null, history: [] };
+          trackSave(next);
+          return next;
+        });
+        setCareerMode("nation");
+      },
     });
-    setCareerMode("nation");
   }, [trackSave]);
 
   // Ukončí JEN reprezentační běh (klub i sdílená reputace zůstávají). Bez foldu (opuštění).
   const onEndNation = useCallback(() => {
-    if (
-      !confirm(
-        "Ukončit reprezentaci? Rozehraný turnaj se zahodí (nezapíše se do síně slávy); klub a reputace zůstanou."
-      )
-    )
-      return;
-    setSave((prev) => {
-      if (!prev) return prev;
-      const next: SaveState = { ...prev, tournament: null };
-      trackSave(next);
-      return next;
+    setConfirmDialog({
+      message:
+        "Ukončit reprezentaci? Rozehraný turnaj se zahodí (nezapíše se do síně slávy); klub a reputace zůstanou.",
+      confirmLabel: "Ukončit reprezentaci",
+      onConfirm: () => {
+        setSave((prev) => {
+          if (!prev) return prev;
+          const next: SaveState = { ...prev, tournament: null };
+          trackSave(next);
+          return next;
+        });
+        setCareerMode("club");
+      },
     });
-    setCareerMode("club");
   }, [trackSave]);
 
   // Wrappery výběru: po startu zavřou overlay a přepnou na nově převzatý režim.
@@ -735,7 +758,51 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       )}
 
       <MatchResultToast key={toastSeq} toast={toast} onClose={() => setToast(null)} />
+      <ConfirmDialog data={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </main>
+  );
+}
+
+/** Potvrzovací modal pro destruktivní akce – nahrazuje nativní `confirm()`. */
+function ConfirmDialog({
+  data,
+  onClose,
+}: {
+  data: ConfirmDialogData | null;
+  onClose: () => void;
+}) {
+  if (!data) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="text-sm text-foreground">{data.message}</p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-full border border-border px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-border/40"
+          >
+            Zrušit
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              data.onConfirm();
+              onClose();
+            }}
+            className="flex-1 rounded-full bg-negative px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+          >
+            {data.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1292,35 +1359,6 @@ function RoleNote({ state }: { state: SeasonState }) {
   );
 }
 
-/** Kontext angažmá pro Profil: koho vedeš, prestiž klubu, očekávání a dosah reputace. */
-function EngagementNote({
-  state,
-  reputation,
-}: {
-  state: SeasonState;
-  reputation: number;
-}) {
-  const you = teamById(state.teams, state.yourTeamId);
-  const prestige = teamPrestige(you, state.leagueId, state.teams);
-  const exp = expectedRank(you, state.teams);
-  const reach = Math.round(reputation) + HIRE_MARGIN;
-  return (
-    <div>
-      <h3 className="text-xs font-semibold text-foreground">Aktuální angažmá</h3>
-      <div className="mt-2 rounded-xl border border-border bg-surface px-3 py-2.5 text-xs text-muted">
-        <p>
-          Vedeš <strong className="text-foreground">{you.name}</strong> ({state.leagueName}) —
-          prestiž klubu <strong className="text-foreground">{prestige}</strong>, očekává se{" "}
-          <strong className="text-foreground">{exp}. místo</strong>. S reputací tě teď osloví
-          kluby do prestiže ~{reach}.
-        </p>
-        <p className="mt-1">
-          Cíl sezóny: <strong className="text-foreground">{state.objective.text}</strong>
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function NextMatch({
   state,
@@ -1617,7 +1655,7 @@ function ActiveModifiers({
 }
 
 /** Karta náhodného eventu s volbami (nutno zvolit před odehráním kola). */
-function EventCard({
+const EventCard = memo(function EventCard({
   event,
   onChoice,
 }: {
@@ -1670,7 +1708,7 @@ function EventCard({
       </div>
     </div>
   );
-}
+});
 
 /**
  * Objektivní čísla, ze kterých `scoutOpponent` odvozuje styl soupeře — aby si hráč mohl
@@ -1678,7 +1716,7 @@ function EventCard({
  * souvisí, a **venue-specificky**: pro nadcházející zápas platí tvoje domácí čísla proti
  * jeho venkovním, ne celkové průměry. Pozice/body/čistá konta jsou v tabulce, ne tady.
  */
-function EvidencePanel({
+const EvidencePanel = memo(function EvidencePanel({
   state,
   youId,
   oppId,
@@ -1762,7 +1800,7 @@ function EvidencePanel({
       </p>
     </div>
   );
-}
+});
 
 function FormDots({ form }: { form: ("W" | "D" | "L")[] }) {
   if (form.length === 0) return <span className="text-[11px] text-muted">–</span>;
@@ -1813,7 +1851,7 @@ function rankZone(
   return null;
 }
 
-function LeagueTable({ state }: { state: SeasonState }) {
+const LeagueTable = memo(function LeagueTable({ state }: { state: SeasonState }) {
   const table = currentTable(state);
   const size = state.teams.length;
   const zones = table.map((row) =>
@@ -1898,7 +1936,7 @@ function LeagueTable({ state }: { state: SeasonState }) {
       )}
     </div>
   );
-}
+});
 
 function YourForm({ state }: { state: SeasonState }) {
   const results = yourResults(state).slice(0, 6);
@@ -1980,7 +2018,7 @@ const DEV_AREAS: (keyof DevSpend)[] = [
  * Přehled akumulovaného stavu klubu (síla vs liga, stadion, mládež) + co je trvalé a co
  * mezi sezónami regreduje. Čistě čte SeasonState – žádná nová data, jen viditelnost rozvoje.
  */
-function ClubOverview({ state }: { state: SeasonState }) {
+const ClubOverview = memo(function ClubOverview({ state }: { state: SeasonState }) {
   const you = teamById(state.teams, state.yourTeamId);
   const n = state.teams.length || 1;
   const avgAttack = state.teams.reduce((s, t) => s + t.attack, 0) / n;
@@ -2045,7 +2083,7 @@ function ClubOverview({ state }: { state: SeasonState }) {
       </p>
     </div>
   );
-}
+});
 
 /** Hodnota metriky vs. ligový průměr (barevně dle toho, zda jsi nad/pod ⌀). */
 function RatingCompare({
@@ -2108,7 +2146,7 @@ function DevMeter({
   );
 }
 
-function DevelopmentPanel({
+const DevelopmentPanel = memo(function DevelopmentPanel({
   points,
   spend,
   left,
@@ -2218,7 +2256,7 @@ function DevelopmentPanel({
       </p>
     </div>
   );
-}
+});
 
 function SeasonDone({
   save,
@@ -2535,193 +2573,6 @@ function JobMarket({
   );
 }
 
-// ───────────────────────── kariéra / historie ─────────────────────────
-
-/**
- * Reputační zisk/ztráta za každou sezónu = přehrání od STARTING_REPUTATION
- * (deterministické, shodné s tím, jak reputace reálně narůstala během kariéry).
- */
-function reputationDeltas(history: SeasonSummary[]): number[] {
-  let rep = STARTING_REPUTATION;
-  return history.map((h) => {
-    const after = updateReputation(rep, h);
-    const d = after - rep;
-    rep = after;
-    return d;
-  });
-}
-
-function HistoryView({ save }: { save: SaveState }) {
-  const stats = careerStats(save.history);
-  if (!stats) {
-    return (
-      <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-        Zatím žádná dohraná sezóna. Dohraj tu aktuální a objeví se tu tvá kariéra.
-      </div>
-    );
-  }
-  return (
-    <div className="mt-4">
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-        <StatTile label="Sezón" value={stats.seasons} />
-        <StatTile label="Titulů" value={stats.titles} accent />
-        <StatTile label="Poháry" value={stats.europeanQualifs} />
-        <StatTile label="Postupy" value={stats.promotions} />
-        <StatTile label="Sestupy" value={stats.relegations} />
-        <StatTile label="Ø vstř." value={stats.avgGoalsFor.toFixed(2)} />
-        <StatTile label="Ø obdr." value={stats.avgGoalsAgainst.toFixed(2)} />
-      </div>
-      <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
-        <StatTile label="Nejlepší" value={`${stats.bestRank}.`} />
-        <StatTile label="Průměr" value={`${stats.avgRank}.`} />
-        <StatTile label="Čistá konta" value={stats.cleanSheets} />
-        <StatTile label="Výhry" value={stats.totalWin} />
-        <StatTile label="Remízy" value={stats.totalDraw} />
-        <StatTile label="Prohry" value={stats.totalLoss} />
-        <StatTile label="Ø PPG" value={stats.avgPPG.toFixed(2)} />
-      </div>
-
-      <h3 className="mt-4 text-xs font-semibold text-foreground">Odehrané sezóny</h3>
-      <SeasonRows history={save.history} />
-    </div>
-  );
-}
-
-/** Seznam odehraných klubových sezón (nejnovější první) – sdílené HistoryView i ProfilePanel. */
-function SeasonRows({ history }: { history: SeasonSummary[] }) {
-  const repDeltas = reputationDeltas(history);
-  return (
-    <div className="mt-2 space-y-1.5">
-      {[...history].reverse().map((h, i) => {
-        const tone = seasonTone(h);
-        const toneClass =
-          tone === "good"
-            ? "bg-positive/15 text-positive"
-            : tone === "bad"
-              ? "bg-negative/15 text-negative"
-              : "bg-border/60 text-muted";
-        const delta = repDeltas[history.length - 1 - i];
-        return (
-          <div
-            key={`${h.season}-${h.leagueId}-${h.yourTeamId}-${i}`}
-            className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
-          >
-            <span className="w-8 shrink-0 text-xs text-muted">S{h.season}</span>
-            <span className="w-7 shrink-0 text-xs text-muted">{h.yourRank}.</span>
-            {/* Klub jen logem – název je v title/alt, řádek zůstane úzký i na mobilu. */}
-            <span className="shrink-0" title={h.yourName}>
-              <TeamLogo src={h.yourLogo} alt={h.yourName} size={18} />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">{h.leagueName}</span>
-            <span className="shrink-0 text-xs tabular-nums text-muted" title="Body na zápas">
-              {(h.yourPoints / (h.win + h.draw + h.loss)).toFixed(2)} PPG
-            </span>
-            <RepDelta delta={delta} />
-            <span
-              className={"shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass}
-            >
-              {seasonHeadline(h)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Hlavní odznak reprezentačního běhu (mistr / finalista / fáze / nekvalifikace). */
-function tournamentHeadline(t: TournamentSummary): { text: string; tone: "good" | "ok" | "bad" } {
-  if (t.champion) return { text: "Mistr 🏆", tone: "good" };
-  if (!t.qualified) return { text: "Nekvalifikace", tone: "bad" };
-  if (t.stageReached === "final") return { text: "Finalista 🥈", tone: "good" };
-  if (t.stageReached === "sf") return { text: STAGE_LABEL.sf, tone: "good" };
-  if (t.stageReached === "group") return { text: "Skupina", tone: "ok" };
-  return { text: STAGE_LABEL[t.stageReached as keyof typeof STAGE_LABEL] ?? "—", tone: "ok" };
-}
-
-/** Seznam dohraných reprezentačních turnajů (nejnovější první). */
-function TournamentRows({ history }: { history: TournamentSummary[] }) {
-  return (
-    <div className="mt-2 space-y-1.5">
-      {[...history].reverse().map((t, i) => {
-        const h = tournamentHeadline(t);
-        const toneClass =
-          h.tone === "good"
-            ? "bg-positive/15 text-positive"
-            : h.tone === "bad"
-              ? "bg-negative/15 text-negative"
-              : "bg-border/60 text-muted";
-        const comp = COMPETITIONS[t.competitionId as CompetitionId];
-        return (
-          <div
-            key={`${t.competitionId}-${t.edition}-${t.teamId}-${i}`}
-            className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
-          >
-            <span className="w-6 shrink-0 text-center text-sm" title={comp?.name ?? t.competitionName}>
-              {comp?.emoji ?? "🏆"}
-            </span>
-            <span className="shrink-0" title={t.teamName}>
-              <TeamLogo src={t.teamLogo} alt={t.teamName} size={18} />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-xs text-muted">{t.teamName}</span>
-            <span className="shrink-0 text-xs tabular-nums text-muted">
-              {t.win}-{t.draw}-{t.loss}
-            </span>
-            <span
-              className={"shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold " + toneClass}
-            >
-              {h.text}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Reputační zisk/ztráta za sezónu (barevný odznak). */
-function RepDelta({ delta }: { delta: number }) {
-  const cls =
-    delta > 0
-      ? "bg-positive/15 text-positive"
-      : delta < 0
-        ? "bg-negative/15 text-negative"
-        : "bg-border/60 text-muted";
-  return (
-    <span
-      className={"shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums " + cls}
-      title="Změna reputace za sezónu"
-    >
-      {delta > 0 ? "+" : ""}
-      {delta}
-    </span>
-  );
-}
-
-function StatTile({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string | number;
-  accent?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-surface px-2 py-2.5 text-center shadow-sm">
-      <div
-        className={
-          "text-base font-bold tabular-nums " +
-          (accent ? "text-warning" : "text-foreground")
-        }
-      >
-        {value}
-      </div>
-      <div className="text-[10px] text-muted">{label}</div>
-    </div>
-  );
-}
-
 // ───────────────────────── reprezentační turnaj ─────────────────────────
 
 function TournamentView({
@@ -2985,7 +2836,7 @@ function QualTable({ run }: { run: TournamentRun }) {
 }
 
 /** Skupinová tabulka + tvoje cesta pavoukem v závěrečném turnaji. */
-function TournamentBracket({ run }: { run: TournamentRun }) {
+const TournamentBracket = memo(function TournamentBracket({ run }: { run: TournamentRun }) {
   const t = run.tournament;
   if (!t) return null;
   const format = COMPETITIONS[run.competitionId].format;
@@ -3064,7 +2915,7 @@ function TournamentBracket({ run }: { run: TournamentRun }) {
       )}
     </div>
   );
-}
+});
 
 /** Kompaktní tabulka (kvalifikace / skupina): zvýrazní postupovou zónu a tvůj tým. */
 function MiniTable({
@@ -3302,326 +3153,6 @@ function PickerScreen({
       ) : (
         <NationPicker reputation={reputation} onStart={onStartTournament} />
       )}
-    </div>
-  );
-}
-
-/** Vstupní rozcestník bez aktivní kariéry: profil + volba režimu (klub / reprezentace). */
-function ManagerHub({
-  save,
-  managerName,
-  onPickClub,
-  onPickNation,
-}: {
-  save: SaveState | null;
-  managerName: string | null;
-  onPickClub: () => void;
-  onPickNation: () => void;
-}) {
-  const profile = save?.profile ?? emptyProfile();
-  return (
-    <div>
-      <ProfilePanel
-        profile={profile}
-        reputation={null}
-        managerName={managerName}
-        activeCareer={false}
-        history={save?.history ?? []}
-        tournamentHistory={save?.tournamentHistory ?? []}
-      />
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={onPickClub}
-          className="rounded-2xl border border-border bg-surface px-4 py-4 text-left shadow-sm transition hover:border-foreground/30"
-        >
-          <div className="text-sm font-semibold text-foreground">🏟️ Klubová kariéra</div>
-          <div className="mt-0.5 text-[11px] text-muted">
-            Veď reálný klub ligou i napříč sezónami (postup, sestup, job market).
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={onPickNation}
-          className="rounded-2xl border border-border bg-surface px-4 py-4 text-left shadow-sm transition hover:border-foreground/30"
-        >
-          <div className="text-sm font-semibold text-foreground">🌐 Reprezentace</div>
-          <div className="mt-0.5 text-[11px] text-muted">
-            Proveď národ kvalifikací až na Euro nebo mistrovství světa.
-          </div>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Výběr soutěže + reprezentace (gated reputací, jako job market u klubů). */
-function NationPicker({
-  reputation,
-  onStart,
-}: {
-  reputation: number;
-  onStart: (competitionId: CompetitionId, teamId: number) => void;
-}) {
-  const [competition, setCompetition] = useState<CompetitionId>("EURO");
-  const comp = COMPETITIONS[competition];
-  // U Eura dává smysl vybírat jen z UEFA (jinak by národ neměl kvalifikaci); u MS všechny.
-  const options = nationOptions(reputation).filter(
-    (o) => competition === "WC" || o.confed === "UEFA"
-  );
-
-  return (
-    <div className="mt-4">
-      <h2 className="text-sm font-semibold text-foreground">Vyber soutěž</h2>
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        {(Object.keys(COMPETITIONS) as CompetitionId[]).map((id) => {
-          const c = COMPETITIONS[id];
-          const active = competition === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setCompetition(id)}
-              className={
-                "rounded-xl border px-3 py-2.5 text-left transition " +
-                (active
-                  ? "border-foreground/40 bg-foreground/10"
-                  : "border-border bg-surface hover:border-foreground/30")
-              }
-            >
-              <div className="text-sm font-semibold text-foreground">
-                {c.emoji} {c.name}
-              </div>
-              <div className="text-[11px] text-muted">
-                {c.format.groups * c.format.groupSize} týmů
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      <h2 className="mt-4 text-sm font-semibold text-foreground">
-        Vyber reprezentaci — {comp.name}
-      </h2>
-      <p className="mt-1 text-xs text-muted">
-        Zvučnější národy tě vezmou jen s dost vysokou reputací (aktuálně {reputation}). Buduj ji
-        úspěchy na turnajích. Pořadatel se kvalifikuje automaticky.
-      </p>
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {options.map((o) => {
-          const isHost = o.id === comp.hostId;
-          return (
-            <button
-              key={o.id}
-              type="button"
-              disabled={!o.hireable}
-              onClick={() => onStart(competition, o.id)}
-              className={
-                "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition " +
-                (o.hireable
-                  ? "border-border bg-surface hover:border-foreground/30"
-                  : "border-border/60 bg-surface/40 opacity-60")
-              }
-            >
-              <TeamLogo src={o.logo} alt={o.name} size={24} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium text-foreground">
-                  {o.name}
-                  {isHost && <span className="ml-1 text-[10px] text-positive">pořadatel</span>}
-                </span>
-                <span className="text-[11px] text-muted">prestiž {o.prestige}</span>
-              </span>
-              {!o.hireable && (
-                <span className="shrink-0 text-[11px] text-negative">🔒 mimo dosah</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** Manažerský profil: hlavička + kariérní rekordy + klub/repre + achievementy. */
-function ProfilePanel({
-  profile,
-  reputation,
-  managerName,
-  activeCareer,
-  current,
-  history = [],
-  tournamentHistory = [],
-}: {
-  profile: ManagerProfile;
-  reputation: number | null;
-  managerName: string | null;
-  activeCareer: boolean;
-  /** Běžící klubová sezóna – zdroj bloku „Aktuální angažmá". Chybí v repre režimu. */
-  current?: SeasonState | null;
-  /** Klubové sezóny (aktuální kariéra) – pro historii v přehledu manažera. */
-  history?: SeasonSummary[];
-  /** Dohrané reprezentační turnaje. */
-  tournamentHistory?: TournamentSummary[];
-}) {
-  const a = profile.allTime;
-  const rep = reputation != null ? Math.round(reputation) : null;
-  return (
-    <div className="mt-3 space-y-4">
-      {/* Hlavička */}
-      <div className="rounded-xl border border-border bg-surface px-3 py-3 shadow-sm">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="truncate text-base font-semibold text-foreground">
-              👔 {managerName || "Trenér"}
-            </div>
-            <div className="text-xs text-muted">
-              {activeCareer && rep != null
-                ? `${repTier(rep)} · reputace ${rep}/100`
-                : "Bez aktivní kariéry"}
-            </div>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-lg font-bold tabular-nums text-warning">{a.titles}</div>
-            <div className="text-[10px] text-muted">titulů celkem</div>
-          </div>
-        </div>
-        {activeCareer && rep != null && (
-          <div className="mt-2 flex items-center gap-2 text-xs">
-            <span className="text-muted">Reputace</span>
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-border/60">
-              <div
-                className="bar-fill h-full rounded-full bg-positive"
-                style={{ width: `${rep}%` }}
-              />
-            </div>
-            <span className="tabular-nums font-semibold text-foreground">{rep}/100</span>
-          </div>
-        )}
-      </div>
-
-      {current && rep != null && <EngagementNote state={current} reputation={rep} />}
-
-      {/* Kariérní rekordy */}
-      <div>
-        <h3 className="text-xs font-semibold text-foreground">Kariérní rekordy</h3>
-        <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-          <StatTile label="Kariér" value={a.careers} />
-          <StatTile label="Sezón" value={a.seasons} />
-          <StatTile label="Titulů" value={a.titles} accent={a.titles > 0} />
-          <StatTile label="Evr. účastí" value={a.europeanQualifs} />
-          <StatTile label="Sestupy" value={a.relegations} />
-          <StatTile label="Nejlepší" value={a.bestRank ? `${a.bestRank}.` : "—"} />
-          <StatTile label="Max bodů" value={a.bestSeasonPoints || "—"} />
-          <StatTile label="Max gólů" value={a.mostGoalsSeason || "—"} />
-          <StatTile label="Max reputace" value={a.bestReputation || "—"} />
-          <StatTile label="Neporažen" value={a.invincibleSeasons} />
-        </div>
-      </div>
-
-      {/* Klubová vs reprezentační scéna */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
-          <div className="text-xs font-semibold text-foreground">🏟️ Klubová scéna</div>
-          <p className="mt-1 text-[11px] text-muted">
-            {a.seasons > 0
-              ? `${a.titles} titulů · ${a.europeanQualifs}× Evropa · ${a.relegations} sestupů`
-              : "Zatím žádná odehraná sezóna."}
-          </p>
-          {a.leaguesCoached.length > 0 && (
-            <p className="mt-1 text-[11px] text-muted">
-              Ligy: {a.leaguesCoached.map((id) => leagueNameFor(id)).join(", ")}
-            </p>
-          )}
-        </div>
-        <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
-          <div className="text-xs font-semibold text-foreground">🌐 Reprezentační scéna</div>
-          <p className="mt-1 text-[11px] text-muted">
-            {(a.tournamentsPlayed ?? 0) > 0
-              ? `${a.majorTitles ?? 0}× velký titul · ${a.finalsReached ?? 0}× finále · ${
-                  a.tournamentsPlayed ?? 0
-                } turnajů`
-              : "Zatím žádný reprezentační turnaj."}
-          </p>
-          {(a.nationsCoached?.length ?? 0) > 0 && (
-            <p className="mt-1 text-[11px] text-muted">
-              Vedeno reprezentací: {a.nationsCoached!.length}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Historie – klubové sezóny */}
-      {history.length > 0 && (
-        <div>
-          <h3 className="text-xs font-semibold text-foreground">Historie sezón (klub)</h3>
-          <SeasonRows history={history} />
-        </div>
-      )}
-
-      {/* Historie – reprezentační turnaje */}
-      {tournamentHistory.length > 0 && (
-        <div>
-          <h3 className="text-xs font-semibold text-foreground">Historie turnajů (reprezentace)</h3>
-          <TournamentRows history={tournamentHistory} />
-        </div>
-      )}
-
-      {/* Achievementy */}
-      <AchievementsGrid earned={profile.achievements} />
-    </div>
-  );
-}
-
-function tierClass(tier: AchievementTier): string {
-  return tier === "gold"
-    ? "border-warning/50 bg-warning/10"
-    : tier === "silver"
-      ? "border-border bg-surface"
-      : "border-away/40 bg-away/10"; // bronze
-}
-
-/** Mřížka achievementů: odemčené barevně dle tier, zamčené šedé s popisem. */
-function AchievementsGrid({ earned }: { earned: EarnedAchievement[] }) {
-  const owned = new Set(earned.map((e) => e.id));
-  return (
-    <div>
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-foreground">Achievementy</h3>
-        <span className="text-[11px] text-muted">
-          {owned.size}/{ALL_ACHIEVEMENTS.length}
-        </span>
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {ALL_ACHIEVEMENTS.map((ach) => {
-          const has = owned.has(ach.id);
-          return (
-            <div
-              key={ach.id}
-              title={ach.desc}
-              className={
-                "rounded-xl border p-2.5 " +
-                (has
-                  ? tierClass(ach.tier)
-                  : "border-dashed border-border bg-surface/40 opacity-70")
-              }
-            >
-              <div className="flex items-center gap-1.5">
-                <span className={"text-lg " + (has ? "" : "grayscale")} aria-hidden>
-                  {has ? ach.icon : "🔒"}
-                </span>
-                <span
-                  className={
-                    "text-xs font-semibold " + (has ? "text-foreground" : "text-muted")
-                  }
-                >
-                  {ach.title}
-                </span>
-              </div>
-              <p className="mt-1 text-[10px] leading-tight text-muted">{ach.desc}</p>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
