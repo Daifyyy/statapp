@@ -269,6 +269,43 @@ export interface Standing {
 }
 
 /**
+ * Zóna řádku ligové tabulky odvozená z popisu místa (API-Football `description`).
+ * Slouží jen k barevnému zvýraznění v záložce Tabulky (LM/EL/KL, postup, sestup).
+ */
+export type LeagueTableZone =
+  | "champions"
+  | "europa"
+  | "conference"
+  | "promotion"
+  | "relegation";
+
+/** Jeden řádek celé ligové tabulky (záložka Tabulky). Kompletní V-R-P + góly + body. */
+export interface LeagueTableRow {
+  rank: number;
+  teamId: number;
+  name: string;
+  logoUrl: string;
+  played: number;
+  win: number;
+  draw: number;
+  lose: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  goalsDiff: number;
+  points: number;
+  /** Krátká forma z tabulky, např. „WWDLW" (nejnovější vpravo), nebo `null`. */
+  form: string | null;
+  /** Zóna pro barevné zvýraznění (evropský pohár / postup / sestup), nebo `null`. */
+  zone: LeagueTableZone | null;
+}
+
+/** Celá ligová tabulka + ligový průměr gólů na zápas (FREE, sdílí `standings:` cache). */
+export interface LeagueTable {
+  rows: LeagueTableRow[];
+  leagueAvg: LeagueGoalsAvg | null;
+}
+
+/**
  * Jeden přestup (záložka Přestupy). `feeEur` je best-effort odhad z volného textu
  * `type` z API – často `null` (API neuvádí spolehlivé částky). `in*` = kam hráč přišel,
  * `out*` = odkud odešel.

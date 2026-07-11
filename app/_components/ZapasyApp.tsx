@@ -36,6 +36,7 @@ export function ZapasyApp({
         user={user}
         nav={[
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
+          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
           { href: "/hra", label: "Hra", emoji: "🎮" },

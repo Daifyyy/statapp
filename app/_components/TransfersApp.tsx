@@ -151,6 +151,7 @@ function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: Leagu
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
+          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
         ]}
@@ -337,6 +338,7 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
+          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
         ]}

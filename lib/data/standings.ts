@@ -1,4 +1,10 @@
-import type { LeagueGoalsAvg, Standing, StandingSplit } from "@/lib/types";
+import type {
+  LeagueGoalsAvg,
+  LeagueTableRow,
+  LeagueTableZone,
+  Standing,
+  StandingSplit,
+} from "@/lib/types";
 import type { EuropeSpot, LeagueAccess } from "@/lib/game/types";
 import type { ApiStandingRow } from "./apiFootball";
 
@@ -86,6 +92,61 @@ function contiguousPrefix(
   const out: { rank: number; spot: EuropeSpot }[] = [];
   for (let rank = 1; byRank.has(rank); rank++) out.push({ rank, spot: byRank.get(rank)! });
   return out;
+}
+
+/**
+ * Klasifikuje zónu řádku tabulky z popisu místa (`description`) pro barevné zvýraznění
+ * v záložce Tabulky. Stejná logika jako `deriveLeagueAccess` (soutěž se hledá jen PŘED
+ * závorkou → domácí play-off o Evropu „(Conference League - Play Offs)" se nepočítá;
+ * jistý sestup popisek ZAČÍNÁ slovem „relegation", baráž/fázový split se vynechává).
+ * Postup z nižší soutěže („Promotion - <Liga>") → `promotion`. Neznámé → `null`.
+ */
+export function zoneFromDescription(
+  description: string | null | undefined
+): LeagueTableZone | null {
+  const desc = description?.toLowerCase() ?? "";
+  if (!desc) return null;
+  const head = desc.split("(")[0];
+  if (head.includes("champions league")) return "champions";
+  if (head.includes("europa league")) return "europa";
+  if (head.includes("conference league")) return "conference";
+  // Jistý sestup: popisek začíná „relegation" a není to baráž/fázový split nadstavby.
+  if (desc.startsWith("relegation") && !/round|group|play.?off/.test(desc)) {
+    return "relegation";
+  }
+  // Postup z nižší soutěže (2. liga → nahoru). Až po evropských/sestupových větvích,
+  // aby „Promotion - Champions League" spadl na `champions`, ne na obecný postup.
+  if (head.startsWith("promotion")) return "promotion";
+  return null;
+}
+
+/**
+ * Normalizuje syrovou ligovou tabulku (`ApiStandingRow[]`) na kompletní řádky pro
+ * záložku Tabulky (V-R-P + góly + body + forma + zóna). Řadí podle `rank`. Čistá
+ * funkce (kvůli testu) – jako `pickTeamStanding`.
+ */
+export function normalizeLeagueTable(raw: ApiStandingRow[]): LeagueTableRow[] {
+  return raw
+    .map((r) => {
+      const all = split(r.all);
+      return {
+        rank: r.rank,
+        teamId: r.team.id,
+        name: r.team.name,
+        logoUrl: r.team.logo,
+        played: all.played,
+        win: all.win,
+        draw: all.draw,
+        lose: all.lose,
+        goalsFor: all.goalsFor,
+        goalsAgainst: all.goalsAgainst,
+        goalsDiff: r.goalsDiff ?? all.goalsFor - all.goalsAgainst,
+        points: r.points ?? 0,
+        form: r.form ?? null,
+        zone: zoneFromDescription(r.description),
+      };
+    })
+    .sort((a, b) => a.rank - b.rank);
 }
 
 /** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */

@@ -116,6 +116,7 @@ const NAV = [
   { href: "/", label: "Zápasy", emoji: "📅" },
   { href: "/predikce", label: "Tipy", emoji: "📈" },
   { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
+  { href: "/tabulky", label: "Tabulky", emoji: "📊" },
 ];
 
 /** Data pro popup výsledku po odehraném kole. */

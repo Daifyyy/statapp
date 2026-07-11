@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deriveLeagueAccess, pickTeamStanding } from "./standings";
+import {
+  deriveLeagueAccess,
+  normalizeLeagueTable,
+  pickTeamStanding,
+  zoneFromDescription,
+} from "./standings";
 import type { ApiStandingRow } from "./apiFootball";
 
 function row(
@@ -49,6 +54,68 @@ describe("pickTeamStanding", () => {
       all: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
       home: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
       away: { played: 0, win: 0, draw: 0, lose: 0, goalsFor: 0, goalsAgainst: 0 },
+    });
+  });
+});
+
+describe("zoneFromDescription", () => {
+  it("klasifikuje evropské poháry, postup a sestup podle popisu", () => {
+    expect(zoneFromDescription("Promotion - Champions League (Group Stage)")).toBe("champions");
+    expect(zoneFromDescription("Promotion - Europa League (Qualification)")).toBe("europa");
+    expect(zoneFromDescription("Promotion - Conference League (Play Offs)")).toBe("conference");
+    expect(zoneFromDescription("Promotion - Championship")).toBe("promotion");
+    expect(zoneFromDescription("Relegation - Championship")).toBe("relegation");
+  });
+
+  it("baráž, fázový split a domácí play-off o Evropu nejsou zóna (null)", () => {
+    // Baráž (ne jistý sestup) + fázový split nadstavby.
+    expect(zoneFromDescription("Relegation Play-offs")).toBeNull();
+    expect(zoneFromDescription("Relegation Round")).toBeNull();
+    // Soutěž se hledá jen před závorkou – domácí play-off o Evropu nese vlastní ligu.
+    expect(zoneFromDescription("Promotion - Eredivisie (Conference League - Play Offs)")).toBe(
+      "promotion"
+    );
+    expect(zoneFromDescription(null)).toBeNull();
+    expect(zoneFromDescription("Something unexpected")).toBeNull();
+  });
+});
+
+describe("normalizeLeagueTable", () => {
+  it("normalizuje řádky, dopočítá rozdíl skóre a řadí podle pozice", () => {
+    const raw = [
+      row(2, 2, { description: "Promotion - Europa League (Group Stage)" }),
+      row(1, 1, { points: 40, goalsDiff: 8, description: "Promotion - Champions League" }),
+    ];
+    const table = normalizeLeagueTable(raw);
+    expect(table.map((r) => r.rank)).toEqual([1, 2]);
+    expect(table[0]).toMatchObject({
+      rank: 1,
+      teamId: 1,
+      name: "T1",
+      played: 10,
+      win: 6,
+      draw: 2,
+      lose: 2,
+      goalsFor: 18,
+      goalsAgainst: 10,
+      goalsDiff: 8,
+      points: 40,
+      form: "WWDLW",
+      zone: "champions",
+    });
+    expect(table[1].zone).toBe("europa");
+  });
+
+  it("chybějící pole → 0 / null form / žádná zóna a rozdíl skóre z gólů", () => {
+    const bare: ApiStandingRow = { rank: 5, team: { id: 9, name: "T9", logo: "" } };
+    expect(normalizeLeagueTable([bare])[0]).toMatchObject({
+      rank: 5,
+      teamId: 9,
+      played: 0,
+      goalsDiff: 0,
+      points: 0,
+      form: null,
+      zone: null,
     });
   });
 });

@@ -3,6 +3,7 @@ import type {
   Injury,
   League,
   LeagueGoalsAvg,
+  LeagueTable,
   MatchStat,
   Metric,
   Scorer,
@@ -32,7 +33,12 @@ import {
   type MatchContext,
 } from "./cache";
 import { selectCurrentInjuries } from "./injuries";
-import { computeLeagueGoalsAvg, deriveLeagueAccess, pickTeamStanding } from "./standings";
+import {
+  computeLeagueGoalsAvg,
+  deriveLeagueAccess,
+  normalizeLeagueTable,
+  pickTeamStanding,
+} from "./standings";
 import { pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
@@ -215,6 +221,19 @@ export async function getLeagueStanding(
   } catch {
     return { standing: null, leagueAvg: null };
   }
+}
+
+/**
+ * Celá ligová tabulka pro záložku Tabulky (FREE). Sdílí `standings:` cache (per liga,
+ * TTL) s Porovnáním/Programem/Hrou → **0 API volání navíc**, když je liga zahřátá.
+ * Reprezentace tabulku nemají → `null` (UI zvolí jinou ligu). Mezisezóna (0 odehraných)
+ * → prázdné řádky, UI ukáže „zatím bez zápasů" (na rozdíl od Hry zde NEfallbackujeme na
+ * minulou sezónu – uživatel chce vidět rozehranou aktuální tabulku, i když je prázdná).
+ */
+export async function getLeagueTable(leagueId: number): Promise<LeagueTable | null> {
+  if (isNationalLeague(leagueId)) return null;
+  const raw = await cachedLeagueStandings(leagueId);
+  return { rows: normalizeLeagueTable(raw), leagueAvg: computeLeagueGoalsAvg(raw) };
 }
 
 /**

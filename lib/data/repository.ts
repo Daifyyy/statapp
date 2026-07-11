@@ -4,6 +4,8 @@ import type {
   Injury,
   League,
   LeagueGoalsAvg,
+  LeagueTable,
+  LeagueTableRow,
   MatchPick,
   PredictionRow,
   Scorer,
@@ -223,6 +225,59 @@ export async function getStanding(
 
 function mockLeagueGoalsAvg(): LeagueGoalsAvg {
   return { goalsFor: 1.35, goalsAgainst: 1.35 };
+}
+
+/**
+ * Celá ligová tabulka pro záložku Tabulky. Real = sdílená `standings:` cache
+ * (0 API navíc); mock = deterministická tabulka z mock týmů ligy (offline).
+ * Reprezentace tabulku nemají → `null`.
+ */
+export async function getLeagueTable(leagueId: number): Promise<LeagueTable | null> {
+  if (useReal) return real.getLeagueTable(leagueId);
+  return mockLeagueTable(leagueId);
+}
+
+function mockLeagueTable(leagueId: number): LeagueTable | null {
+  const teams = allMockTeams().filter(
+    (t) => t.leagueId === leagueId && t.entityType !== "NATIONAL"
+  );
+  if (teams.length === 0) return null;
+  const rows: LeagueTableRow[] = teams
+    .map((t, i) => {
+      const rank = i + 1;
+      const wins = Math.max(0, teams.length - rank);
+      const losses = Math.max(0, rank - 1);
+      const draws = 5;
+      const played = wins + draws + losses;
+      const goalsFor = 45 - rank;
+      const goalsAgainst = 12 + rank;
+      const zone =
+        rank <= 2
+          ? ("champions" as const)
+          : rank === 3
+            ? ("europa" as const)
+            : rank > teams.length - 2
+              ? ("relegation" as const)
+              : null;
+      return {
+        rank,
+        teamId: t.id,
+        name: t.name,
+        logoUrl: t.logoUrl,
+        played,
+        win: wins,
+        draw: draws,
+        lose: losses,
+        goalsFor,
+        goalsAgainst,
+        goalsDiff: goalsFor - goalsAgainst,
+        points: wins * 3 + draws,
+        form: "WWDLW",
+        zone,
+      };
+    })
+    .sort((a, b) => a.rank - b.rank);
+  return { rows, leagueAvg: mockLeagueGoalsAvg() };
 }
 
 /**
