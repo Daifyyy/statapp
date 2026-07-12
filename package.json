@@ -17,6 +17,7 @@
     "reprice": "node --env-file=.env --import tsx scripts/reprice.ts",
     "backtest": "node --env-file=.env --import tsx scripts/backtest.ts",
     "backfill-stats": "node --env-file=.env --import tsx scripts/backfillStats.ts",
+    "backtest-national": "node --env-file=.env --import tsx scripts/backtestNational.ts",
     "audit-leagues": "node --env-file=.env --import tsx scripts/auditLeagueAccess.ts",
     "sim-game": "node --import tsx scripts/simGame.ts",
     "build-national-teams": "node --env-file=.env --import tsx scripts/buildNationalTeams.ts",

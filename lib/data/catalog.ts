@@ -107,6 +107,30 @@ export const ALL_NATIONAL_PREDICTION_LEAGUE_IDS = [
   ...NATIONAL_HOME_AWAY_LEAGUE_IDS,
 ];
 
+/** API-Football: reprezentační přáteláky. */
+export const FRIENDLIES_LEAGUE_ID = 10;
+
+/**
+ * Soutěže, ze kterých se skládá **historie pro globální reprezentační ratingy**: turnaje,
+ * Liga národů, kvalifikace všech konfederací a **přáteláky**. Přáteláky tam patří: jsou to
+ * hlavně ony, co propojují konfederace, takže bez nich by síly napříč nimi nebyly srovnatelné
+ * (viz `NATIONAL_RATING_OPTIONS`). Sdílí `npm run backtest-national` i produkce.
+ */
+export const NATIONAL_HISTORY_LEAGUE_IDS = [
+  ...NATIONAL_TOURNAMENT_LEAGUE_IDS,
+  ...NATIONAL_HOME_AWAY_LEAGUE_IDS,
+  ...CONFEDERATIONS.map((c) => c.wcQualLeagueId),
+  FRIENDLIES_LEAGUE_ID,
+];
+
+/** Hraje se soutěž na neutrální půdě? (Turnaje ano; kvalifikace a Liga národů ne.) */
+export function isNeutralNationalLeague(leagueId: number): boolean {
+  return (
+    NATIONAL_TOURNAMENT_LEAGUE_IDS.includes(leagueId) &&
+    !NATIONAL_HOME_AWAY_LEAGUE_IDS.includes(leagueId)
+  );
+}
+
 /** Je to reprezentační soutěž (jakákoli) – pipeline routing + UI (skrytí prokliku). */
 export function isNationalTournamentLeague(leagueId: number): boolean {
   return ALL_NATIONAL_PREDICTION_LEAGUE_IDS.includes(leagueId);

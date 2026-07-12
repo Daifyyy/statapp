@@ -24,6 +24,16 @@ export interface RatingMatch {
   awayGoals: number;
   homeXg?: number;
   awayXg?: number;
+  /**
+   * Neutrální půda (turnaje reprezentací) → obě strany se poměřují **stejným** měřítkem,
+   * ne měřítkem domácích/hostů. Bez toho by turnajový „domácí" tým dostal výhodu, kterou nemá.
+   */
+  neutral?: boolean;
+  /**
+   * Násobič váhy zápasu (nad rámec časového útlumu). Slouží pro **přáteláky** – rotace
+   * a experimenty z nich dělají slabší signál než ze soutěžního zápasu. `1` = plná váha.
+   */
+  weight?: number;
 }
 
 /** Síla týmu jako poměr k ligovému průměru (1.0 = průměr; obrana: >1 = pouští víc gólů). */
@@ -72,6 +82,32 @@ export const RATING_WINDOW_DAYS = 540;
 export const RATING_MIN_MATCHES = 30;
 
 /**
+ * Reprezentace: **jeden globální pool všech národů**, ne pool per konfederace. Kdyby se
+ * ratingy počítaly zvlášť pro UEFA a AFC, každý by se normalizoval na svou vlastní 1.0
+ * a „útok 1.3" by v obou znamenal něco jiného – tedy přesně ta chyba, kterou opravujeme.
+ * V jednom poolu propojí konfederace **přáteláky a mezikontinentální zápasy** a iterativní
+ * schéma po těch hranách sílu propaguje (jako Elo).
+ *
+ * Fitnuto `npm run backtest-national` (675 zápasů, ověřeno na dvou obdobích zvlášť):
+ *  - **poločas 3 roky** – reprezentace hrají málo a mění se pomalu; kratší paměť zahazuje
+ *    víc, než kolik ušetří na zastaralosti (grid: kratší poločas = horší, a od ~3 let to
+ *    saturuje);
+ *  - **přáteláky s PLNOU vahou** (`friendlyWeight = 1`) – proti očekávání. Okenní model je
+ *    tlumí (`matchWeight`), ale v ratingu jsou cenné: jsou to hlavně ony, co propojují
+ *    konfederace. Grid: w=0.5 → 0.9657, w=1.0 → 0.9610.
+ * Výsledek: log-loss **1.0182 → 0.9352**, přesnost 49.5 → 55.3 %.
+ */
+export const NATIONAL_RATING_OPTIONS = {
+  halfLifeDays: 1095,
+  shrinkMatches: 2,
+  iterations: 5,
+  xgWeight: 0, // reprezentace xG v API většinou nemají
+} as const;
+
+/** Váha přáteláku v reprezentačním ratingu (1 = stejná jako soutěžní zápas – viz výše). */
+export const NATIONAL_FRIENDLY_WEIGHT = 1;
+
+/**
  * Odhadne síly všech týmů ze zápasů odehraných **před** `asOf` (point-in-time – do budoucna
  * se model nikdy nepodívá). Vrací mapu `teamId → TeamStrength`; tým bez zápasů v mapě chybí
  * (volající použije ligový průměr).
@@ -97,23 +133,29 @@ export function computeRatings(
   }
   const obs: Obs[] = [];
 
+  const totalRef = (opts.home + opts.away) / 2;
+
   for (const m of matches) {
     const t = Date.parse(m.date);
     if (!(t < now)) continue; // jen minulost
-    const weight = Math.pow(0.5, (now - t) / halfLifeMs);
+    const weight = Math.pow(0.5, (now - t) / halfLifeMs) * (m.weight ?? 1);
     if (weight < 0.01) continue; // zanedbatelné, ať se to nevleče
 
     const w = opts.xgWeight;
     const homeVal = m.homeXg != null ? m.homeGoals * (1 - w) + m.homeXg * w : m.homeGoals;
     const awayVal = m.awayXg != null ? m.awayGoals * (1 - w) + m.awayXg * w : m.awayGoals;
 
+    // Neutrální půda → obě strany stejným měřítkem (žádná domácí výhoda).
+    const refHome = m.neutral ? totalRef : opts.home;
+    const refAway = m.neutral ? totalRef : opts.away;
+
     obs.push({
       teamId: m.homeId,
       oppId: m.awayId,
       scored: homeVal,
       conceded: awayVal,
-      refFor: opts.home, // doma se góly poměřují měřítkem domácích…
-      refAgainst: opts.away, // …a inkasované měřítkem hostů
+      refFor: refHome, // doma se góly poměřují měřítkem domácích…
+      refAgainst: refAway, // …a inkasované měřítkem hostů
       weight,
     });
     obs.push({
@@ -121,8 +163,8 @@ export function computeRatings(
       oppId: m.homeId,
       scored: awayVal,
       conceded: homeVal,
-      refFor: opts.away,
-      refAgainst: opts.home,
+      refFor: refAway,
+      refAgainst: refHome,
       weight,
     });
   }

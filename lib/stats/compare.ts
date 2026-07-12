@@ -16,7 +16,7 @@ export function compareTeams(
   home: Team,
   away: Team,
   now: Date = new Date(),
-  /** Ligové měřítko + ladicí parametry λ. Bez nich se použijí produkční defaulty. */
+  /** Ligové měřítko, síly týmů, neutrální půda… Bez nich se použijí produkční defaulty. */
   predictOpts?: PredictOptions
 ): CompareResult {
   const entityType = home.entityType;

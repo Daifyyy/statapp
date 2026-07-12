@@ -85,6 +85,36 @@ describe("computeRatings", () => {
     expect(weak.get(1)!.attack).toBeLessThan(strong.get(1)!.attack);
   });
 
+  it("NEUTRÁLNÍ PŮDA: turnajový domácí tým nedostane domácí výhodu", () => {
+    // Stejný zápas 1:1, jednou jako kvalifikace (doma/venku), jednou jako turnaj (neutrál).
+    const qualif: RatingMatch[] = [m("2025-09-01T15:00:00Z", 1, 2, 1, 1)];
+    const neutral: RatingMatch[] = [
+      { ...m("2025-09-01T15:00:00Z", 1, 2, 1, 1), neutral: true },
+    ];
+    const q = computeRatings(qualif, "2025-09-10T00:00:00Z", { ...OPTS, shrinkMatches: 0 });
+    const n = computeRatings(neutral, "2025-09-10T00:00:00Z", { ...OPTS, shrinkMatches: 0 });
+
+    // Doma/venku: 1 gól doma je PODprůměr (⌀ 1.5), 1 gól venku NADprůměr (⌀ 1.2) → týmy
+    // se rozejdou. Na neutrální půdě je měřítko společné → remíza 1:1 je symetrická.
+    expect(q.get(1)!.attack).toBeLessThan(q.get(2)!.attack);
+    expect(n.get(1)!.attack).toBeCloseTo(n.get(2)!.attack, 6);
+  });
+
+  it("VÁHA ZÁPASU: přátelák (weight 0.5) hýbe ratingem míň než soutěžní zápas", () => {
+    const soutezni: RatingMatch[] = [
+      m("2025-06-01T15:00:00Z", 1, 2, 1, 1),
+      m("2025-09-01T15:00:00Z", 1, 2, 4, 0),
+    ];
+    const jakoPratelak: RatingMatch[] = [
+      m("2025-06-01T15:00:00Z", 1, 2, 1, 1),
+      { ...m("2025-09-01T15:00:00Z", 1, 2, 4, 0), weight: 0.2 },
+    ];
+    const a = computeRatings(soutezni, "2025-09-10T00:00:00Z", OPTS).get(1)!;
+    const b = computeRatings(jakoPratelak, "2025-09-10T00:00:00Z", OPTS).get(1)!;
+    // Výhra 4:0 v přáteláku nesmí vystřelit útok tak jako v soutěžním zápase.
+    expect(b.attack).toBeLessThan(a.attack);
+  });
+
   it("xG se mísí s góly dle váhy (xgWeight)", () => {
     const lucky: RatingMatch[] = [
       { ...m("2025-09-01T15:00:00Z", 1, 2, 3, 0), homeXg: 0.5, awayXg: 1.5 },

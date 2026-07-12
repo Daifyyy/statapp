@@ -92,6 +92,12 @@ export interface PredictOptions {
    * jinak se síla odvodí z okenních průměrů metrik (fallback: reprezentace, chybějící data).
    */
   strength?: { home: TeamStrength; away: TeamStrength };
+  /**
+   * Zápas na **neutrální půdě** (reprezentační turnaj): obě strany se poměřují stejným
+   * měřítkem, žádná domácí výhoda. Bez `strength` se to řeší samo (hodnoty jsou jen
+   * v TOTAL), ale ratingy jsou venue-neutrální samy o sobě → musí se to říct explicitně.
+   */
+  neutral?: boolean;
 }
 
 /**
@@ -320,19 +326,15 @@ export function predictMatch(
   // Síly buď z ratingů (korekce na soupeře + časový útlum), nebo z okenních průměrů metrik.
   // `strength` funguje i tady: exponent stahuje poměry k lize (1.0 = ber je naplno).
   const pow = (x: number) => Math.pow(x, tuning.strength);
+  // Neutrální půda (turnaj) → obě strany stejným měřítkem, jinak domácí/hostující.
+  const totalRef = (baseline.home + baseline.away) / 2;
+  const refHome = opts.neutral ? totalRef : baseline.home;
+  const refAway = opts.neutral ? totalRef : baseline.away;
   const rawHome = s
-    ? clamp(
-        baseline.home * pow(s.home.attack) * pow(s.away.defense),
-        MIN_LAMBDA,
-        MAX_LAMBDA
-      )
+    ? clamp(refHome * pow(s.home.attack) * pow(s.away.defense), MIN_LAMBDA, MAX_LAMBDA)
     : expectedGoals(home, away, true, baseline, tuning);
   const rawAway = s
-    ? clamp(
-        baseline.away * pow(s.away.attack) * pow(s.home.defense),
-        MIN_LAMBDA,
-        MAX_LAMBDA
-      )
+    ? clamp(refAway * pow(s.away.attack) * pow(s.home.defense), MIN_LAMBDA, MAX_LAMBDA)
     : expectedGoals(away, home, false, baseline, tuning);
   const readiness = computeReadiness(home, away);
 

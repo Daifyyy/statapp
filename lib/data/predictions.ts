@@ -1,4 +1,9 @@
-import { getCompareTeam, getLeagueBaseline, getLeagueRatings } from "./repository";
+import {
+  getCompareTeam,
+  getLeagueBaseline,
+  getLeagueRatings,
+  getNationalRatings,
+} from "./repository";
 import {
   getCompareNationalTeamFromFixture,
   getCompareNationalHomeAwayTeamFromFixture,
@@ -7,6 +12,7 @@ import {
   ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
   isNationalTournamentLeague,
   isNationalHomeAwayLeague,
+  isNeutralNationalLeague,
 } from "./catalog";
 import { compareTeams } from "@/lib/stats/compare";
 import {
@@ -41,7 +47,7 @@ import {
  * (`PREDICT_PARAMS` v `lib/stats/predict.ts`). Změna konstanty + `npm run reprice`
  * přepočte historii čistou matematikou, bez API a bez ztráty nasbíraných zápasů.
  */
-export const MODEL_VERSION = 6;
+export const MODEL_VERSION = 7;
 
 /** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
 export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];
@@ -92,9 +98,13 @@ export async function runPredictUpcoming(
     // Ligové měřítko pro λ – 1× per liga, z už cachované tabulky (0 API navíc).
     // Reprezentace tabulku nemají → null → predikce použije typický default.
     const baseline = (await getLeagueBaseline(leagueId)) ?? undefined;
-    // Síly s korekcí na soupeře (C2) – taky 1× per liga, z cachovaných zápasů (0 API).
-    // Reprezentace/studená cache → null → padne se na okenní model.
-    const ratings = national ? null : await getLeagueRatings(leagueId);
+    // Síly s korekcí na soupeře (C2): klub → ratingy jeho ligy (z cachovaných zápasů, 0 API);
+    // reprezentace → **globální pool všech národů** (srovnatelný napříč konfederacemi).
+    const ratings = national
+      ? await getNationalRatings()
+      : await getLeagueRatings(leagueId);
+    // Turnaje se hrají na neutrální půdě (Liga národů a kvalifikace ne).
+    const neutral = isNeutralNationalLeague(leagueId);
     const buildSide = (t: { id: number; name: string; logo: string }) => {
       if (!national) return getCompareTeam(t.id, leagueId, false);
       const meta = { name: t.name, logoUrl: t.logo, country: t.name };
@@ -116,6 +126,7 @@ export async function runPredictUpcoming(
         const result = compareTeams(home, away, new Date(), {
           baseline,
           strength: rh && ra ? { home: rh, away: ra } : undefined,
+          neutral,
         });
         const p = result.prediction;
         if (!p) continue;

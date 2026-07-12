@@ -252,6 +252,18 @@ export async function getLeagueRatings(
 }
 
 /**
+ * Globální ratingy reprezentací (jeden pool všech národů) – opravují srovnávání sil
+ * napříč konfederacemi. `null` v mocku / při výpadku → padne se na okenní model.
+ */
+export async function getNationalRatings(): Promise<Map<
+  number,
+  TeamStrength
+> | null> {
+  if (useReal) return real.getNationalRatings();
+  return null;
+}
+
+/**
  * Celá ligová tabulka pro záložku Tabulky. Real = sdílená `standings:` cache
  * (0 API navíc); mock = deterministická tabulka z mock týmů ligy (offline).
  * Reprezentace tabulku nemají → `null`.

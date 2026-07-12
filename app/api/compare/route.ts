@@ -3,7 +3,9 @@ import {
   getCompareTeam,
   getLeagueBaseline,
   getLeagueRatings,
+  getNationalRatings,
 } from "@/lib/data/repository";
+import { isNationalLeague } from "@/lib/data/catalog";
 import { compareTeams } from "@/lib/stats/compare";
 import { getCurrentUser } from "@/lib/authUser";
 import { prisma } from "@/lib/db";
@@ -41,14 +43,21 @@ export async function GET(req: Request) {
     // Ligové měřítko pro λ z **domácí ligy** (u cross-league porovnání je referencí
     // prostředí domácího). Z už cachované tabulky → 0 API navíc; null (reprezentace,
     // mezisezóna) → predikce použije typický default.
-    // Síly s korekcí na soupeře (C2) dávají smysl jen UVNITŘ jedné ligy – ratingy jsou
-    // normalizované na ligový průměr, takže „útok 1.3" v Bundeslize a v Serii A nejsou
-    // totéž. Cross-league porovnání proto zůstává na okenním modelu.
+    // Síly s korekcí na soupeře (C2). U KLUBŮ dávají smysl jen uvnitř jedné ligy – ratingy
+    // jsou normalizované na ligový průměr, takže „útok 1.3" v Bundeslize a v Serii A nejsou
+    // totéž → cross-league porovnání zůstává na okenním modelu. U REPREZENTACÍ je pool
+    // globální, takže srovnání napříč konfederacemi je právě to, co ratingy opravují
+    // (a „ligou" je tam konfederace, takže rovnost id se nesmí vyžadovat).
+    const national = isNationalLeague(homeLeague);
     const [home, away, baseline, ratings] = await Promise.all([
       getCompareTeam(homeId, homeLeague, includeEuro),
       getCompareTeam(awayId, awayLeague, includeEuro),
       getLeagueBaseline(homeLeague),
-      homeLeague === awayLeague ? getLeagueRatings(homeLeague) : null,
+      national
+        ? getNationalRatings()
+        : homeLeague === awayLeague
+          ? getLeagueRatings(homeLeague)
+          : null,
     ]);
     if (!home || !away) {
       return NextResponse.json({ error: "Tým nenalezen" }, { status: 404 });
@@ -66,6 +75,8 @@ export async function GET(req: Request) {
     const full = compareTeams(home, away, new Date(), {
       baseline: baseline ?? undefined,
       strength: rh && ra ? { home: rh, away: ra } : undefined,
+      // Porovnání reprezentací je venue-neutrální (UI u nich přepínač Doma/Venku skrývá).
+      neutral: national,
     });
 
     const u = await getCurrentUser();

@@ -31,6 +31,8 @@ npm run backtest     # offline backtest na historii klubových lig (point-in-tim
                      # 1 volání/liga+sezóna, pak .cache/backtest → další běhy offline
 npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
 npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
+npm run backtest-national           # backtest REPREZENTACÍ (turnaje + Liga národů);
+                     # --ratings=1095,2,1 = globální ratingy, --grid, --from=/--to=
 npm run backfill-stats              # xG/střely k historii: 1 volání/zápas, --limit stropuje
                      # den; ukládá i do produkční MatchStatCache (= předehřeje appku)
 npm run reprice      # po změně DC_RHO/LAMBDA_SHARPEN přepočte uložené predikce z λ (0 API);
@@ -127,6 +129,25 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   výsledek cachovaný per liga (TTL 6 h). **Ratingy platí jen uvnitř jedné ligy** (jsou normalizované
   na ligový průměr 1.0) → cross-league porovnání zůstává na okenním modelu.
   Backtest: log-loss **1.0116 → 1.0001** (2025) a **1.0010 → 0.9869** (2024, hold-out).
+- **Reprezentace: GLOBÁLNÍ ratingy** (`getNationalRatings`, `NATIONAL_RATING_OPTIONS`) – **jeden
+  pool všech ~600 národů**, ne pool per konfederace. Ratingy per konfederace by chybu zopakovaly
+  (každý normalizovaný na svou 1.0); v jednom poolu propojí konfederace **přáteláky a mezikontinentální
+  zápasy** a síla se po těch hranách propaguje (jako Elo). Tím se opravuje **strukturální** chyba:
+  dosud se góly Portugalska (nastřílené v UEFA) srovnávaly s góly Uzbekistánu (v AFC), jako by
+  pocházely ze stejného rozdělení – a přesně na takové zápasy (MS) model sází.
+  Zdroj: `NATIONAL_HISTORY_LEAGUE_IDS` (turnaje + Liga národů + kvalifikace všech konfederací +
+  **přáteláky**), `fetchLeagueSeasonFixtures` = 1 volání/soutěž+sezóna, cache 24 h (dohrané sezóny
+  30 dní) + hotové síly TTL 6 h. **Neutrální půda** (`isNeutralNationalLeague` → `PredictOptions.neutral`):
+  turnaj = obě strany stejným měřítkem, Liga národů a kvalifikace mají doma/venku.
+  **Backtest** (`npm run backtest-national`, 675 zápasů 2024–2026, ověřeno na dvou obdobích zvlášť):
+  log-loss **1.0182 → 0.9352**, přesnost **49.5 → 55.3 %**, ECE 0.024 → 0.019. Na MS 2026 samotném
+  přesnost **52.5 → 57.5 %**. **Pětkrát větší zisk než u klubů** – protože se opravuje chyba, ne šum.
+  Dvě věci proti intuici: **delší paměť je lepší** (poločas **3 roky**; reprezentace hrají málo a mění
+  se pomalu) a **přáteláky mají mít PLNOU váhu** (`NATIONAL_FRIENDLY_WEIGHT = 1`, přestože okenní
+  model je přes `matchWeight` tlumí) – jsou to hlavně ony, co propojují konfederace.
+  Kontrola: `scripts/checkRatings.ts national` (nahoře Argentina/Španělsko/Maroko/Japonsko, dole
+  San Marino/Seychely). **Pozor:** tým s odříznutým programem (Rusko – jen přáteláky se slabými)
+  má rating nespolehlivý; korekce na soupeře potřebuje propojený graf.
   **Změřeno backtestem** (3 511 zápasů): ráno (aritmetický průměr útoku a obrany, váhy 15/30/55)
   log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → dnes **0.9924**, **51.8 %**, ECE 0.011
   (naivní konstanta 1.0770). Pořadí přínosů: **váhy oken** > **ratingy (C2)** > **xG na obraně**.
