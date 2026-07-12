@@ -89,7 +89,7 @@ describe("predictMatch", () => {
     // Bez útlumu součtu (t=1), ať test měří jen shrinkage.
     const lam = (sample: number) =>
       predictMatch(strong(sample), opponent, {
-        tuning: { shrinkMatches: 6, strength: 1, totalSpread: 1, scoringStrength: 1 },
+        tuning: { shrinkMatches: 6, strength: 1, totalSpread: 1, scoringStrength: 1, xgWeight: 0.5 },
       }).lambdaHome;
     // Stejná syrová čísla (3.0 gólu doma), jiný vzorek: z dvou zápasů model nevěří, z třiceti ano.
     expect(lam(2)).toBeLessThan(lam(30));
@@ -272,7 +272,7 @@ describe("predictMatch – LAMBDA_SHARPEN no-op (default)", () => {
     const away = teamAt(AVERAGE_HOME, { GOALS_FOR: 1.2, GOALS_AGAINST: 1.8 });
     const p = predictMatch(home, away, {
       // Bez útlumu součtu (t=1), ať je vidět holý vzorec λ.
-      tuning: { shrinkMatches: 0, strength: 1, totalSpread: 1, scoringStrength: 1 },
+      tuning: { shrinkMatches: 0, strength: 1, totalSpread: 1, scoringStrength: 1, xgWeight: 0.5 },
     });
     expect(p.lambdaHome).toBeCloseTo(1.5 * (2.4 / 1.5) * (1.8 / 1.5), 6);
     // Hosté průměrní proti průměrné domácí obraně → λ = ligové měřítko hostů.

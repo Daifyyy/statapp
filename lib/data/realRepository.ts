@@ -600,11 +600,16 @@ async function assemble(
 
   // Per-zápas statistiky stahuj s nízkou souběžností (edge burst ochrana).
   const fetched: MatchStat[] = [];
+  // `/fixtures/statistics` vrací v JEDNÉ odpovědi **oba týmy**. Dřív jsme si z ní vzali
+  // jen svou půlku a druhou zahodili → týž zápas se stáhl podruhé, až přišel na řadu
+  // soupeř. Teď ho rovnou uložíme i jemu (kontext i příznaky zápasu jsou společné)
+  // → **polovina volání pryč** (v sezóně to je nejdražší opakující se položka).
+  const opponentStats = new Map<number, MatchStat[]>();
+
   await mapLimit(toFetch, 3, async (f) => {
-    let statsTeam: ApiFixtureStats[number] | null = null;
+    let stats: ApiFixtureStats | null = null;
     try {
-      const stats = await fetchFixtureStatistics(f.fixture.id);
-      statsTeam = stats.find((s) => s.team.id === teamId) ?? null;
+      stats = await fetchFixtureStatistics(f.fixture.id);
     } catch (e) {
       // U reprezentací statistiky běžně chybí (jen tichý log pod API_DEBUG);
       // u klubů jde o výpadek/částečná data → vždy logni pro diagnostiku.
@@ -615,37 +620,72 @@ async function assemble(
         console.error(`[stats-miss] fixture=${f.fixture.id} team=${teamId} ctx=national: ${msg}`);
       }
     }
-    fetched.push(buildMatchStat(f, teamId, statsTeam, optsFor(f)));
+    const opts = optsFor(f);
+    const oppId =
+      f.teams.home.id === teamId ? f.teams.away.id : f.teams.home.id;
+    const mine = stats?.find((s) => s.team.id === teamId) ?? null;
+    const oppStats = stats?.find((s) => s.team.id === oppId) ?? null;
+
+    // Soupeřova půlka odpovědi dává i **inkasované xG** (`XG_AGAINST`) – kvalita obrany
+    // bez šumu z proměňování. Zadarmo, protože odpověď máme celou.
+    fetched.push(buildMatchStat(f, teamId, mine, oppStats, opts));
+    if (oppStats) {
+      const list = opponentStats.get(oppId) ?? [];
+      list.push(buildMatchStat(f, oppId, oppStats, mine, opts));
+      opponentStats.set(oppId, list);
+    }
   });
 
   // Jeden dávkový zápis do cache (mimo kritickou cestu stahování).
   await saveMatchStats(teamId, context, fetched);
+  // Soupeřovy řádky jsou bonus zadarmo – jejich zápis nesmí shodit porovnání.
+  await Promise.all(
+    [...opponentStats].map(([oppId, list]) =>
+      saveMatchStats(oppId, context, list).catch(() => {})
+    )
+  );
   result.push(...fetched);
 
   return result.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+/**
+ * Statistiky jednoho týmu z `/fixtures/statistics` → mapa metrik (`STAT_TYPE_MAP`
+ * + `parseStatValue`). Čistá funkce; sdílí ji `buildMatchStat` i `npm run backfill-stats`.
+ */
+export function statsToMetrics(
+  statsTeam: ApiFixtureStats[number] | null
+): Partial<Record<Metric, number>> {
+  const metrics: Partial<Record<Metric, number>> = {};
+  if (!statsTeam) return metrics;
+  for (const s of statsTeam.statistics) {
+    const metric = STAT_TYPE_MAP[s.type];
+    if (!metric) continue;
+    const num = parseStatValue(s.value);
+    if (num !== null) metrics[metric] = num;
+  }
+  return metrics;
 }
 
 function buildMatchStat(
   f: ApiFixture,
   teamId: number,
   statsTeam: ApiFixtureStats[number] | null,
+  /** Statistiky soupeře z téže odpovědi – jen kvůli `XG_AGAINST` (inkasované xG). */
+  statsOpponent: ApiFixtureStats[number] | null,
   opts: ReturnType<FixtureOpts>
 ): MatchStat {
   const isHome = f.teams.home.id === teamId;
   const gf = isHome ? f.goals.home : f.goals.away;
   const ga = isHome ? f.goals.away : f.goals.home;
 
-  const metrics: Partial<Record<Metric, number>> = {};
+  const metrics: Partial<Record<Metric, number>> = {
+    ...statsToMetrics(statsTeam),
+  };
+  const xgAgainst = statsToMetrics(statsOpponent).XG;
+  if (xgAgainst != null) metrics.XG_AGAINST = xgAgainst;
   if (gf != null) metrics.GOALS_FOR = gf;
   if (ga != null) metrics.GOALS_AGAINST = ga;
-  if (statsTeam) {
-    for (const s of statsTeam.statistics) {
-      const metric = STAT_TYPE_MAP[s.type];
-      if (!metric) continue;
-      const num = parseStatValue(s.value);
-      if (num !== null) metrics[metric] = num;
-    }
-  }
 
   return {
     fixtureId: f.fixture.id,

@@ -1,4 +1,4 @@
-import type { MatchStat, PredictionRow, Team } from "@/lib/types";
+import type { MatchStat, Metric, PredictionRow, Team } from "@/lib/types";
 import { compareTeams } from "@/lib/stats/compare";
 import {
   DEFAULT_BASELINE,
@@ -38,6 +38,12 @@ export interface HistoryMatch {
   /** Skóre po 90 minutách (v lize = koncové; viz `fullTimeGoals`). */
   homeGoals: number;
   awayGoals: number;
+  /**
+   * Per-zápas statistiky (xG, střely…) obou stran – doplní `npm run backfill-stats`
+   * (1 volání/zápas). Bez nich backtest jede jen z gólů, což je výchozí stav.
+   */
+  homeMetrics?: Partial<Record<Metric, number>>;
+  awayMetrics?: Partial<Record<Metric, number>>;
 }
 
 /**
@@ -64,6 +70,12 @@ export function matchStatsBefore(
       const isHome = m.homeId === teamId;
       const gf = isHome ? m.homeGoals : m.awayGoals;
       const ga = isHome ? m.awayGoals : m.homeGoals;
+      // Statistiky (xG, střely) jsou volitelné – jsou-li stažené, jdou do metrik zápasu
+      // stejně jako v produkci; góly je vždy přepíšou (jsou spolehlivější než dopočet).
+      const stats = isHome ? m.homeMetrics : m.awayMetrics;
+      // xG SOUPEŘE = xG, které tým inkasoval → kvalita obrany bez šumu z proměňování.
+      const oppStats = isHome ? m.awayMetrics : m.homeMetrics;
+      const xgAgainst = oppStats?.XG;
       return {
         fixtureId: m.fixtureId,
         date: m.date,
@@ -72,7 +84,12 @@ export function matchStatsBefore(
         competitive: true,
         season: m.season,
         isBaseline: m.season === season - 1,
-        metrics: { GOALS_FOR: gf, GOALS_AGAINST: ga },
+        metrics: {
+          ...stats,
+          ...(xgAgainst != null ? { XG_AGAINST: xgAgainst } : {}),
+          GOALS_FOR: gf,
+          GOALS_AGAINST: ga,
+        },
       } satisfies MatchStat;
     })
     .sort((a, b) => b.date.localeCompare(a.date));

@@ -30,6 +30,9 @@ npm run calibrate    # MLE DC_RHO + Brier/log-loss z odehraných predikcí (jen 
 npm run backtest     # offline backtest na historii klubových lig (point-in-time, stejné jádro);
                      # 1 volání/liga+sezóna, pak .cache/backtest → další běhy offline
 npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
+npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
+npm run backfill-stats              # xG/střely k historii: 1 volání/zápas, --limit stropuje
+                     # den; ukládá i do produkční MatchStatCache (= předehřeje appku)
 npm run reprice      # po změně DC_RHO/LAMBDA_SHARPEN přepočte uložené predikce z λ (0 API);
                      # suchý běh, zápis až `-- --apply`. NAHRAZUJE bump MODEL_VERSION.
 npm run resettle     # přepočet uložených výsledků na skóre po 90 min (AET/PEN); suchý běh,
@@ -107,10 +110,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   proto stlačí součet k ligovému průměru a **drží rozdíl** (přesný protějšek `sharpenLambdas`)
   → 1X2 se nedotkne. Over 2.5: ECE **0.054 → 0.014**, log-loss 0.6919 → **0.6817** (základní míra
   0.6911) – **teprve teď Over 2.5 vůbec něco přidává**, předtím byl horší než konstanta.
-  **Změřeno backtestem** (3 511 klubových zápasů, hold-out 2025): starý model (aritmetický průměr
-  útoku a obrany, váhy 15/30/55) log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → nový **1.0125**,
-  **50.4 %**, **ECE 0.012** (naivní konstanta 1.0770). Největší jednotlivý podíl mají **váhy**.
-  `MODEL_VERSION = 3` (λ se změnila → dataset predikcí se počítá od verze 3).
+  **xG na OBOU stranách** (`xgWeight = 0.5`): útok = `XG` týmu, obrana = **`XG_AGAINST`** = xG,
+  které soupeř **inkasoval** (kvalita obrany bez šumu z proměňování). Plní se z téže odpovědi
+  `/fixtures/statistics` (nese oba týmy) → **0 volání navíc**; sloupec `xgAgainst` v `MatchStatCache`.
+  Dřív se xG používalo **jen na útok** a přínos byl mizivý (log-loss −0.002); s xG i na obraně je
+  to **−0.0075** (1.0191 → 1.0116 na sezóně 2025; potvrzeno i na 2024). Čisté xG (w=1) je **horší**
+  než mix → góly a xG se doplňují, nenahrazují.
+  **Změřeno backtestem** (hold-out 2025): starý model (aritmetický průměr útoku a obrany, váhy
+  15/30/55) log-loss **1.0474**, přesnost 46.6 %, ECE 0.022 → nový **1.0116**, **50.7 %**,
+  **ECE 0.008** (naivní konstanta 1.0726). Největší podíl mají **váhy**, druhý **xG na obraně**.
+  `MODEL_VERSION = 5` (λ se změnila → dataset predikcí se počítá od verze 5).
 - **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem. Poissonova mřížka ho měla **horší
   než konstanta** „54.7 % vždy" (0.6920 vs. 0.6888) a přestřelený (ECE 0.033). Proto je BTTS
   **jediný trh, který nepochází z mřížky**: `scoringProb` ho staví z **empirických frekvencí**
@@ -218,6 +227,14 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - api-sports limit 300/min, ale edge nás reálně stropuje ~5 úspěšných volání/s a občas
   odmítá i pod limitem (distribuované nody). `lib/data/rateLimiter.ts` = semafor
   souběžnosti 3 + klouzavý minutový strop; `apiGet` retry s krátkým backoffem.
+- **Denní kvóta (plán Pro) = 7500.** Odhad spotřeby v rozjeté sezóně ≈ **450–600/den**
+  (seznamy zápasů ~200 + statistiky nově odehraných ~50 + kurzy ~30–75 + benchmark ~75 +
+  tabulky/warm/settle ~30) → **rezerva ~90 %**. Predikce **nestojí volání na zápas**:
+  `compareTeams` čte z trvalé `MatchStatCache`, takže zápas se stahuje **1× za život**.
+- **`/fixtures/statistics` vrací OBA týmy v jedné odpovědi.** `assemble` (`realRepository`)
+  proto z ní ukládá i **soupeřův** `MatchStat` – dřív se druhá půlka zahodila a týž zápas se
+  stáhl podruhé, až přišel na řadu soupeř (**2× dražší**). Nejdražší opakující se položka
+  v sezóně; nevracet zpět.
 - Cold porovnání ~8 s (mezisezóna nestahuje předchozí sezónu), warm ~0.15 s.
 - **Předehřívání:** `GET /api/warm` (katalog, lehké, denní cron ve `vercel.json`);
   `GET /api/warm?league=ID` předehřeje zápasová data ligy (těžké, na vyžádání).

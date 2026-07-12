@@ -48,6 +48,7 @@ function rowToMatchStat(r: Row): MatchStat {
   if (r.fouls != null) metrics.FOULS = r.fouls;
   if (r.shots != null) metrics.SHOTS = r.shots;
   if (r.xg != null) metrics.XG = r.xg;
+  if (r.xgAgainst != null) metrics.XG_AGAINST = r.xgAgainst;
   if (r.shotsOnTarget != null) metrics.SHOTS_ON_TARGET = r.shotsOnTarget;
   if (r.shotsOffTarget != null) metrics.SHOTS_OFF_TARGET = r.shotsOffTarget;
   if (r.blockedShots != null) metrics.BLOCKED_SHOTS = r.blockedShots;
@@ -100,6 +101,7 @@ function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
     fouls: ms.metrics.FOULS ?? null,
     shots: ms.metrics.SHOTS ?? null,
     xg: ms.metrics.XG ?? null,
+    xgAgainst: ms.metrics.XG_AGAINST ?? null,
     shotsOnTarget: ms.metrics.SHOTS_ON_TARGET ?? null,
     shotsOffTarget: ms.metrics.SHOTS_OFF_TARGET ?? null,
     blockedShots: ms.metrics.BLOCKED_SHOTS ?? null,

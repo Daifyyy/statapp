@@ -59,6 +59,13 @@ export interface PredictTuning {
    * parametr říká, jestli v nich vůbec **je** signál.
    */
   scoringStrength: number;
+  /**
+   * Váha xG proti gólům v odhadu síly (0 = jen góly, 1 = jen xG, 0.5 = půl na půl).
+   * Platí pro **obě** strany λ: útok = `XG`, obrana = `XG_AGAINST` (xG, které soupeř
+   * inkasoval). Fit backtestem – xG je teoreticky stabilnější (góly jsou zašuměná
+   * realizace šancí), ale ověřuj to měřením, ne vírou.
+   */
+  xgWeight: number;
 }
 
 export const DEFAULT_TUNING: PredictTuning = {
@@ -71,6 +78,7 @@ export const DEFAULT_TUNING: PredictTuning = {
   // (`--grid-btts`) + hold-out: naplno (1.0) je to log-loss 0.7188, při 0.15 je 0.6885.
   // Jinými slovy: **v tom, kdo dá aspoň gól, žádný týmový signál prakticky není.**
   scoringStrength: 0.15,
+  xgWeight: 0.5, // původní chování (půl na půl); fituje se `--grid-xg`
 };
 
 /** Volby predikce: ligové měřítko + ladicí parametry λ (obojí volitelné). */
@@ -409,13 +417,22 @@ function expectedGoals(
     strengthRatio(values, metric, venue, venueRef, totalRef, tuning);
 
   // λ = referenční hladina × síla útoku × slabost obrany soupeře (obojí jako poměr k lize).
-  const attack = ratio("GOALS_FOR", team.values, attackVenue);
-  const xg = ratio("XG", team.values, attackVenue); // xG jako druhý odhad útoku (zpevnění)
-  const defense = ratio("GOALS_AGAINST", opponent.values, defenseVenue);
+  // Góly i xG měří totéž (kolik šancí strana vyrobí/pustí), jen xG bez šumu z proměňování →
+  // mísí se vahou `xgWeight` na OBOU stranách: útok = xG týmu, obrana = xG, které soupeř
+  // inkasoval (`XG_AGAINST`). Bez xG dat zůstanou samotné góly.
+  const attackSide = blend(
+    ratio("GOALS_FOR", team.values, attackVenue),
+    ratio("XG", team.values, attackVenue),
+    tuning.xgWeight
+  );
+  const defense = blend(
+    ratio("GOALS_AGAINST", opponent.values, defenseVenue),
+    ratio("XG_AGAINST", opponent.values, defenseVenue),
+    tuning.xgWeight
+  );
 
   // Nevíme nic ani o útoku, ani o obraně soupeře → predikci nevydáme (UI: „nedostatek dat").
   // Chybí-li jen jedna strana, bere se za ni ligový průměr (poměr 1) – lepší než nic.
-  const attackSide = attack ?? xg;
   if (attackSide == null && defense == null) return null;
 
   // Referenční hladina musí odpovídat tomu, ODKUD data přišla: venue rozpad → měřítko
@@ -423,12 +440,25 @@ function expectedGoals(
   // venue-neutrální reprezentační zápas (jen TOTAL) dostal domácí výhodu, kterou nemá,
   // a prohození týmů by nedalo zrcadlovou predikci.
   const ref = attackSide?.ref ?? defense!.ref;
-  const attackRatio =
-    attack != null && xg != null
-      ? (attack.ratio + xg.ratio) / 2
-      : (attackSide?.ratio ?? 1);
+  return clamp(
+    ref * (attackSide?.ratio ?? 1) * (defense?.ratio ?? 1),
+    MIN_LAMBDA,
+    MAX_LAMBDA
+  );
+}
 
-  return clamp(ref * attackRatio * (defense?.ratio ?? 1), MIN_LAMBDA, MAX_LAMBDA);
+/**
+ * Smíchá gólový a xG odhad téže veličiny vahou `w` (0 = jen góly, 1 = jen xG). Chybí-li
+ * jedna strana, vrátí druhou (xG u reprezentací a starých řádků chybí běžně).
+ */
+function blend(
+  goals: { ratio: number; ref: number } | null,
+  xg: { ratio: number; ref: number } | null,
+  w: number
+): { ratio: number; ref: number } | null {
+  if (goals == null) return xg;
+  if (xg == null) return goals;
+  return { ratio: goals.ratio * (1 - w) + xg.ratio * w, ref: goals.ref };
 }
 
 /**

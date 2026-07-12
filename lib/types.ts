@@ -29,7 +29,14 @@ export type Metric =
   // dá **frekvenci jevu**: „jak často tým vůbec skóroval" / „jak často udržel nulu".
   // Poisson tyhle jevy jen ODVOZUJE z průměru gólů (P(≥1) = 1 − e^−λ); tady je měříme přímo.
   | "SCORED"
-  | "CLEAN_SHEET";
+  | "CLEAN_SHEET"
+  /**
+   * xG, které tým **inkasoval** (= xG soupeře v tom zápase). Kvalita obrany: kolik šancí
+   * tým pouští, nezávisle na tom, kolik z nich soupeř proměnil. Do `MatchStat` ho plní
+   * ten, kdo má po ruce statistiky obou stran (`/fixtures/statistics` je vrací v jedné
+   * odpovědi). Mimo `ALL_METRICS` → v UI se nezobrazuje.
+   */
+  | "XG_AGAINST";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -124,6 +131,7 @@ export const METRIC_LABELS: Record<Metric, string> = {
   // Odvozené (mimo `ALL_METRICS` → v UI se nezobrazují); label jen kvůli úplnosti typu.
   SCORED: "Skóroval (podíl zápasů)",
   CLEAN_SHEET: "Čisté konto (podíl zápasů)",
+  XG_AGAINST: "Inkasované xG",
 };
 
 /**

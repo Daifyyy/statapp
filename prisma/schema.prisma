@@ -37,6 +37,10 @@ model MatchStatCache {
   fouls            Float?
   shots            Float?
   xg               Float?
+  /// xG, které tým v zápase INKASOVAL (= xG soupeře). Kvalita obrany bez šumu z toho, kolik
+  /// šancí soupeř proměnil – backtest: s ním klesne 1X2 log-loss 1.0191 → 1.0116. Plní se
+  /// z téže odpovědi `/fixtures/statistics` (nese oba týmy) → 0 volání navíc.
+  xgAgainst        Float?
   shotsOnTarget    Float?
   shotsOffTarget   Float?
   blockedShots     Float?

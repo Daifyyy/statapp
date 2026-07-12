@@ -44,6 +44,7 @@ const leagues = arg("leagues") ? nums(arg("leagues")!) : PREDICTION_LEAGUES;
 const seasons = arg("seasons") ? nums(arg("seasons")!) : [2024, 2025];
 const minMatches = Number(arg("minMatches") ?? 0);
 const refresh = process.argv.includes("--refresh");
+const noStats = process.argv.includes("--no-stats");
 
 /**
  * Zápasy ligy+sezóny s diskovou cache: iterace nad modelem pak běží úplně offline
@@ -105,6 +106,25 @@ function binaryScore(
   return n ? { logloss: ll / n, brier: brier / n } : { logloss: 0, brier: 0 };
 }
 
+type TeamMetrics = Partial<Record<Metric, number>>;
+type StatsFile = Record<string, { home: TeamMetrics; away: TeamMetrics }>;
+
+/**
+ * Přilepí k zápasům per-zápas statistiky (xG, střely) z `npm run backfill-stats`, pokud
+ * jsou stažené. `--no-stats` je vypne → tímtéž během se dá změřit, co xG modelu přidává.
+ */
+function attachStats(history: HistoryMatch[], league: number, season: number): void {
+  const file = join(CACHE_DIR, `stats-${league}-${season}.json`);
+  if (noStats || !existsSync(file)) return;
+  const stats = JSON.parse(readFileSync(file, "utf8")) as StatsFile;
+  for (const m of history) {
+    const s = stats[String(m.fixtureId)];
+    if (!s) continue;
+    m.homeMetrics = s.home;
+    m.awayMetrics = s.away;
+  }
+}
+
 async function main() {
   // Baseline okno (sezóna − 1) musí být taky staženo, jinak nemá 1. kolo z čeho vyjít.
   const needed = [...new Set(seasons.flatMap((s) => [s - 1, s]))].sort();
@@ -121,13 +141,21 @@ async function main() {
       const cached = !refresh && existsSync(file);
       const rows = await loadSeason(league, season);
       if (!cached) fetched++;
+      attachStats(rows, league, season);
       history.push(...rows);
     }
   }
   history.sort((a, b) => a.date.localeCompare(b.date));
+  const withStats = history.filter((m) => m.homeMetrics?.XG != null).length;
   console.log(
     `Historie: ${history.length} odehraných zápasů ` +
       `(${fetched} volání API, zbytek z .cache/backtest)`
+  );
+  console.log(
+    noStats
+      ? "Statistiky (xG, střely): VYPNUTÉ (--no-stats) → model jede jen z gólů."
+      : `Statistiky s xG: ${withStats} zápasů` +
+          (withStats === 0 ? "  (spusť `npm run backfill-stats`)" : "")
   );
 
   // Grid search ladicích parametrů λ (`--grid`): shrinkage × exponent síly. Rozhodne
@@ -218,6 +246,27 @@ async function main() {
       );
     }
     console.log("(konstanta 54.7 % → 0.6888; BTTS z Poissonovy mřížky → 0.6920)");
+    return;
+  }
+
+  // Grid váhy xG (`--grid-xg`): 0 = jen góly, 1 = jen xG. Platí pro obě strany λ
+  // (útok = XG, obrana = XG_AGAINST). Odpovídá na to, jestli se ta 3 500 volání vyplatila.
+  if (process.argv.includes("--grid-xg")) {
+    console.log("\n=== Grid váhy xG (0 = jen góly, 1 = jen xG) ===");
+    console.log("w      1X2 LL   přesnost  O2.5 LL  1X2 ECE");
+    for (const w of [0, 0.25, 0.5, 0.75, 1.0]) {
+      const r = backtest(history, {
+        seasons,
+        minMatches,
+        tuning: { ...DEFAULT_TUNING, xgWeight: w },
+      }).filter((x) => x.available);
+      const s = scoreProbs(r, ourProbs);
+      console.log(
+        `${w.toFixed(2).padEnd(6)} ${s.logloss.toFixed(4)}   ${pct(s.accuracy).padEnd(9)} ` +
+          `${binaryScore(r, (x) => x.over25, over25Hit).logloss.toFixed(4)}   ` +
+          `${(computeReliability(r).outcome.ece ?? 0).toFixed(4)}`
+      );
+    }
     return;
   }
 

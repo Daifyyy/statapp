@@ -61,6 +61,7 @@ export const PREDICTION_METRICS = [
   "GOALS_FOR",
   "GOALS_AGAINST",
   "XG",
+  "XG_AGAINST",
   "SCORED",
   "CLEAN_SHEET",
 ] as const;
