@@ -41,7 +41,7 @@ import {
  * (`PREDICT_PARAMS` v `lib/stats/predict.ts`). Změna konstanty + `npm run reprice`
  * přepočte historii čistou matematikou, bez API a bez ztráty nasbíraných zápasů.
  */
-export const MODEL_VERSION = 3;
+export const MODEL_VERSION = 4;
 
 /** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
 export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];

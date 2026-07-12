@@ -52,8 +52,18 @@ export const PREDICTION_WINDOW_WEIGHTS: Record<
   NATIONAL: WINDOW_WEIGHTS.NATIONAL,
 };
 
-/** Metriky, ze kterých se skládá λ – jen ty se pro predikci počítají znovu (vlastní váhy). */
-export const PREDICTION_METRICS = ["GOALS_FOR", "GOALS_AGAINST", "XG"] as const;
+/**
+ * Metriky, které predikce počítá znovu s vlastními vahami. Kromě vstupů λ i **odvozené
+ * frekvence** `SCORED`/`CLEAN_SHEET` – z nich se staví „oba skórují" napřímo, místo aby
+ * se ten jev odvozoval z Poissonova průměru (viz `predict.ts`).
+ */
+export const PREDICTION_METRICS = [
+  "GOALS_FOR",
+  "GOALS_AGAINST",
+  "XG",
+  "SCORED",
+  "CLEAN_SHEET",
+] as const;
 
 export const ENTITY_WINDOWS: Record<EntityType, WindowKey[]> = {
   CLUB: ["SEASON", "LAST10", "LAST5"],

@@ -52,6 +52,13 @@ export interface PredictTuning {
   shrinkMatches: number;
   strength: number;
   totalSpread: number;
+  /**
+   * Kolik váhy dostane **týmová frekvence skórování** v odhadu „oba skórují"
+   * (exponent jako `strength`, ale jen pro `scoringProb`). `0` = ignoruj tým, ber ligovou
+   * frekvenci (= konstanta); `1` = ber frekvence naplno. Fit backtestem – právě tenhle
+   * parametr říká, jestli v nich vůbec **je** signál.
+   */
+  scoringStrength: number;
 }
 
 export const DEFAULT_TUNING: PredictTuning = {
@@ -60,6 +67,10 @@ export const DEFAULT_TUNING: PredictTuning = {
   // 0.5 = rozptyl očekávaných gólů půlíme. Grid v `npm run backtest`: ECE u Přes 2.5
   // 0.054 → 0.014, log-loss 0.6919 → 0.6817, 1X2 beze změny (1.0127 → 1.0125).
   totalSpread: 0.5,
+  // 0.15 = týmovou frekvenci skórování ber jen z 15 %, zbytek je ligový průměr. Grid
+  // (`--grid-btts`) + hold-out: naplno (1.0) je to log-loss 0.7188, při 0.15 je 0.6885.
+  // Jinými slovy: **v tom, kdo dá aspoň gól, žádný týmový signál prakticky není.**
+  scoringStrength: 0.15,
 };
 
 /** Volby predikce: ligové měřítko + ladicí parametry λ (obojí volitelné). */
@@ -216,6 +227,48 @@ export function sharpenLambdas(
 }
 
 /**
+ * Pravděpodobnost, že daná strana **vůbec skóruje** – odhadnutá **přímo z frekvencí**,
+ * ne z Poissonova průměru.
+ *
+ * Poisson tvrdí `P(≥1 gól) = 1 − e^−λ`, tedy tenhle jev jen **odvozuje** z průměru gólů.
+ * Jenže průměr zahodí informaci o tom, jak byly góly rozdělené: tým, co dvakrát dal tři
+ * a třikrát nic, má stejné λ jako tým, co dal pokaždé jeden – a přitom se „dá gól?" chová
+ * úplně jinak. Frekvence `SCORED` / `CLEAN_SHEET` (odvozené z týchž gólů, 0 API navíc) tu
+ * informaci nesou. Kombinujeme útok a obranu multiplikativně vůči ligové frekvenci, stejně
+ * jako λ, a s týmž shrinkage.
+ *
+ * Vrací `null`, když frekvence nejsou (pak BTTS spadne zpět na mřížku).
+ */
+function scoringProb(
+  team: PredictInput,
+  opponent: PredictInput,
+  isHome: boolean,
+  baseline: LeagueBaseline,
+  tuning: PredictTuning
+): number | null {
+  const attackVenue = isHome ? "HOME" : "AWAY";
+  const defenseVenue = isHome ? "AWAY" : "HOME";
+  // Ligová frekvence skórování odpovídající ligovému měřítku gólů (Poissonův prior).
+  const venueRef = 1 - Math.exp(-(isHome ? baseline.home : baseline.away));
+  const totalRef = 1 - Math.exp(-(baseline.home + baseline.away) / 2);
+
+  // `scoringStrength` řídí, kolik váhy má týmová frekvence oproti ligové (0 = jen liga).
+  const freq = { ...tuning, strength: tuning.scoringStrength };
+  const scored = strengthRatio(team.values, "SCORED", attackVenue, venueRef, totalRef, freq);
+  // Soupeř neudržel nulu = dostal gól → frekvence „dostal gól" je doplněk čistých kont.
+  const cleanSheet = valueOf(opponent.values, "CLEAN_SHEET", defenseVenue);
+  if (scored == null || cleanSheet == null) return null;
+
+  const conceded = 1 - cleanSheet;
+  const n = sampleOrTotal(opponent.values, "CLEAN_SHEET", defenseVenue);
+  const k = tuning.shrinkMatches;
+  const concededShrunk = (n * conceded + k * scored.ref) / (n + k);
+  const concededRatio = Math.pow(concededShrunk / scored.ref, tuning.scoringStrength);
+
+  return clamp(scored.ref * scored.ratio * concededRatio, 0.05, 0.95);
+}
+
+/**
  * Stlačí **součet** λ k ligovému průměru (`S' = ref + (S − ref) × t`) a **drží rozdíl**
  * λ. Přesný protějšek `sharpenLambdas`. `t = 1` = no-op. Exportováno pro testy a grid
  * v `npm run backtest`.
@@ -281,6 +334,19 @@ export function predictMatch(
 
   const g = gridProbs(lambdaHome, lambdaAway);
 
+  // „Oba skórují" JAKO JEDINÝ trh nepochází z mřížky, ale z EMPIRICKÝCH frekvencí (jak často
+  // tým skutečně skóroval / držel nulu). Vědomá výjimka z pravidla „všechny trhy z jedné
+  // mřížky": Poissonovo `P(≥1) = 1 − e^−λ` bylo u BTTS prokazatelně **horší než konstanta**
+  // (0.6920 vs. 0.6888) a přestřelené (ECE 0.033). Empirický odhad je kalibrovaný (ECE ~0.02)
+  // a neškodí. Skill ani tak nemá – viz `scoringStrength`. Chybí-li frekvence (reprezentace
+  // bez dat, starý řádek), spadne zpět na mřížku.
+  const pHomeScores = scoringProb(home, away, true, baseline, tuning);
+  const pAwayScores = scoringProb(away, home, false, baseline, tuning);
+  const bttsYes =
+    pHomeScores != null && pAwayScores != null
+      ? pHomeScores * pAwayScores
+      : g.bttsYes;
+
   const lowConfidence =
     lowConfidenceOf(home.values, "GOALS_FOR", "HOME") ||
     lowConfidenceOf(away.values, "GOALS_FOR", "AWAY");
@@ -296,7 +362,7 @@ export function predictMatch(
     homeWin: g.homeWin,
     draw: g.draw,
     awayWin: g.awayWin,
-    bttsYes: g.bttsYes,
+    bttsYes,
     over25: g.over25,
     topScores: g.topScores,
     lowConfidence,

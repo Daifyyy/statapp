@@ -86,8 +86,10 @@ async function main() {
           homeWin: g.homeWin,
           draw: g.draw,
           awayWin: g.awayWin,
-          bttsYes: g.bttsYes,
           over25: g.over25,
+          // `bttsYes` se ZÁMĚRNĚ nepřepisuje: jako jediný trh nevzniká z mřížky, ale
+          // z empirických frekvencí skórování (viz `predict.ts`), takže z uložených λ
+          // ho přepočítat nejde – mřížkovou hodnotou bychom ho jen pokazili.
           rho: PREDICT_PARAMS.rho,
           sharpen: PREDICT_PARAMS.sharpen,
         },

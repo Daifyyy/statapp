@@ -89,7 +89,7 @@ describe("predictMatch", () => {
     // Bez útlumu součtu (t=1), ať test měří jen shrinkage.
     const lam = (sample: number) =>
       predictMatch(strong(sample), opponent, {
-        tuning: { shrinkMatches: 6, strength: 1, totalSpread: 1 },
+        tuning: { shrinkMatches: 6, strength: 1, totalSpread: 1, scoringStrength: 1 },
       }).lambdaHome;
     // Stejná syrová čísla (3.0 gólu doma), jiný vzorek: z dvou zápasů model nevěří, z třiceti ano.
     expect(lam(2)).toBeLessThan(lam(30));
@@ -272,13 +272,59 @@ describe("predictMatch – LAMBDA_SHARPEN no-op (default)", () => {
     const away = teamAt(AVERAGE_HOME, { GOALS_FOR: 1.2, GOALS_AGAINST: 1.8 });
     const p = predictMatch(home, away, {
       // Bez útlumu součtu (t=1), ať je vidět holý vzorec λ.
-      tuning: { shrinkMatches: 0, strength: 1, totalSpread: 1 },
+      tuning: { shrinkMatches: 0, strength: 1, totalSpread: 1, scoringStrength: 1 },
     });
     expect(p.lambdaHome).toBeCloseTo(1.5 * (2.4 / 1.5) * (1.8 / 1.5), 6);
     // Hosté průměrní proti průměrné domácí obraně → λ = ligové měřítko hostů.
     expect(p.lambdaAway).toBeCloseTo(1.2, 6);
     // Zostření je no-op → zobrazená λ = základní λ.
     expect(p.lambdaHomeBase).toBeCloseTo(p.lambdaHome, 10);
+  });
+});
+
+describe("BTTS (oba skórují) z empirických frekvencí", () => {
+  /** Tým s frekvencemi skórování / čistých kont (0–1) navíc ke gólům. */
+  const withFreq = (
+    home: Partial<Record<Metric, number>>,
+    away: Partial<Record<Metric, number>>
+  ) => teamAt(home, away);
+
+  it("bez frekvencí spadne BTTS zpět na Poissonovu mřížku", () => {
+    const p = predictMatch(teamAt(AVERAGE_HOME, AVERAGE_AWAY), teamAt(AVERAGE_HOME, AVERAGE_AWAY));
+    const g = gridProbs(p.lambdaHomeBase, p.lambdaAwayBase);
+    expect(p.bttsYes).toBeCloseTo(g.bttsYes, 10);
+  });
+
+  it("tým, který skoro vždy skóruje, zvedne BTTS oproti týmu, který skóruje zřídka", () => {
+    const opponent = withFreq(
+      { ...AVERAGE_HOME, SCORED: 0.75, CLEAN_SHEET: 0.3 },
+      { ...AVERAGE_AWAY, SCORED: 0.7, CLEAN_SHEET: 0.25 }
+    );
+    const scores = withFreq(
+      { ...AVERAGE_HOME, SCORED: 0.95, CLEAN_SHEET: 0.3 },
+      { ...AVERAGE_AWAY, SCORED: 0.9, CLEAN_SHEET: 0.3 }
+    );
+    const blanks = withFreq(
+      { ...AVERAGE_HOME, SCORED: 0.4, CLEAN_SHEET: 0.3 },
+      { ...AVERAGE_AWAY, SCORED: 0.35, CLEAN_SHEET: 0.3 }
+    );
+    expect(predictMatch(scores, opponent).bttsYes).toBeGreaterThan(
+      predictMatch(blanks, opponent).bttsYes
+    );
+  });
+
+  it("efekt je vědomě TLUMENÝ (scoringStrength 0.15) – frekvence nesou minimum signálu", () => {
+    const opponent = withFreq(
+      { ...AVERAGE_HOME, SCORED: 0.75, CLEAN_SHEET: 0.3 },
+      { ...AVERAGE_AWAY, SCORED: 0.7, CLEAN_SHEET: 0.25 }
+    );
+    const extreme = withFreq(
+      { ...AVERAGE_HOME, SCORED: 1.0, CLEAN_SHEET: 0.3 },
+      { ...AVERAGE_AWAY, SCORED: 1.0, CLEAN_SHEET: 0.3 }
+    );
+    // I tým, který skóroval v KAŽDÉM zápase, posune BTTS jen mírně – jinak by model
+    // předstíral jistotu, kterou data (viz backtest) neunesou.
+    expect(predictMatch(extreme, opponent).bttsYes).toBeLessThan(0.75);
   });
 });
 

@@ -23,7 +23,13 @@ export type Metric =
   | "FOULS"
   | "YELLOW_CARDS"
   | "RED_CARDS"
-  | "SAVES";
+  | "SAVES"
+  // Odvozené metriky (počítá je `metricOf` v aggregate.ts z gólů, NEukládají se a nejsou
+  // v `ALL_METRICS` → nezobrazují se v UI a nevyžadují bump cache). Vážený průměr přes ně
+  // dá **frekvenci jevu**: „jak často tým vůbec skóroval" / „jak často udržel nulu".
+  // Poisson tyhle jevy jen ODVOZUJE z průměru gólů (P(≥1) = 1 − e^−λ); tady je měříme přímo.
+  | "SCORED"
+  | "CLEAN_SHEET";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -115,6 +121,9 @@ export const METRIC_LABELS: Record<Metric, string> = {
   YELLOW_CARDS: "Žluté karty",
   RED_CARDS: "Červené karty",
   SAVES: "Zákroky brankáře",
+  // Odvozené (mimo `ALL_METRICS` → v UI se nezobrazují); label jen kvůli úplnosti typu.
+  SCORED: "Skóroval (podíl zápasů)",
+  CLEAN_SHEET: "Čisté konto (podíl zápasů)",
 };
 
 /**

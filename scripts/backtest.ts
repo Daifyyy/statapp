@@ -200,6 +200,27 @@ async function main() {
     return;
   }
 
+  // Grid `--grid-btts`: kolik váhy má dostat TÝMOVÁ frekvence skórování (`scoringStrength`)
+  // v odhadu „oba skórují". 0 = ignoruj tým a ber ligovou frekvenci (≈ konstanta). Když
+  // optimum vyjde 0, znamená to, že v týmových frekvencích **žádný signál není**.
+  if (process.argv.includes("--grid-btts")) {
+    console.log("\n=== Grid scoringStrength (váha týmové frekvence v BTTS) ===");
+    console.log("s      BTTS LL   BTTS ECE");
+    for (const s of [0, 0.15, 0.3, 0.5, 0.75, 1.0]) {
+      const r = backtest(history, {
+        seasons,
+        minMatches,
+        tuning: { ...DEFAULT_TUNING, scoringStrength: s },
+      }).filter((x) => x.available);
+      console.log(
+        `${s.toFixed(2).padEnd(6)} ${binaryScore(r, (x) => x.bttsYes, bttsHit).logloss.toFixed(4)}    ` +
+          `${(computeReliability(r).btts.ece ?? 0).toFixed(4)}`
+      );
+    }
+    console.log("(konstanta 54.7 % → 0.6888; BTTS z Poissonovy mřížky → 0.6920)");
+    return;
+  }
+
   // `--tune=k,s[,t]` = jednorázový běh s konkrétními parametry λ (bez nich produkční default).
   const tuneArg = arg("tune");
   const tuning = tuneArg
@@ -207,6 +228,7 @@ async function main() {
         shrinkMatches: nums(tuneArg)[0],
         strength: nums(tuneArg)[1],
         totalSpread: nums(tuneArg)[2] ?? DEFAULT_TUNING.totalSpread,
+        scoringStrength: nums(tuneArg)[3] ?? DEFAULT_TUNING.scoringStrength,
       }
     : undefined;
   if (tuning) console.log(`Ladění λ: ${JSON.stringify(tuning)}`);

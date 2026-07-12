@@ -31,6 +31,23 @@ interface WindowAgg {
   effectiveSample: number; // součet vah zápasů, které metriku obsahovaly
 }
 
+/**
+ * Hodnota metriky u jednoho zápasu. **Odvozené metriky** (`SCORED`, `CLEAN_SHEET`) se
+ * dopočítají z gólů – neukládají se, takže fungují i nad starou cache a nezobrazují se v UI.
+ * Vážený průměr přes ně vyjde jako **frekvence jevu** (0–1), ne jako počet gólů.
+ */
+function metricOf(m: MatchStat, metric: Metric): number | undefined {
+  if (metric === "SCORED") {
+    const gf = m.metrics.GOALS_FOR;
+    return gf === undefined ? undefined : gf >= 1 ? 1 : 0;
+  }
+  if (metric === "CLEAN_SHEET") {
+    const ga = m.metrics.GOALS_AGAINST;
+    return ga === undefined ? undefined : ga === 0 ? 1 : 0;
+  }
+  return m.metrics[metric];
+}
+
 /** Vážený průměr metriky přes zápasy jednoho okna (váha = důležitost zápasu). */
 function aggregateWindow(
   matches: MatchStat[],
@@ -40,7 +57,7 @@ function aggregateWindow(
   let weightSum = 0;
   let valueSum = 0;
   for (const m of matches) {
-    const raw = m.metrics[metric];
+    const raw = metricOf(m, metric);
     if (raw === undefined) continue; // např. chybějící xG
     const w = matchWeight(m, entityType);
     weightSum += w;

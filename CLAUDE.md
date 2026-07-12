@@ -111,13 +111,21 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   útoku a obrany, váhy 15/30/55) log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → nový **1.0125**,
   **50.4 %**, **ECE 0.012** (naivní konstanta 1.0770). Největší jednotlivý podíl mají **váhy**.
   `MODEL_VERSION = 3` (λ se změnila → dataset predikcí se počítá od verze 3).
-- **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem: log-loss **0.6920 vs. 0.6888** za
-  konstantu „54.7 % vždy" → model je **horší než hádat základní míru**. Kalibraci jsme zlepšili
-  (ECE 0.062 → 0.033 přes `totalSpread`), ale **skill tam není**. Zkoušeno a zamítnuto: ρ (hne s ním
-  o 0.0001 – sahá jen na 4 nejnižší skóre) i **bivariační Poisson** se společným šokem λ₃
-  (BTTS 0.6920 → 0.6915 = šum, a 1X2 se přitom zhorší 1.0125 → 1.0140). Není to problém tvaru
-  rozdělení: z gólových průměrů se „dá tým aspoň jeden gól" prostě předpovědět nedá. Další pokus
-  má smysl jen s **novým vstupem** (xG, střely na branku, sestavy). Pozor při nabízení BTTS tipů.
+- **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem. Poissonova mřížka ho měla **horší
+  než konstanta** „54.7 % vždy" (0.6920 vs. 0.6888) a přestřelený (ECE 0.033). Proto je BTTS
+  **jediný trh, který nepochází z mřížky**: `scoringProb` ho staví z **empirických frekvencí**
+  `SCORED` / `CLEAN_SHEET` (odvozené metriky, `metricOf` v `aggregate.ts` je dopočítá z gólů →
+  **0 API navíc, neukládají se, nejsou v `ALL_METRICS`** = v UI se nezobrazují, cache se nebumpuje).
+  Poisson jev „dá tým gól?" jen **odvozuje** z průměru (`P(≥1) = 1 − e^−λ`) a průměr zahodí, jak
+  byly góly rozdělené; frekvence tu informaci nesou. Výsledek: log-loss **0.6885**, ECE **0.019**
+  → BTTS už **neškodí a je kalibrované**, ale skill nemá (konstanta 0.6888; hold-out 2025: 0.6894
+  vs 0.6901). `scoringStrength = 0.15` = **týmovou frekvenci ber jen z 15 %** (naplno je log-loss
+  0.7188!) → přesně to říká, že signál tam prakticky není.
+  **Zkoušeno a zamítnuto:** ρ (hne s BTTS o 0.0001 – sahá jen na 4 nejnižší skóre) a **bivariační
+  Poisson** se společným šokem λ₃ (0.6920 → 0.6915 = šum, a 1X2 se zhorší 1.0125 → 1.0140).
+  Nezkoušej to znovu bez **nového vstupu** (xG, střely na branku, sestavy). **Pozor:** `reprice`
+  proto `bttsYes` **nepřepisuje** (nejde odvodit z uložených λ). A nabízet BTTS jako value tip
+  je sporné – trh bez edge dá jen šum.
   V/R/P, BTTS, Over 2.5 i **top-N nejpravděpodobnějších přesných skóre** (`topScores`) se
   počítají z téže opravené mřížky → vzájemně konzistentní (`topScores` je UI-only obohacení
   z živé mřížky, **neukládá se** do `PredictionRow`/`FixturePrediction`). Chybí-li gólová i xG
