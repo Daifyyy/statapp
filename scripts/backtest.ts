@@ -21,7 +21,8 @@ import { fetchLeagueSeasonFixtures, FINISHED_STATUSES } from "../lib/data/apiFoo
 import { fullTimeGoals } from "../lib/data/fixtures.ts";
 import { PREDICTION_LEAGUES } from "../lib/data/predictions.ts";
 import { backtest, NAIVE_PROBS, type HistoryMatch } from "../lib/picks/backtest.ts";
-import { PREDICT_PARAMS } from "../lib/stats/predict.ts";
+import { DEFAULT_TUNING, gridProbs, PREDICT_PARAMS } from "../lib/stats/predict.ts";
+import type { PredictionRow } from "../lib/types.ts";
 import { fitRho, fitSharpen } from "../lib/picks/fit.ts";
 import { computeReliability } from "../lib/picks/reliability.ts";
 import {
@@ -81,6 +82,28 @@ async function loadSeason(league: number, season: number): Promise<HistoryMatch[
 
 const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
 const naivePick: ProbPick = () => NAIVE_PROBS;
+const over25Hit = (r: PredictionRow) => r.homeGoals! + r.awayGoals! >= 3;
+const bttsHit = (r: PredictionRow) => r.homeGoals! > 0 && r.awayGoals! > 0;
+
+/** Log-loss + Brier binárního trhu (Přes 2.5 / oba skórují) nad odehranými řádky. */
+function binaryScore(
+  rows: PredictionRow[],
+  prob: (r: PredictionRow) => number,
+  hit: (r: PredictionRow) => boolean
+): { logloss: number; brier: number } {
+  let ll = 0;
+  let brier = 0;
+  let n = 0;
+  for (const r of rows) {
+    if (r.homeGoals == null || r.awayGoals == null) continue;
+    const p = prob(r);
+    const y = hit(r) ? 1 : 0;
+    ll += -Math.log(Math.max(y ? p : 1 - p, 1e-9));
+    brier += (p - y) ** 2;
+    n++;
+  }
+  return n ? { logloss: ll / n, brier: brier / n } : { logloss: 0, brier: 0 };
+}
 
 async function main() {
   // Baseline okno (sezóna − 1) musí být taky staženo, jinak nemá 1. kolo z čeho vyjít.
@@ -130,12 +153,63 @@ async function main() {
     return;
   }
 
-  // `--tune=k,s` = jednorázový běh s konkrétními parametry λ (bez nich produkční default).
+  // Grid útlumu SOUČTU λ (`--grid-total`): opravuje Over 2.5 / BTTS, 1X2 nechává být.
+  // Ukazuje všechny tři trhy najednou, aby bylo vidět, že se 1X2 nerozbíjí.
+  if (process.argv.includes("--grid-total")) {
+    console.log("\n=== Grid totalSpread (útlum rozptylu součtu λ) ===");
+    console.log("t      1X2 LL   O2.5 LL  O2.5 ECE  BTTS LL  BTTS ECE");
+    for (const t of [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]) {
+      const r = backtest(history, {
+        seasons,
+        minMatches,
+        tuning: { ...DEFAULT_TUNING, totalSpread: t },
+      }).filter((x) => x.available);
+      const rel = computeReliability(r);
+      const o = binaryScore(r, (x) => x.over25, (x) => x.homeGoals! + x.awayGoals! >= 3);
+      const b = binaryScore(r, (x) => x.bttsYes, (x) => x.homeGoals! > 0 && x.awayGoals! > 0);
+      console.log(
+        `${t.toFixed(2)}   ${scoreProbs(r, ourProbs).logloss.toFixed(4)}   ` +
+          `${o.logloss.toFixed(4)}   ${(rel.over25.ece ?? 0).toFixed(4)}    ` +
+          `${b.logloss.toFixed(4)}   ${(rel.btts.ece ?? 0).toFixed(4)}`
+      );
+    }
+    console.log("(vše nižší = lepší; t=1.00 je současný model)");
+    return;
+  }
+
+  // Grid Dixon–Coles ρ (`--grid-rho`): ρ řídí nízká skóre (0:0, 1:0, 0:1, 1:1) → nejvíc
+  // hýbe právě remízami a BTTS. Přepočítává se z uložených λ (jako `npm run reprice`),
+  // takže backtest běží jen jednou.
+  if (process.argv.includes("--grid-rho")) {
+    const base = backtest(history, { seasons, minMatches }).filter((r) => r.available);
+    console.log("\n=== Grid Dixon–Coles ρ (přepočet z λ) ===");
+    console.log("ρ        1X2 LL   O2.5 LL  BTTS LL  BTTS ECE");
+    for (const rho of [0.0, -0.03, -0.06, -0.1, -0.14, -0.18]) {
+      const rows = base.map((r) => {
+        const g = gridProbs(r.lambdaHome, r.lambdaAway, { rho, sharpen: 1 });
+        return { ...r, homeWin: g.homeWin, draw: g.draw, awayWin: g.awayWin, over25: g.over25, bttsYes: g.bttsYes };
+      });
+      const b = binaryScore(rows, (x) => x.bttsYes, bttsHit);
+      console.log(
+        `${rho.toFixed(2).padEnd(8)} ${scoreProbs(rows, ourProbs).logloss.toFixed(4)}   ` +
+          `${binaryScore(rows, (x) => x.over25, over25Hit).logloss.toFixed(4)}   ` +
+          `${b.logloss.toFixed(4)}   ${(computeReliability(rows).btts.ece ?? 0).toFixed(4)}`
+      );
+    }
+    console.log(`(dnes ρ=${PREDICT_PARAMS.rho}; konstanta BTTS = 0.6888)`);
+    return;
+  }
+
+  // `--tune=k,s[,t]` = jednorázový běh s konkrétními parametry λ (bez nich produkční default).
   const tuneArg = arg("tune");
   const tuning = tuneArg
-    ? { shrinkMatches: nums(tuneArg)[0], strength: nums(tuneArg)[1] }
+    ? {
+        shrinkMatches: nums(tuneArg)[0],
+        strength: nums(tuneArg)[1],
+        totalSpread: nums(tuneArg)[2] ?? DEFAULT_TUNING.totalSpread,
+      }
     : undefined;
-  if (tuning) console.log(`Ladění λ: shrinkMatches=${tuning.shrinkMatches}, strength=${tuning.strength}`);
+  if (tuning) console.log(`Ladění λ: ${JSON.stringify(tuning)}`);
 
   console.time("backtest");
   const rows = backtest(history, { seasons, minMatches, tuning });
@@ -151,6 +225,7 @@ async function main() {
     return;
   }
 
+  const settled = usable.filter((r) => r.homeGoals != null && r.awayGoals != null);
   const tr = computeTrackRecord(usable);
   const ours = scoreProbs(usable, ourProbs);
   const naive = scoreProbs(usable, naivePick);
@@ -170,6 +245,45 @@ async function main() {
       `Oba skórují ${tr.bttsAccuracy != null ? pct(tr.bttsAccuracy) : "—"}`
   );
 
+  // Binární trhy vs. ZÁKLADNÍ MÍRA (konstanta = jak často jev v datech nastal). U 1X2 je
+  // laťkou naivní rozdaj, tady základní míra – model, který ji nepřekoná, nepřidává nic.
+  console.log("\n=== Binární trhy vs. základní míra (log-loss, nižší = lepší) ===");
+  for (const [label, prob, hit] of [
+    ["Přes 2.5   ", (r: PredictionRow) => r.over25, over25Hit],
+    ["Oba skórují", (r: PredictionRow) => r.bttsYes, bttsHit],
+  ] as const) {
+    const rate = settled.filter(hit).length / settled.length;
+    const model = binaryScore(usable, prob, hit);
+    const base = binaryScore(usable, () => rate, hit);
+    const d = base.logloss - model.logloss;
+    console.log(
+      `${label}  model ${model.logloss.toFixed(4)}  |  konstanta ${pct(rate)} → ${base.logloss.toFixed(4)}  ` +
+        (d > 0.001
+          ? `→ ✅ model přidává ${d.toFixed(4)}`
+          : `→ ⚠ model NEPŘIDÁVÁ nic (rozdíl ${d.toFixed(4)})`)
+    );
+  }
+
+  // Úroveň gólů: sedí vůbec λ? (Systematické vychýlení součtu λ se přelije přímo do
+  // Over 2.5 a BTTS – dřív než se řeší tvar rozdělení, musí sedět jeho střed.)
+  const avg = (f: (r: (typeof settled)[number]) => number) =>
+    settled.reduce((a, r) => a + f(r), 0) / settled.length;
+  console.log("\n=== Úroveň gólů (λ vs. skutečnost) ===");
+  console.log(
+    `⌀ λ celkem:     ${avg((r) => r.lambdaHome + r.lambdaAway).toFixed(3)}  ` +
+      `| ⌀ skutečné góly: ${avg((r) => r.homeGoals! + r.awayGoals!).toFixed(3)}`
+  );
+  console.log(
+    `⌀ P(Přes 2.5):  ${pct(avg((r) => r.over25))}  ` +
+      `| skutečně přes 2.5: ${pct(avg((r) => (r.homeGoals! + r.awayGoals! >= 3 ? 1 : 0)))}`
+  );
+  console.log(
+    `⌀ P(oba skórují): ${pct(avg((r) => r.bttsYes))}  ` +
+      `| skutečně oba skórovali: ${pct(
+        avg((r) => (r.homeGoals! > 0 && r.awayGoals! > 0 ? 1 : 0))
+      )}`
+  );
+
   // Kalibrace: ECE (nižší = lepší). Tady se pozná „podsebevědomost na favoritech".
   const rel = computeReliability(usable);
   console.log("\n=== Kalibrace (ECE, nižší = lepší) ===");
@@ -184,17 +298,23 @@ async function main() {
         (ece != null && ece > 0.05 ? "  ⚠ znatelně mimo" : "")
     );
   }
-  // Kalibrační křivka 1X2 po koších: tady je vidět stlačení ke středu (podsebevědomost
-  // na favoritech = predikováno < skutečnost v horních koších).
-  console.log("\n1X2 po koších (predikováno → skutečnost):");
-  for (const b of rel.outcome.bins) {
-    if (b.count < 30 || b.avgPredicted == null || b.observed == null) continue;
-    const delta = b.observed - b.avgPredicted;
-    const mark = delta > 0.03 ? " ⬆ podstřeleno" : delta < -0.03 ? " ⬇ přestřeleno" : "";
-    console.log(
-      `  ${pct(b.lower).padStart(6)}–${pct(b.upper).padEnd(6)} ` +
-        `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
-    );
+  // Křivky po koších: tady je vidět TVAR chyby – vychýlení (celá křivka posunutá) vs.
+  // stlačení ke středu (nízké koše podstřelené, vysoké přestřelené = model si nevěří).
+  for (const [label, curve] of [
+    ["1X2", rel.outcome],
+    ["Přes 2.5", rel.over25],
+    ["Oba skórují", rel.btts],
+  ] as const) {
+    console.log(`\n${label} po koších (predikováno → skutečnost):`);
+    for (const b of curve.bins) {
+      if (b.count < 30 || b.avgPredicted == null || b.observed == null) continue;
+      const delta = b.observed - b.avgPredicted;
+      const mark = delta > 0.03 ? " ⬆ podstřeleno" : delta < -0.03 ? " ⬇ přestřeleno" : "";
+      console.log(
+        `  ${pct(b.lower).padStart(6)}–${pct(b.upper).padEnd(6)} ` +
+          `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
+      );
+    }
   }
 
   // Fit post-parametrů na TÉTO historii (ne na 62 zápasech z MS).

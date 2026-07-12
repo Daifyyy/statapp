@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Metric, MetricValue, TeamComparison, Venue } from "@/lib/types";
 import {
   predictMatch,
+  dampenTotal,
   drawTau,
   gridProbs,
   poissonVector,
@@ -85,12 +86,15 @@ describe("predictMatch", () => {
       summary: [],
     });
     const opponent = teamAt(AVERAGE_HOME, AVERAGE_AWAY);
-    const thin = predictMatch(strong(2), opponent).lambdaHome;
-    const solid = predictMatch(strong(30), opponent).lambdaHome;
-    // Stejná syrová čísla, jiný vzorek: z dvou zápasů model nevěří, z třiceti ano.
-    expect(thin).toBeLessThan(solid);
-    expect(thin).toBeLessThan(2.4);
-    expect(solid).toBeGreaterThan(2.6);
+    // Bez útlumu součtu (t=1), ať test měří jen shrinkage.
+    const lam = (sample: number) =>
+      predictMatch(strong(sample), opponent, {
+        tuning: { shrinkMatches: 6, strength: 1, totalSpread: 1 },
+      }).lambdaHome;
+    // Stejná syrová čísla (3.0 gólu doma), jiný vzorek: z dvou zápasů model nevěří, z třiceti ano.
+    expect(lam(2)).toBeLessThan(lam(30));
+    expect(lam(2)).toBeLessThan(2.4);
+    expect(lam(30)).toBeGreaterThan(2.6);
   });
 
   it("silný útok doma vs slabá obrana hosta → výrazně vyšší homeWin", () => {
@@ -267,13 +271,40 @@ describe("predictMatch – LAMBDA_SHARPEN no-op (default)", () => {
     const home = teamAt({ GOALS_FOR: 2.4, GOALS_AGAINST: 1.2 }, AVERAGE_AWAY);
     const away = teamAt(AVERAGE_HOME, { GOALS_FOR: 1.2, GOALS_AGAINST: 1.8 });
     const p = predictMatch(home, away, {
-      tuning: { shrinkMatches: 0, strength: 1 },
+      // Bez útlumu součtu (t=1), ať je vidět holý vzorec λ.
+      tuning: { shrinkMatches: 0, strength: 1, totalSpread: 1 },
     });
     expect(p.lambdaHome).toBeCloseTo(1.5 * (2.4 / 1.5) * (1.8 / 1.5), 6);
     // Hosté průměrní proti průměrné domácí obraně → λ = ligové měřítko hostů.
     expect(p.lambdaAway).toBeCloseTo(1.2, 6);
     // Zostření je no-op → zobrazená λ = základní λ.
     expect(p.lambdaHomeBase).toBeCloseTo(p.lambdaHome, 10);
+  });
+});
+
+describe("dampenTotal (útlum rozptylu součtu λ)", () => {
+  const baseline = { home: 1.5, away: 1.2 }; // ref = 2.7 gólu na zápas
+
+  it("t = 1 → no-op", () => {
+    expect(dampenTotal(2.0, 1.4, baseline, 1)).toEqual([2.0, 1.4]);
+  });
+
+  it("drží ROZDÍL λ a stlačuje jen součet → 1X2 se nemění, Over 2.5 ano", () => {
+    const [h, a] = dampenTotal(2.4, 1.4, baseline, 0.5); // součet 3.8, ref 2.7
+    expect(h - a).toBeCloseTo(2.4 - 1.4, 10); // rozdíl beze změny
+    expect(h + a).toBeCloseTo(2.7 + (3.8 - 2.7) * 0.5, 10); // součet stažený k lize
+  });
+
+  it("gólově chudý zápas se naopak přitáhne NAHORU k ligovému průměru", () => {
+    const [h, a] = dampenTotal(1.0, 0.8, baseline, 0.5); // součet 1.8 < ref
+    expect(h + a).toBeGreaterThan(1.8);
+    expect(h + a).toBeCloseTo(2.7 + (1.8 - 2.7) * 0.5, 10);
+  });
+
+  it("zápas přesně na ligovém průměru se nehne", () => {
+    const [h, a] = dampenTotal(1.5, 1.2, baseline, 0.5);
+    expect(h).toBeCloseTo(1.5, 10);
+    expect(a).toBeCloseTo(1.2, 10);
   });
 });
 

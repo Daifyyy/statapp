@@ -101,10 +101,23 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   15/30/55): metriky v UI mají popisovat *formu*, λ má *odhadovat góly* a pět zápasů je z valné
   části šum. Proto `compareTeams` počítá tři metriky za λ (`PREDICTION_METRICS`) znovu s jinými
   vahami; UI/insights/souhrny běží beze změny na zobrazovacích hodnotách.
+  **Útlum rozptylu součtu λ** (`totalSpread = 0.5`, `dampenTotal`): 1X2 stojí na **rozdílu** λ
+  (kdo je lepší) a je kalibrované; Over 2.5 / BTTS stojí na **součtu** λ (kolik gólů padne) a ten
+  měl moc velký rozptyl – chyby útoku a obrany se v rozdílu ruší, ale v součtu sčítají. `dampenTotal`
+  proto stlačí součet k ligovému průměru a **drží rozdíl** (přesný protějšek `sharpenLambdas`)
+  → 1X2 se nedotkne. Over 2.5: ECE **0.054 → 0.014**, log-loss 0.6919 → **0.6817** (základní míra
+  0.6911) – **teprve teď Over 2.5 vůbec něco přidává**, předtím byl horší než konstanta.
   **Změřeno backtestem** (3 511 klubových zápasů, hold-out 2025): starý model (aritmetický průměr
-  útoku a obrany, váhy 15/30/55) log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → nový **1.0127**,
-  **50.4 %**, **ECE 0.010** (naivní konstanta 1.0770). Největší jednotlivý podíl mají **váhy**.
-  `MODEL_VERSION = 2` (λ se změnila → dataset predikcí se počítá od verze 2).
+  útoku a obrany, váhy 15/30/55) log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → nový **1.0125**,
+  **50.4 %**, **ECE 0.012** (naivní konstanta 1.0770). Největší jednotlivý podíl mají **váhy**.
+  `MODEL_VERSION = 3` (λ se změnila → dataset predikcí se počítá od verze 3).
+- **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem: log-loss **0.6920 vs. 0.6888** za
+  konstantu „54.7 % vždy" → model je **horší než hádat základní míru**. Kalibraci jsme zlepšili
+  (ECE 0.062 → 0.033 přes `totalSpread`), ale **skill tam není**. Zkoušeno a zamítnuto: ρ (hne s ním
+  o 0.0001 – sahá jen na 4 nejnižší skóre) i **bivariační Poisson** se společným šokem λ₃
+  (BTTS 0.6920 → 0.6915 = šum, a 1X2 se přitom zhorší 1.0125 → 1.0140). Není to problém tvaru
+  rozdělení: z gólových průměrů se „dá tým aspoň jeden gól" prostě předpovědět nedá. Další pokus
+  má smysl jen s **novým vstupem** (xG, střely na branku, sestavy). Pozor při nabízení BTTS tipů.
   V/R/P, BTTS, Over 2.5 i **top-N nejpravděpodobnějších přesných skóre** (`topScores`) se
   počítají z téže opravené mřížky → vzájemně konzistentní (`topScores` je UI-only obohacení
   z živé mřížky, **neukládá se** do `PredictionRow`/`FixturePrediction`). Chybí-li gólová i xG

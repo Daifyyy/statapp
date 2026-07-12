@@ -40,15 +40,26 @@ export const DEFAULT_BASELINE: LeagueBaseline = { home: 1.5, away: 1.2 };
  *   „síla útoku" není opponent-adjusted (kdo hrál se dnem tabulky, vypadá silně) a součin
  *   dvou zašuměných poměrů násobí i jejich chyby → bez útlumu model vyrábí extrémní λ,
  *   která realita neustojí. `s = 0` = všichni průměrní.
+ * - `totalSpread` – stlačení **součtu** λ (= očekávaných gólů zápasu) k ligovému průměru
+ *   se zachováním rozdílu: `S' = ref + (S − ref) × t`. Backtest ukázal, že rozdíl λ (kdo je
+ *   lepší → 1X2) je kalibrovaný, ale součet (kolik padne gólů → Over 2.5, BTTS) má **moc
+ *   velký rozptyl**: model řekl 26 % na Přes 2.5 a padlo to ve 44 %, řekl 83 % a padlo 72 %.
+ *   Chyby útoku a obrany se v rozdílu ruší, v součtu sčítají – proto potřebuje součet vlastní
+ *   útlum. `t = 1` = beze změny. Je to přesný protějšek `sharpenLambdas` (ta škáluje rozdíl
+ *   a drží součet); tahle škáluje součet a drží rozdíl → **1X2 se skoro nedotkne**.
  */
 export interface PredictTuning {
   shrinkMatches: number;
   strength: number;
+  totalSpread: number;
 }
 
 export const DEFAULT_TUNING: PredictTuning = {
   shrinkMatches: 6,
   strength: 1,
+  // 0.5 = rozptyl očekávaných gólů půlíme. Grid v `npm run backtest`: ECE u Přes 2.5
+  // 0.054 → 0.014, log-loss 0.6919 → 0.6817, 1X2 beze změny (1.0127 → 1.0125).
+  totalSpread: 0.5,
 };
 
 /** Volby predikce: ligové měřítko + ladicí parametry λ (obojí volitelné). */
@@ -83,6 +94,17 @@ const DC_RHO = -0.03;
  * ~150–300 settlnutých, fitni přes `npm run calibrate`). Viz `sharpenLambdas`.
  */
 const LAMBDA_SHARPEN = 1.0;
+
+/**
+ * **Zkoušeno a zamítnuto: bivariační Poisson (společný šok λ₃).** Nezávislý Poisson
+ * předpokládá, že góly obou týmů spolu nesouvisí; λ₃ přidává kladnou korelaci a měl
+ * narovnat „oba skórují". Backtest (3 511 zápasů): BTTS log-loss 0.6920 → 0.6915 (šum),
+ * a 1X2 se přitom zhoršilo (1.0125 → 1.0140). **BTTS nemá v našem modelu signál vůbec** –
+ * i po opravě kalibrace je horší než konstanta „54.7 % vždy" (0.6920 vs 0.6888), a ρ s tím
+ * taky nehne (ρ sahá jen na čtyři nejnižší skóre). Není to problém tvaru rozdělení, ale
+ * toho, že z gólových průměrů se „kdo dá aspoň jeden" prostě dobře předpovídat nedá.
+ * Nezkoušej to znovu bez nového vstupu (xG, střely na branku, sestavy).
+ */
 
 /**
  * **Post-processingové parametry mřížky** – aplikují se až NA λ, samotné λ negenerují.
@@ -194,6 +216,27 @@ export function sharpenLambdas(
 }
 
 /**
+ * Stlačí **součet** λ k ligovému průměru (`S' = ref + (S − ref) × t`) a **drží rozdíl**
+ * λ. Přesný protějšek `sharpenLambdas`. `t = 1` = no-op. Exportováno pro testy a grid
+ * v `npm run backtest`.
+ */
+export function dampenTotal(
+  lambdaHome: number,
+  lambdaAway: number,
+  baseline: LeagueBaseline,
+  t: number
+): [number, number] {
+  if (t === 1) return [lambdaHome, lambdaAway];
+  const ref = baseline.home + baseline.away;
+  const sum = ref + (lambdaHome + lambdaAway - ref) * t;
+  const diff = lambdaHome - lambdaAway;
+  return [
+    clamp((sum + diff) / 2, MIN_LAMBDA, MAX_LAMBDA),
+    clamp((sum - diff) / 2, MIN_LAMBDA, MAX_LAMBDA),
+  ];
+}
+
+/**
  * Predikce zápasu z očekávaných gólů obou týmů (Poisson s Dixon–Coles korekcí
  * nízkých skóre). Domácí útok × hostující obrana (a naopak), venue-specific
  * s fallbackem na TOTAL. Vše z výstupu `compareTeams` – žádná nová data, čistá funkce.
@@ -205,9 +248,16 @@ export function predictMatch(
 ): MatchPrediction {
   const baseline = opts.baseline ?? DEFAULT_BASELINE;
   const tuning = opts.tuning ?? DEFAULT_TUNING;
-  const lambdaHome = expectedGoals(home, away, true, baseline, tuning);
-  const lambdaAway = expectedGoals(away, home, false, baseline, tuning);
+  const rawHome = expectedGoals(home, away, true, baseline, tuning);
+  const rawAway = expectedGoals(away, home, false, baseline, tuning);
   const readiness = computeReadiness(home, away);
+
+  // Útlum rozptylu SOUČTU λ (kolik gólů zápas nabídne) k ligovému průměru; rozdíl λ
+  // (kdo je lepší) zůstává → 1X2 beze změny, opraví se jen Over 2.5 / BTTS.
+  const [lambdaHome, lambdaAway] =
+    rawHome != null && rawAway != null
+      ? dampenTotal(rawHome, rawAway, baseline, tuning.totalSpread)
+      : [rawHome, rawAway];
 
   // Bez gólových i xG dat na některé straně nelze predikovat – nevydávej
   // falešnou 50/50, ale označ predikci jako nedostupnou (UI ji nahradí hláškou).
