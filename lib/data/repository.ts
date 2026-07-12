@@ -14,6 +14,7 @@ import type {
   Team,
   Transfer,
 } from "@/lib/types";
+import type { LeagueBaseline } from "@/lib/stats/predict";
 import { isRealDataConfigured } from "@/lib/db";
 import { generateLeague } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
@@ -225,6 +226,17 @@ export async function getStanding(
 
 function mockLeagueGoalsAvg(): LeagueGoalsAvg {
   return { goalsFor: 1.35, goalsAgainst: 1.35 };
+}
+
+/**
+ * Ligové měřítko pro λ (⌀ góly domácích/hostů). Real = z cachované tabulky (0 API navíc);
+ * mock/reprezentace/mezisezóna → `null` = predikce sáhne po typickém defaultu.
+ */
+export async function getLeagueBaseline(
+  leagueId: number
+): Promise<LeagueBaseline | null> {
+  if (useReal) return real.getLeagueBaseline(leagueId);
+  return null;
 }
 
 /**

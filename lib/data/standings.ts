@@ -6,6 +6,7 @@ import type {
   StandingSplit,
 } from "@/lib/types";
 import type { EuropeSpot, LeagueAccess } from "@/lib/game/types";
+import type { LeagueBaseline } from "@/lib/stats/predict";
 import type { ApiStandingRow } from "./apiFootball";
 
 /**
@@ -147,6 +148,25 @@ export function normalizeLeagueTable(raw: ApiStandingRow[]): LeagueTableRow[] {
       };
     })
     .sort((a, b) => a.rank - b.rank);
+}
+
+/**
+ * Ligové měřítko pro λ: kolik gólů dá v této lize **průměrný domácí / hostující tým**
+ * za zápas. Bere se z home/away splitů tabulky (přesně, ne odhadem z celkového průměru).
+ * Predikce jím normalizuje síly týmů – viz `expectedGoals`. Z už cachované tabulky → 0 API.
+ */
+export function computeLeagueBaseline(
+  standings: ApiStandingRow[]
+): LeagueBaseline | null {
+  const homePlayed = standings.reduce((s, r) => s + (r.home?.played ?? 0), 0);
+  const awayPlayed = standings.reduce((s, r) => s + (r.away?.played ?? 0), 0);
+  if (homePlayed < 20 || awayPlayed < 20) return null; // rozjezd sezóny → radši default
+  return {
+    home:
+      standings.reduce((s, r) => s + (r.home?.goals?.for ?? 0), 0) / homePlayed,
+    away:
+      standings.reduce((s, r) => s + (r.away?.goals?.for ?? 0), 0) / awayPlayed,
+  };
 }
 
 /** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */

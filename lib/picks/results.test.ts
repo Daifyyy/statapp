@@ -30,6 +30,8 @@ function row(
     over25: 0.5,
     lowConfidence: false,
     modelVersion: 1,
+    rho: -0.13,
+    sharpen: 1,
     status: "FT",
     benchAvailable: false,
     benchHomeWin: null,
@@ -90,6 +92,15 @@ describe("summarizeSettled", () => {
     expect(out[0].outcomeHit).toBe(true);
     expect(out[0].homeCompareLeagueId).toBeNull();
     expect(out[0].awayCompareLeagueId).toBeNull();
+  });
+
+  it("AET/PEN → afterExtraTime (uložené skóre je stav po 90 min)", () => {
+    const out = summarizeSettled([
+      row({ status: "AET", homeWin: 0.6, draw: 0.2, awayWin: 0.2, homeGoals: 1, awayGoals: 1 }),
+      row({ fixtureId: 2, homeWin: 0.6, draw: 0.2, awayWin: 0.2, homeGoals: 1, awayGoals: 0 }),
+    ]);
+    expect(out.find((r) => r.fixtureId === 1)?.afterExtraTime).toBe(true);
+    expect(out.find((r) => r.fixtureId === 2)?.afterExtraTime).toBe(false);
   });
 
   it("řadí nejnovější první", () => {

@@ -130,10 +130,22 @@ const fixtureItemSchema = z.object({
     home: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
     away: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
   }),
+  // `goals` je KONCOVÉ skóre – u AET/PEN tedy včetně prodloužení. Náš model predikuje
+  // 90 minut, proto settle/kalibrace berou `score.fulltime` (viz `fullTimeGoals`).
   goals: z.object({
     home: z.number().nullable(),
     away: z.number().nullable(),
   }),
+  score: z
+    .object({
+      fulltime: z
+        .object({
+          home: z.number().nullable().optional(),
+          away: z.number().nullable().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 const statItemSchema = z.object({
@@ -310,6 +322,15 @@ export function fetchTeamFixtures(
     { team, league, season },
     z.array(fixtureItemSchema)
   );
+}
+
+/**
+ * VŠECHNY zápasy ligy a sezóny – **1 volání na ligu+sezónu** (levné). Nese skóre, takže
+ * z toho jde postavit historii pro offline backtest (`lib/picks/backtest.ts`) bez
+ * per-zápasových statistik (ty stojí 1 volání za zápas → pro tisíce zápasů neúnosné).
+ */
+export function fetchLeagueSeasonFixtures(league: number, season: number) {
+  return apiGet("/fixtures", { league, season }, z.array(fixtureItemSchema));
 }
 
 /** Posledních N zápasů týmu (napříč soutěžemi) – pro formu. */

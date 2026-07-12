@@ -1,5 +1,11 @@
-import type { MatchPrediction, ScoreProbability, TeamComparison } from "@/lib/types";
-import { lowConfidenceOf, valueOrTotal } from "./metricLookup";
+import type {
+  MatchPrediction,
+  Metric,
+  MetricValue,
+  ScoreProbability,
+  Venue,
+} from "@/lib/types";
+import { lowConfidenceOf, sampleOrTotal, valueOf } from "./metricLookup";
 import { computeReadiness } from "./readiness";
 
 const MAX_GOALS = 10; // mřížka Poissonu (0..10 pro každý tým)
@@ -8,12 +14,65 @@ const MAX_LAMBDA = 5;
 const TOP_SCORES = 5; // kolik nejpravděpodobnějších přesných skóre vydat
 
 /**
+ * Ligové měřítko, vůči kterému se normalizují síly týmů: **kolik gólů v této lize dá
+ * průměrný domácí / hostující tým za zápas**. Drží obojí, protože domácí výhoda sedí právě
+ * v rozdílu těch dvou čísel – λ ji tak nemusí přidávat zvlášť (a nezdvojí ji).
+ */
+export interface LeagueBaseline {
+  home: number;
+  away: number;
+}
+
+/**
+ * Fallback, když ligový průměr neznáme (typický top-5: ⌀ 1.5 gólu domácí, 1.2 hosté).
+ * Reálnou hodnotu předává volající – v produkci z už cachované tabulky (`computeLeagueGoalsAvg`,
+ * 0 API navíc), v `npm run backtest` spočítaná z předchozí sezóny.
+ */
+export const DEFAULT_BASELINE: LeagueBaseline = { home: 1.5, away: 1.2 };
+
+/**
+ * Ladicí parametry odhadu λ (fitují se `npm run backtest`, ne od stolu).
+ *
+ * - `shrinkMatches` – kolik „zápasů ligového průměru" se přimíchá do každého vstupu.
+ *   Vyšší = opatrnější model (víc liga, míň krátká série).
+ * - `strength` – exponent síly: `λ = ref × (útok/ref)^s × (obrana/ref)^s`. `s = 1` bere
+ *   poměry naplno, `s < 1` je stahuje k lize **na log škále**. Je to nutná pojistka: naše
+ *   „síla útoku" není opponent-adjusted (kdo hrál se dnem tabulky, vypadá silně) a součin
+ *   dvou zašuměných poměrů násobí i jejich chyby → bez útlumu model vyrábí extrémní λ,
+ *   která realita neustojí. `s = 0` = všichni průměrní.
+ */
+export interface PredictTuning {
+  shrinkMatches: number;
+  strength: number;
+}
+
+export const DEFAULT_TUNING: PredictTuning = {
+  shrinkMatches: 6,
+  strength: 1,
+};
+
+/** Volby predikce: ligové měřítko + ladicí parametry λ (obojí volitelné). */
+export interface PredictOptions {
+  baseline?: LeagueBaseline;
+  tuning?: PredictTuning;
+}
+
+/**
+ * Vstup predikce = jen spočítané hodnoty metrik. Záměrně NE celý `TeamComparison`:
+ * λ se počítá z **vlastních** hodnot (jiné vážení oken, `PREDICTION_WINDOW_WEIGHTS`)
+ * než jaké jdou do UI – viz `compareTeams`.
+ */
+export interface PredictInput {
+  values: MetricValue[];
+}
+
+/**
  * Dixon–Coles parametr závislosti ρ. Nezávislý Poisson podhodnocuje nízkoskórové
  * remízy (0:0, 1:1), protože ignoruje korelaci gólů obou týmů. ρ < 0 ji opravuje
  * (víc remíz 0:0/1:1, míň těsných výher 1:0/0:1); ρ = 0 = čistý Poisson.
  * −0.13 je publikovaný odhad pro fotbal (Dixon & Coles 1997) – dolaď backtestem.
  */
-const DC_RHO = -0.13;
+const DC_RHO = -0.03;
 
 /**
  * Zostření rozdílu λ (oprava „podsebevědomosti na favoritech"). Reliability ukazuje, že
@@ -21,9 +80,99 @@ const DC_RHO = -0.13;
  * a outsidera je moc malý. `s > 1` zostří **jen rozdíl** D = λ_home − λ_away, zatímco
  * **součet** S = λ_home + λ_away (= celkové góly) drží → narovná 1X2, ale Over 2.5 nechá být
  * a celá mřížka zůstane konzistentní. `s = 1` je přesný no-op (zatím nekalibrováno; až bude
- * ~150–300 settlnutých, fitni přes `npm run calibrate` a bumpni MODEL_VERSION). Viz `sharpenLambdas`.
+ * ~150–300 settlnutých, fitni přes `npm run calibrate`). Viz `sharpenLambdas`.
  */
 const LAMBDA_SHARPEN = 1.0;
+
+/**
+ * **Post-processingové parametry mřížky** – aplikují se až NA λ, samotné λ negenerují.
+ *
+ * Proto **nepatří pod `MODEL_VERSION`**: uložený řádek predikce nese základní λ, takže
+ * změna ρ/zostření se dá na historii přepočítat čistou matematikou bez jediného API volání
+ * (`npm run reprice`) – žádný reset datasetu. `MODEL_VERSION` (`lib/data/predictions.ts`)
+ * verzuje jen to, co λ *vyrábí* (okna, váhy, xG zpevnění, build týmů) – tam přepočet nestačí,
+ * protože bys musel znovu stáhnout a přepočítat vstupy.
+ *
+ * Uloženo per řádek (`PredictionRow.rho`/`.sharpen`) → víme, čím byly uložené
+ * pravděpodobnosti spočítané, a co je vůči aktuálním konstantám zastaralé.
+ */
+export interface PredictParams {
+  rho: number;
+  sharpen: number;
+}
+
+export const PREDICT_PARAMS: PredictParams = {
+  rho: DC_RHO,
+  sharpen: LAMBDA_SHARPEN,
+};
+
+/** Pravděpodobnosti odvozené z jedné mřížky skóre (vzájemně konzistentní). */
+export interface GridProbs {
+  /** λ po zostření – souhlasí s mřížkou (při `sharpen = 1` shodné se základními). */
+  lambdaHome: number;
+  lambdaAway: number;
+  homeWin: number;
+  draw: number;
+  awayWin: number;
+  bttsYes: number;
+  over25: number;
+  topScores: ScoreProbability[];
+}
+
+/**
+ * Jádro predikce: ze **základních** λ (před zostřením) postaví Poissonovu mřížku s
+ * Dixon–Coles korekcí a vydá z ní všechny agregáty. Čistá funkce parametrizovaná
+ * `PredictParams` → tutéž mřížku umí přepočítat `predictMatch` (živě) i `reprice`
+ * (nad uloženými λ po změně konstant).
+ */
+export function gridProbs(
+  baseHome: number,
+  baseAway: number,
+  params: PredictParams = PREDICT_PARAMS
+): GridProbs {
+  const [lh, la] = sharpenLambdas(baseHome, baseAway, params.sharpen);
+  const ph = poissonVector(lh);
+  const pa = poissonVector(la);
+
+  // Jediná smyčka přes mřížku skóre: na nízká skóre se aplikuje Dixon–Coles korekce
+  // a všechny agregáty (V/R/P, Over 2.5, BTTS) se počítají z téže opravené mřížky.
+  let homeWin = 0;
+  let draw = 0;
+  let awayWin = 0;
+  let over25 = 0;
+  let bttsYes = 0;
+  let total = 0;
+  const scores: ScoreProbability[] = [];
+  for (let i = 0; i <= MAX_GOALS; i++) {
+    for (let j = 0; j <= MAX_GOALS; j++) {
+      const p = ph[i] * pa[j] * drawTau(i, j, lh, la, params.rho);
+      total += p;
+      if (i > j) homeWin += p;
+      else if (i === j) draw += p;
+      else awayWin += p;
+      if (i + j >= 3) over25 += p;
+      if (i >= 1 && j >= 1) bttsYes += p;
+      scores.push({ home: i, away: j, prob: p });
+    }
+  }
+  // Re-normalizace (uťatá mřížka + korekce nezachová přesně 1).
+  const norm = total || 1;
+  const topScores = scores
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, TOP_SCORES)
+    .map((s) => ({ home: s.home, away: s.away, prob: s.prob / norm }));
+
+  return {
+    lambdaHome: lh,
+    lambdaAway: la,
+    homeWin: homeWin / norm,
+    draw: draw / norm,
+    awayWin: awayWin / norm,
+    bttsYes: bttsYes / norm,
+    over25: over25 / norm,
+    topScores,
+  };
+}
 
 /**
  * Zostří nerovnováhu očekávaných gólů parametrem `s` se zachováním součtu (celkových
@@ -50,11 +199,14 @@ export function sharpenLambdas(
  * s fallbackem na TOTAL. Vše z výstupu `compareTeams` – žádná nová data, čistá funkce.
  */
 export function predictMatch(
-  home: TeamComparison,
-  away: TeamComparison
+  home: PredictInput,
+  away: PredictInput,
+  opts: PredictOptions = {}
 ): MatchPrediction {
-  const lambdaHome = expectedGoals(home, away, true);
-  const lambdaAway = expectedGoals(away, home, false);
+  const baseline = opts.baseline ?? DEFAULT_BASELINE;
+  const tuning = opts.tuning ?? DEFAULT_TUNING;
+  const lambdaHome = expectedGoals(home, away, true, baseline, tuning);
+  const lambdaAway = expectedGoals(away, home, false, baseline, tuning);
   const readiness = computeReadiness(home, away);
 
   // Bez gólových i xG dat na některé straně nelze predikovat – nevydávej
@@ -64,6 +216,8 @@ export function predictMatch(
       available: false,
       lambdaHome: lambdaHome ?? 0,
       lambdaAway: lambdaAway ?? 0,
+      lambdaHomeBase: lambdaHome ?? 0,
+      lambdaAwayBase: lambdaAway ?? 0,
       homeWin: 0,
       draw: 0,
       awayWin: 0,
@@ -75,47 +229,7 @@ export function predictMatch(
     };
   }
 
-  // Zostření nerovnováhy λ (no-op při LAMBDA_SHARPEN=1) – mřížka i reportované
-  // očekávané skóre pak vychází ze zostřených λ, aby seděly s pravděpodobnostmi.
-  const [lh, la] = sharpenLambdas(lambdaHome, lambdaAway);
-  const ph = poissonVector(lh);
-  const pa = poissonVector(la);
-
-  // Jediná smyčka přes mřížku skóre: na nízká skóre se aplikuje Dixon–Coles
-  // korekce a všechny agregáty (V/R/P, Over 2.5, BTTS) se počítají z téže
-  // opravené mřížky → vzájemně konzistentní.
-  let homeWin = 0;
-  let draw = 0;
-  let awayWin = 0;
-  let over25 = 0;
-  let bttsYes = 0;
-  let total = 0;
-  const scores: ScoreProbability[] = [];
-  for (let i = 0; i <= MAX_GOALS; i++) {
-    for (let j = 0; j <= MAX_GOALS; j++) {
-      const p = ph[i] * pa[j] * drawTau(i, j, lh, la);
-      total += p;
-      if (i > j) homeWin += p;
-      else if (i === j) draw += p;
-      else awayWin += p;
-      if (i + j >= 3) over25 += p;
-      if (i >= 1 && j >= 1) bttsYes += p;
-      scores.push({ home: i, away: j, prob: p });
-    }
-  }
-  // Re-normalizace (uťatá mřížka + korekce nezachová přesně 1).
-  const norm = total || 1;
-  homeWin /= norm;
-  draw /= norm;
-  awayWin /= norm;
-  over25 /= norm;
-  bttsYes /= norm;
-
-  // Nejpravděpodobnější přesná skóre z téže opravené mřížky (normalizovaná).
-  const topScores = scores
-    .sort((a, b) => b.prob - a.prob)
-    .slice(0, TOP_SCORES)
-    .map((s) => ({ home: s.home, away: s.away, prob: s.prob / norm }));
+  const g = gridProbs(lambdaHome, lambdaAway);
 
   const lowConfidence =
     lowConfidenceOf(home.values, "GOALS_FOR", "HOME") ||
@@ -123,48 +237,110 @@ export function predictMatch(
 
   return {
     available: true,
-    lambdaHome: lh,
-    lambdaAway: la,
-    homeWin,
-    draw,
-    awayWin,
-    bttsYes,
-    over25,
-    topScores,
+    // Zobrazovaná λ jsou zostřená (souhlasí s mřížkou), ukládají se ale `*Base` –
+    // z nich jde predikci přepočítat při změně ρ/zostření (viz `PredictParams`).
+    lambdaHome: g.lambdaHome,
+    lambdaAway: g.lambdaAway,
+    lambdaHomeBase: lambdaHome,
+    lambdaAwayBase: lambdaAway,
+    homeWin: g.homeWin,
+    draw: g.draw,
+    awayWin: g.awayWin,
+    bttsYes: g.bttsYes,
+    over25: g.over25,
+    topScores: g.topScores,
     lowConfidence,
     readiness,
   };
 }
 
 /**
- * Očekávané góly týmu: průměr jeho útoku a soupeřovy obrany ve správné variantě.
- * Je-li u obou k dispozici xG, zprůměruje se gólový odhad s xG odhadem (zpevnění).
+ * Očekávané góly týmu **multiplikativně vůči ligovému měřítku** (Maher / Dixon–Coles):
+ *
+ *     λ = ref × (útok týmu / ref) × (obdržené soupeře / ref)
+ *
+ * kde `ref` je ligový průměr **té samé veličiny** (góly domácích, resp. hostů). Pro průměrný
+ * pár týmů vyjde λ = ref, což je přesně, co má.
+ *
+ * **Proč ne prostý průměr útoku a obrany** (což dělala 1. verze): aritmetický průměr nikdy
+ * nepřekročí krajní hodnoty, takže dvojici „silný útok vs děravá obrana" systematicky
+ * podstřelí a „silný útok vs elitní obrana" nadstřelí → λ stlačená ke středu. Součin tuhle
+ * interakci vyjádřit umí.
+ *
+ * **Shrinkage** (`SHRINK_MATCHES`): syrový průměr z pěti zápasů je z velké části šum – LAST5
+ * nese 55 % váhy okna, takže krátká série vystřelí λ. Každý vstup se proto stáhne k ligovému
+ * průměru úměrně velikosti vzorku: `(n·hodnota + k·ref) / (n + k)`. Malý vzorek → skoro liga,
+ * velký vzorek → skoro vlastní čísla. Tím zmizí přesebevědomé extrémy (backtest je ukázal
+ * na favoritech: predikce 64 % → realita 57 %).
  */
 function expectedGoals(
-  team: TeamComparison,
-  opponent: TeamComparison,
-  isHome: boolean
+  team: PredictInput,
+  opponent: PredictInput,
+  isHome: boolean,
+  baseline: LeagueBaseline,
+  tuning: PredictTuning
 ): number | null {
   const attackVenue = isHome ? "HOME" : "AWAY";
   const defenseVenue = isHome ? "AWAY" : "HOME";
 
-  const attack = valueOrTotal(team.values, "GOALS_FOR", attackVenue);
-  const defense = valueOrTotal(opponent.values, "GOALS_AGAINST", defenseVenue);
-  const goalsEstimate = mean([attack, defense]);
+  // Referenční hladina: góly, které v této lize dává strana v daném prostředí. Útok domácích
+  // i obrana hostů se poměřují TÝMŽ číslem (co jedni dají, druzí dostanou) → λ nezdvojí
+  // domácí výhodu. Chybí-li venue rozpad (neutrální reprezentace → fallback na TOTAL),
+  // referencí je celkový průměr na tým a zápas.
+  const venueRef = isHome ? baseline.home : baseline.away;
+  const totalRef = (baseline.home + baseline.away) / 2;
+  const ratio = (metric: Metric, values: MetricValue[], venue: Venue) =>
+    strengthRatio(values, metric, venue, venueRef, totalRef, tuning);
 
-  const xgAttack = valueOrTotal(team.values, "XG", attackVenue);
-  const xgEstimate =
-    xgAttack != null ? mean([xgAttack, defense]) : null;
+  // λ = referenční hladina × síla útoku × slabost obrany soupeře (obojí jako poměr k lize).
+  const attack = ratio("GOALS_FOR", team.values, attackVenue);
+  const xg = ratio("XG", team.values, attackVenue); // xG jako druhý odhad útoku (zpevnění)
+  const defense = ratio("GOALS_AGAINST", opponent.values, defenseVenue);
 
-  // Žádný gólový ani xG podklad → nelze odhadnout (vrať null).
-  if (goalsEstimate == null && xgEstimate == null) return null;
+  // Nevíme nic ani o útoku, ani o obraně soupeře → predikci nevydáme (UI: „nedostatek dat").
+  // Chybí-li jen jedna strana, bere se za ni ligový průměr (poměr 1) – lepší než nic.
+  const attackSide = attack ?? xg;
+  if (attackSide == null && defense == null) return null;
 
-  const lambda =
-    xgEstimate != null && goalsEstimate != null
-      ? (goalsEstimate + xgEstimate) / 2
-      : (goalsEstimate ?? xgEstimate)!;
+  // Referenční hladina musí odpovídat tomu, ODKUD data přišla: venue rozpad → měřítko
+  // domácích/hostů (nese domácí výhodu), fallback na TOTAL → celkový průměr. Jinak by
+  // venue-neutrální reprezentační zápas (jen TOTAL) dostal domácí výhodu, kterou nemá,
+  // a prohození týmů by nedalo zrcadlovou predikci.
+  const ref = attackSide?.ref ?? defense!.ref;
+  const attackRatio =
+    attack != null && xg != null
+      ? (attack.ratio + xg.ratio) / 2
+      : (attackSide?.ratio ?? 1);
 
-  return clamp(lambda, MIN_LAMBDA, MAX_LAMBDA);
+  return clamp(ref * attackRatio * (defense?.ratio ?? 1), MIN_LAMBDA, MAX_LAMBDA);
+}
+
+/**
+ * Síla týmu v metrice jako **poměr k ligovému průměru** (1.0 = průměrný tým), se dvěma
+ * pojistkami proti šumu: shrinkage podle velikosti vzorku (malý vzorek → skoro liga)
+ * a exponent `strength` (stáhne poměr k 1 na log škále).
+ *
+ * Vrací i `ref`, vůči kterému se poměřovalo: venue varianta → venue průměr, fallback na
+ * TOTAL → celkový průměr. Volající z něj skládá λ, takže neutrální reprezentace zůstanou
+ * bez domácí výhody.
+ */
+function strengthRatio(
+  values: MetricValue[],
+  metric: Metric,
+  venue: Venue,
+  venueRef: number,
+  totalRef: number,
+  tuning: PredictTuning
+): { ratio: number; ref: number } | null {
+  const atVenue = valueOf(values, metric, venue);
+  const ref = atVenue != null ? venueRef : totalRef;
+  const raw = atVenue ?? valueOf(values, metric, "TOTAL");
+  if (raw == null || ref <= 0) return null;
+
+  const n = sampleOrTotal(values, metric, venue);
+  const k = tuning.shrinkMatches;
+  const shrunk = (n * raw + k * ref) / (n + k);
+  return { ratio: Math.pow(shrunk / ref, tuning.strength), ref };
 }
 
 /**
@@ -197,12 +373,6 @@ export function poissonVector(lambda: number): number[] {
     out[k] = p;
   }
   return out;
-}
-
-function mean(vals: (number | null)[]): number | null {
-  const nums = vals.filter((v): v is number => v != null);
-  if (nums.length === 0) return null;
-  return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

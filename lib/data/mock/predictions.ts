@@ -1,5 +1,6 @@
 import type { PredictionRow, Team } from "@/lib/types";
 import { compareTeams } from "@/lib/stats/compare";
+import { PREDICT_PARAMS } from "@/lib/stats/predict";
 import { NATIONAL_TOURNAMENT_LEAGUE_IDS } from "../catalog";
 import { buildTeams } from "./seed";
 
@@ -37,8 +38,8 @@ function rowFrom(
     homeLogo: r.home.team.logoUrl,
     awayLogo: r.away.team.logoUrl,
     available: p.available,
-    lambdaHome: p.lambdaHome,
-    lambdaAway: p.lambdaAway,
+    lambdaHome: p.lambdaHomeBase,
+    lambdaAway: p.lambdaAwayBase,
     homeWin: p.homeWin,
     draw: p.draw,
     awayWin: p.awayWin,
@@ -47,6 +48,8 @@ function rowFrom(
     lowConfidence: p.lowConfidence,
     readinessSample: p.readiness.sample,
     modelVersion: 0,
+    rho: PREDICT_PARAMS.rho,
+    sharpen: PREDICT_PARAMS.sharpen,
     status,
     homeGoals,
     awayGoals,

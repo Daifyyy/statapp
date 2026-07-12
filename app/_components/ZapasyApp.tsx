@@ -297,8 +297,20 @@ function ResultRow({ result }: { result: SettledMatch }) {
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
           <TeamLogo src={result.home.logoUrl} alt={result.home.name} size={20} />
           <span className="min-w-0 truncate font-medium text-home">{result.home.name}</span>
-          <span className="shrink-0 font-bold tabular-nums text-foreground">
+          <span
+            className="shrink-0 font-bold tabular-nums text-foreground"
+            title={
+              result.afterExtraTime
+                ? "Stav po 90 minutách (zápas se rozhodl až v prodloužení)"
+                : undefined
+            }
+          >
             {result.homeGoals}:{result.awayGoals}
+            {result.afterExtraTime && (
+              <span className="ml-0.5 align-super text-[9px] font-normal text-muted">
+                90′
+              </span>
+            )}
           </span>
           <span className="min-w-0 truncate font-medium text-away">{result.away.name}</span>
           <TeamLogo src={result.away.logoUrl} alt={result.away.name} size={20} />

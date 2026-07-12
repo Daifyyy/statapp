@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCompareTeam } from "@/lib/data/repository";
+import { getCompareTeam, getLeagueBaseline } from "@/lib/data/repository";
 import { compareTeams } from "@/lib/stats/compare";
 import { getCurrentUser } from "@/lib/authUser";
 import { prisma } from "@/lib/db";
@@ -34,9 +34,13 @@ export async function GET(req: Request) {
   const includeEuro = homeLeague !== awayLeague;
 
   try {
-    const [home, away] = await Promise.all([
+    // Ligové měřítko pro λ z **domácí ligy** (u cross-league porovnání je referencí
+    // prostředí domácího). Z už cachované tabulky → 0 API navíc; null (reprezentace,
+    // mezisezóna) → predikce použije typický default.
+    const [home, away, baseline] = await Promise.all([
       getCompareTeam(homeId, homeLeague, includeEuro),
       getCompareTeam(awayId, awayLeague, includeEuro),
+      getLeagueBaseline(homeLeague),
     ]);
     if (!home || !away) {
       return NextResponse.json({ error: "Tým nenalezen" }, { status: 404 });
@@ -49,7 +53,9 @@ export async function GET(req: Request) {
     }
 
     // Jádro je vždy stejné; PRO obsah ořežeme až tady (gating na hranici route).
-    const full = compareTeams(home, away);
+    const full = compareTeams(home, away, new Date(), {
+      baseline: baseline ?? undefined,
+    });
 
     const u = await getCurrentUser();
     const ent = getEntitlement(

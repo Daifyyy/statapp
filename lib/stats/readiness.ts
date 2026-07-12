@@ -1,4 +1,5 @@
-import type { Metric, MetricValue, Readiness, ReadinessLevel, Venue } from "@/lib/types";
+import type { MetricValue, Readiness, ReadinessLevel } from "@/lib/types";
+import { sampleOrTotal } from "./metricLookup";
 
 export type { Readiness, ReadinessLevel };
 
@@ -32,19 +33,6 @@ export function readinessOf(sample: number): Readiness {
 }
 
 /**
- * Efektivní vzorek metriky ve variantě s fallbackem na TOTAL (stejná logika jako
- * `lowConfidenceOf`: prázdná venue varianta → rozhoduje TOTAL pro neutrální reprezentace).
- */
-function effSample(values: MetricValue[], metric: Metric, venue: Venue): number {
-  const at = values.find((x) => x.metric === metric && x.venue === venue);
-  const v =
-    at && at.sampleSize > 0
-      ? at
-      : (values.find((x) => x.metric === metric && x.venue === "TOTAL") ?? at);
-  return v?.sampleSize ?? 0;
-}
-
-/**
  * Připravenost predikce zápasu = nejslabší ze čtyř vstupů λ (útok × obrana obou týmů
  * ve venue relevantní pro zápas; HOME/AWAY s fallbackem na TOTAL u neutrálních
  * reprezentací). Mapuje přesně to, co `predict.ts` skládá do očekávaných gólů.
@@ -54,10 +42,10 @@ export function computeReadiness(
   away: { values: MetricValue[] }
 ): Readiness {
   const sample = Math.min(
-    effSample(home.values, "GOALS_FOR", "HOME"),
-    effSample(away.values, "GOALS_AGAINST", "AWAY"),
-    effSample(away.values, "GOALS_FOR", "AWAY"),
-    effSample(home.values, "GOALS_AGAINST", "HOME")
+    sampleOrTotal(home.values, "GOALS_FOR", "HOME"),
+    sampleOrTotal(away.values, "GOALS_AGAINST", "AWAY"),
+    sampleOrTotal(away.values, "GOALS_FOR", "AWAY"),
+    sampleOrTotal(home.values, "GOALS_AGAINST", "HOME")
   );
   return readinessOf(sample);
 }

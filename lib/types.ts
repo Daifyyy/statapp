@@ -404,8 +404,15 @@ export interface Readiness {
 export interface MatchPrediction {
   /** false = chybí gólová i xG data → predikci nelze vydat (UI zobrazí hlášku). */
   available: boolean;
-  lambdaHome: number; // očekávané góly domácích
-  lambdaAway: number; // očekávané góly hostů
+  lambdaHome: number; // očekávané góly domácích (po zostření – souhlasí s mřížkou)
+  lambdaAway: number; // očekávané góly hostů (po zostření)
+  /**
+   * λ **před** zostřením – to, co generuje model (`MODEL_VERSION`). Ukládá se do
+   * `FixturePrediction`, protože z něj jde predikci přepočítat při změně post-parametrů
+   * (ρ / zostření) bez nového fetchu. Při `sharpen = 1` shodné s `lambdaHome/Away`.
+   */
+  lambdaHomeBase: number;
+  lambdaAwayBase: number;
   homeWin: number; // 0–1
   draw: number; // 0–1
   awayWin: number; // 0–1
@@ -469,6 +476,7 @@ export interface PredictionRow {
   homeLogo: string;
   awayLogo: string;
   available: boolean;
+  /** λ **před** zostřením (základní výstup modelu) → pravděpodobnosti níž jdou přepočítat. */
   lambdaHome: number;
   lambdaAway: number;
   homeWin: number;
@@ -479,7 +487,16 @@ export interface PredictionRow {
   lowConfidence: boolean;
   /** Efektivní vzorek nejslabšího vstupu λ (připravenost predikce); 0 = neznámo/starý řádek. */
   readinessSample: number;
+  /** Verze modelu, který spočítal λ (okna/váhy/xG/build týmů). Bump = reset datasetu. */
   modelVersion: number;
+  /**
+   * Post-parametry, kterými byly z λ odvozeny pravděpodobnosti výše (Dixon–Coles ρ a
+   * zostření λ). Mimo `modelVersion` schválně: jde je změnit a historii **přepočítat**
+   * z uložených λ (`npm run reprice`) místo zahození. `null` = řádek z doby před
+   * zavedením polí (spočítaný publikovaným defaultem ρ=−0.13, zostření 1.0).
+   */
+  rho: number | null;
+  sharpen: number | null;
   status: string; // "NS" | "FT" | "AET" | "PEN" | …
   homeGoals: number | null;
   awayGoals: number | null;
@@ -567,8 +584,11 @@ export interface SettledMatch {
   kickoff: string;
   home: { id: number; name: string; logoUrl: string };
   away: { id: number; name: string; logoUrl: string };
+  /** Skóre po 90 minutách (co predikuje model) – u AET/PEN tedy NE koncové skóre. */
   homeGoals: number;
   awayGoals: number;
+  /** Zápas se rozhodl až v prodloužení/na penalty → skóre výše je stav po 90 min. */
+  afterExtraTime: boolean;
   /** Predikovaný výsledek 1X2 (argmax) a jeho pravděpodobnost. */
   predictedSide: "home" | "draw" | "away";
   predictedProb: number;

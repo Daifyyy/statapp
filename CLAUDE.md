@@ -26,6 +26,14 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npx prisma db push   # promítnout změnu schématu do Neonu (+ regeneruje klienta)
 npm run probe        # živá sonda API (status, kvóta, tvary odpovědí); též: discover, limits
+npm run calibrate    # MLE DC_RHO + Brier/log-loss z odehraných predikcí (jen MODEL_VERSION)
+npm run backtest     # offline backtest na historii klubových lig (point-in-time, stejné jádro);
+                     # 1 volání/liga+sezóna, pak .cache/backtest → další běhy offline
+npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
+npm run reprice      # po změně DC_RHO/LAMBDA_SHARPEN přepočte uložené predikce z λ (0 API);
+                     # suchý běh, zápis až `-- --apply`. NAHRAZUJE bump MODEL_VERSION.
+npm run resettle     # přepočet uložených výsledků na skóre po 90 min (AET/PEN); suchý běh,
+                     # zápis až `npm run resettle -- --apply`
 npm run audit-leagues      # herní ligy: odvozené vs. kurátorované pohárové/sestupové příčky
 npm run audit-leagues -- 345 39   # jen vybraná liga (id)
 npm run sim-game     # balanc Manažera – bez API/DB. 4 sekce: (1) náročnost ligy + rozklad
@@ -77,8 +85,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `UpcomingFixture`/`MatchPick` nesou volitelné `homeRank`/`awayRank`. `warmCatalog` (denní
   cron) předehřívá i tabulky klubových lig → rank v seznamech je instantní. Reprezentace bez pozice.
 - **Predikce** (`lib/stats/predict.ts`, `CompareResult.prediction`) – **Poisson** z očekávaných
-  gólů (útok týmu × obrana soupeře, venue-specific, fallback TOTAL, volitelné zpevnění xG)
-  s **Dixon–Coles korekcí** nízkých skóre (`DC_RHO`, `drawTau`; ρ<0 zvyšuje remízy 0:0/1:1).
+  gólů s **Dixon–Coles korekcí** nízkých skóre (`DC_RHO`, `drawTau`; ρ<0 zvyšuje remízy 0:0/1:1).
+  **λ se staví multiplikativně vůči ligovému měřítku** (Maher/DC, `expectedGoals`):
+  `λ = ref × (útok/ref)^s × (obdržené soupeře/ref)^s`, kde `ref` = **kolik gólů dá v této lize
+  průměrný domácí, resp. hostující tým** (`LeagueBaseline`, z home/away splitů tabulky přes
+  `computeLeagueBaseline` → `getLeagueBaseline`, sdílí `standings:` cache = **0 API navíc**;
+  bez tabulky `DEFAULT_BASELINE`). Domácí výhoda je **v rozdílu ref**, λ ji nepřidává zvlášť.
+  `ref` se řídí tím, odkud data přišla (venue rozpad vs. fallback TOTAL) → **venue-neutrální
+  reprezentace domácí výhodu nedostanou** a prohození týmů dá zrcadlovou predikci.
+  Dvě pojistky proti šumu (`PredictTuning`, fitnuté `npm run backtest`): **shrinkage**
+  (`shrinkMatches=6`: `(n·hodnota + k·ref)/(n+k)` → malý vzorek = skoro liga) a exponent
+  **`strength`** (dnes 1.0). Chybí-li jedna strana (útok/obrana), bere se za ni ligový průměr;
+  až když chybí obě, vrací `available:false`.
+  **Predikce má VLASTNÍ vážení oken** (`PREDICTION_WINDOW_WEIGHTS` = 70/25/5 vs. zobrazovacích
+  15/30/55): metriky v UI mají popisovat *formu*, λ má *odhadovat góly* a pět zápasů je z valné
+  části šum. Proto `compareTeams` počítá tři metriky za λ (`PREDICTION_METRICS`) znovu s jinými
+  vahami; UI/insights/souhrny běží beze změny na zobrazovacích hodnotách.
+  **Změřeno backtestem** (3 511 klubových zápasů, hold-out 2025): starý model (aritmetický průměr
+  útoku a obrany, váhy 15/30/55) log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → nový **1.0127**,
+  **50.4 %**, **ECE 0.010** (naivní konstanta 1.0770). Největší jednotlivý podíl mají **váhy**.
+  `MODEL_VERSION = 2` (λ se změnila → dataset predikcí se počítá od verze 2).
   V/R/P, BTTS, Over 2.5 i **top-N nejpravděpodobnějších přesných skóre** (`topScores`) se
   počítají z téže opravené mřížky → vzájemně konzistentní (`topScores` je UI-only obohacení
   z živé mřížky, **neukládá se** do `PredictionRow`/`FixturePrediction`). Chybí-li gólová i xG
@@ -242,7 +268,11 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`predictionStore.ts`). Build se větví: klub → `getCompareTeam`; reprezentační turnaj →
   `getCompareNationalTeamFromFixture` (meta název/logo **z fixture**, ne z konfederace –
   tým může být z libovolné konfederace; forma z `fetchLastFixtures`, venue-neutrální).
-  `runSettleResults` dotáhne skóre dle `fixtureId` (`fetchFixturesByIds`) bez ohledu na ligu.
+  `runSettleResults` dotáhne skóre dle `fixtureId` (`fetchFixturesByIds`) bez ohledu na ligu;
+  ukládá **skóre po 90 minutách** (`fullTimeGoals` v `fixtures.ts` → `score.fulltime`, ne
+  `fixture.goals` = koncové). U vyřazovacích zápasů (`AET`/`PEN`) by koncové skóre dalo remíze
+  po 90 min podobu výhry → zkazilo by 1X2, Over 2.5, BTTS i MLE `DC_RHO`. `SettledMatch` proto
+  nese `afterExtraTime` a UI u skóre ukazuje „90′“. Starší řádky přepočítá `npm run resettle`.
   Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
   `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). Reprezentační
   řádky v `PicksApp` **jsou klikací**: `/api/picks` jim dohledá konfederaci každého týmu
@@ -285,20 +315,46 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   s tipovací záložkou. **0 API** (čte uložené řádky vč. kurzů). Route `app/api/digest` (**PRO** jako
   picks, FREE→`{locked}`), stránka `/digest` + `DigestApp.tsx`. Owner (always-PRO) má osobní přehled,
   zároveň screenshot do komunit (marketing). Záměrně **mimo sitemap** (PRO-locked = tenká stránka pro indexaci).
+- **Měřítka kvality modelu (tři, v pořadí tvrdosti):** (1) **naivní konstanta** (45/26/29) =
+  sanity check, model ji musí překonat; (2) **API-Football** (`BenchmarkPanel`) = slabý soupeř;
+  (3) **TRH** (`lib/picks/market.ts`, `MarketPanel`) = **jediné měřítko, které rozhoduje**.
+  `devig` odmaržuje uložené kurzy (proporcionálně; Shin/power by byly přesnější) a
+  `computeMarketBenchmark` srovná log-loss na společné podmnožině. **Jen 1X2** (u Over 2.5/BTTS
+  ukládáme jen kurz na „ano" → protistrana chybí, nejde odmaržovat) a **jen klubové zápasy**
+  (reprezentace kurzy nemají a napříč konfederacemi jsou nesrovnatelné). Dokud trh vede, jsou
+  „value" tipy spíš chyba modelu než hrana — `MarketPanel` to říká uživateli natvrdo.
+- **Offline backtest** (`lib/picks/backtest.ts` + `npm run backtest`, čisté + testy): přehraje
+  historii klubových lig **stejným jádrem** (`compareTeams`) a vydá `PredictionRow[]` → jde rovnou
+  do `computeTrackRecord`/`computeReliability`/`fit.ts`. **Point-in-time** (`matchStatsBefore` bere
+  jen zápasy s datem < výkop → žádný leak, kryto testem). Data: `fetchLeagueSeasonFixtures` =
+  **1 volání na ligu+sezónu** (5 lig × 3 sezóny = 15 volání, ~5 300 zápasů) + disková cache
+  `.cache/backtest` → iterace nad modelem běží **offline za ~8 s**. Model se tak ladí na tisících
+  zápasů, ne rychlostí, jakou se plní DB. **Omezení:** bez xG (to je 1 volání/zápas → produkční λ
+  má navíc xG složku) a bez pohárů. Fit ρ/zostření je sdílený (`lib/picks/fit.ts`) s `calibrate`.
+- **Dvě úrovně verzování (DŮLEŽITÉ):** `MODEL_VERSION` (`predictions.ts`) verzuje **jen to, co
+  generuje λ** (okna, váhy, xG zpevnění, build týmů) – bump **vynuluje dataset** (kalibrace
+  i track-record běží per verzi). **ρ a zostření λ pod něj nepatří**: jsou to post-parametry
+  aplikované až NA λ (`PREDICT_PARAMS` v `predict.ts`), takže po jejich změně stačí přepočítat
+  mřížku nad uloženými λ – čistá matematika, **0 API volání**, historie zůstane (`npm run reprice`).
+  Proto `FixturePrediction.lambdaHome/Away` drží **základní** λ (před zostřením; `MatchPrediction`
+  má `lambdaHomeBase`/`lambdaAwayBase`) a řádek nese `rho`/`sharpen` = čím byly pravděpodobnosti
+  odvozené → `reprice` pozná zastaralý řádek. Mřížku staví jediná čistá funkce `gridProbs`
+  (sdílí ji živý `predictMatch` i `reprice`) → nemůžou se rozejít.
 - **Kalibrace:** `npm run calibrate` (`scripts/calibrate.ts`) = MLE `DC_RHO` z odehraných
   predikcí (reuse exportů `drawTau`/`poissonVector`) + Brier/log-loss. Ladění = ruční
-  úprava `DC_RHO` v `predict.ts` + bump `MODEL_VERSION` (`predictions.ts`). Počítá **jen
-  z `modelVersion=MODEL_VERSION`** (kalibrace je per verzi modelu) a chce **≥30 odehraných**
-  predikcí, jinak je výsledek orientační. `DC_RHO` je zatím publikovaný default −0.13
-  (Dixon–Coles 1997), nekalibrovaný na vlastních datech – čeká na dost settlnutých predikcí
-  (první dataset se sbírá z MS 2026; settle dělá cron `settle-results`).
-  **Zostření favoritů** (`LAMBDA_SHARPEN` v `predict.ts`, `sharpenLambdas`): reliability křivka
-  ukázala, že 1X2 pravděpodobnosti jsou málo rozprostřené (model podsebevědomý na favoritech).
-  `sharpenLambdas` zostří **jen rozdíl** λ (D = λ_home−λ_away) se zachováním součtu → narovná 1X2,
-  Over 2.5 nechá být, mřížka zůstane konzistentní. `LAMBDA_SHARPEN=1.0` = **přesný no-op** (infra
-  připravená, zatím nepoužitá). `calibrate` má grid search přes `s` (1X2 log-loss). **Pozor:**
-  na malém vzorku optimum přestřeluje (44 zápasů → s≈2.05, plochá křivka = overfit) → měnit až
-  na ~150–300 settlnutých, pak bump `MODEL_VERSION`. Stejná logika jako `DC_RHO`.
+  úprava `DC_RHO` v `predict.ts` + **`npm run reprice`** (žádný bump `MODEL_VERSION`!).
+  Počítá **jen z `modelVersion=MODEL_VERSION`** a chce **≥30 odehraných**
+  predikcí, jinak je výsledek orientační. `DC_RHO = −0.03` je **fitnuté backtestem**
+  (3 511 klubových zápasů; publikovaný default −0.13 z DC 1997 seděl na jiná λ, na hold-out
+  sezóně byl o chlup horší). Ladit dál přes `backtest`, ne přes 60 zápasů z DB.
+  **Zostření favoritů** (`LAMBDA_SHARPEN` v `predict.ts`, `sharpenLambdas`): zostří **jen rozdíl**
+  λ (D = λ_home−λ_away) se zachováním součtu. `LAMBDA_SHARPEN=1.0` = **přesný no-op**.
+  **NEZAPÍNAT — backtest (3 511 klubových zápasů) ukázal PŘESNÝ OPAK toho, co naznačovalo
+  62 zápasů z MS:** model je na favoritech **přesebevědomý** (predikce 64 % → realita 57 %;
+  83 % → 67 %) a na outsiderech podsebevědomý (7 % → 14 %). `fitSharpen` nad backtestem dává
+  **s = 1.00 (žádné zlepšení)**. Zostření by model zhoršilo. Příčina není komprese λ, ale **šum**:
+  55 % váhy nese LAST5 (pět zápasů!) → λ přestřeluje na krátkodobé sérii a extrémní
+  pravděpodobnosti neustojí. Léčba je **shrinkage/regularizace λ**, ne zostření (viz plán C1/C2).
 - **Interní benchmark vs. API-Football** (jen offline měření, **nikdy ve FREE/PRO API**,
   **nesahá na `compareTeams`**): paralelní sloupce `bench*` na řádku `FixturePrediction`
   (predikce API-Footballu 1X2). `fetchPrediction` (`apiFootball.ts`) parsne `percent`

@@ -5,9 +5,13 @@ import type {
   MetricValue,
   Venue,
   WindowBreakdown,
+  WindowKey,
 } from "@/lib/types";
 import { WINDOW_LABELS } from "@/lib/types";
 import { WINDOW_WEIGHTS } from "./weights";
+
+/** Váhy oken pro jeden typ entity (zobrazení vs. predikce – viz `weights.ts`). */
+export type WindowWeights = Record<WindowKey, number>;
 import { matchWeight } from "./matchWeight";
 import { selectWindowMatches, windowsFor } from "./windows";
 import { weightedAverage, type WindowValue } from "./weightedAverage";
@@ -54,7 +58,9 @@ export function computeMetricValue(
   metric: Metric,
   venue: Venue,
   entityType: EntityType,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /** Bez nich zobrazovací váhy; predikce si předává vlastní (`PREDICTION_WINDOW_WEIGHTS`). */
+  weights: WindowWeights = WINDOW_WEIGHTS[entityType]
 ): MetricValue {
   const windowValues: WindowValue[] = [];
   const breakdown: WindowBreakdown[] = [];
@@ -65,7 +71,7 @@ export function computeMetricValue(
       matchesVenue(m, venue)
     );
     const agg = aggregateWindow(selected, metric, entityType);
-    const weight = WINDOW_WEIGHTS[entityType][window];
+    const weight = weights[window];
     windowValues.push({ weight, value: agg.value });
     breakdown.push({
       window,
@@ -93,15 +99,16 @@ export function computeMetricValue(
 /** Spočítá všechny metriky × všechny varianty pro jeden tým. */
 export function computeAllValues(
   matches: MatchStat[],
-  metrics: Metric[],
+  metrics: readonly Metric[],
   entityType: EntityType,
-  now: Date = new Date()
+  now: Date = new Date(),
+  weights: WindowWeights = WINDOW_WEIGHTS[entityType]
 ): MetricValue[] {
   const venues: Venue[] = ["HOME", "AWAY", "TOTAL"];
   const out: MetricValue[] = [];
   for (const metric of metrics) {
     for (const venue of venues) {
-      out.push(computeMetricValue(matches, metric, venue, entityType, now));
+      out.push(computeMetricValue(matches, metric, venue, entityType, now, weights));
     }
   }
   return out;

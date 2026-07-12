@@ -5,6 +5,7 @@ import {
   computeBenchmarkTrackRecord,
   computeTrackRecord,
 } from "@/lib/picks/trackRecord";
+import { computeMarketBenchmark } from "@/lib/picks/market";
 import { computeReliability } from "@/lib/picks/reliability";
 import { ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       trackRecord: computeTrackRecord(rows),
       benchmark: computeBenchmarkTrackRecord(rows),
+      market: computeMarketBenchmark(rows),
       backtest: backtestRule(rows, parsed.data),
       reliability: computeReliability(rows),
     });

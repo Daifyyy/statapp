@@ -26,6 +26,8 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     over25: 0.5,
     lowConfidence: false,
     modelVersion: 1,
+    rho: -0.13,
+    sharpen: 1,
     status: "NS",
     homeGoals: null,
     awayGoals: null,

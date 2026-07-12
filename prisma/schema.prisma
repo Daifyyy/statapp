@@ -141,6 +141,9 @@ model FixturePrediction {
   awayLogo      String
   // Predikce (snapshot modelu v čase výpočtu)
   available     Boolean
+  /// λ PŘED zostřením = základní výstup modelu. Pravděpodobnosti níž z něj jdou
+  /// kdykoli přepočítat jinými post-parametry (`npm run reprice`) – proto se ukládá
+  /// základ, ne zostřená hodnota.
   lambdaHome    Float
   lambdaAway    Float
   homeWin       Float
@@ -152,8 +155,16 @@ model FixturePrediction {
   /// Připravenost predikce: efektivní vzorek nejslabšího vstupu λ (gate na tipy +
   /// odznak „málo dat" na startu sezóny). 0 = neznámo / řádek z doby před readiness.
   readinessSample Float   @default(0)
-  /// Verze modelu (bump při změně DC_RHO apod.) – kalibrace/track-record per verzi.
+  /// Verze modelu = co GENERUJE λ (okna, váhy, xG zpevnění, build týmů). Bump vynuluje
+  /// dataset (kalibrace/track-record běží per verzi), proto ho NEbumpuj kvůli ρ/zostření –
+  /// ty jsou post-parametry nad λ a přepočítají se (viz `rho`/`sharpen`).
   modelVersion  Int       @default(1)
+  /// Post-parametry, kterými byly z λ odvozeny pravděpodobnosti výše (Dixon–Coles ρ,
+  /// zostření λ). Umožňují ladit model bez ztráty historie: `npm run reprice` najde
+  /// řádky s jinými hodnotami než aktuální konstanty a přepočte je z λ. null = řádek
+  /// z doby před zavedením polí (default ρ=−0.13, zostření 1.0).
+  rho           Float?
+  sharpen       Float?
   predictedAt   DateTime  @default(now())
   // Výsledek (doplní settle cron po odehrání)
   status        String    @default("NS")

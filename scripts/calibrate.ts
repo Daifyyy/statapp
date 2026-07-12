@@ -6,86 +6,17 @@
 // 2) Reportuje úspěšnost (1X2), Brier skóre a log-loss uložených predikcí.
 import { getSettledPredictions } from "../lib/data/predictionStore.ts";
 import { MODEL_VERSION } from "../lib/data/predictions.ts";
-import { drawTau, poissonVector, sharpenLambdas } from "../lib/stats/predict.ts";
+import { fitRho, fitSharpen, outcomeScoreAtSharpen } from "../lib/picks/fit.ts";
 import {
   computeTrackRecord,
   scoreProbs,
   ourProbs,
   benchProbs,
 } from "../lib/picks/trackRecord.ts";
-import type { PredictionRow } from "../lib/types.ts";
+import { computeMarketBenchmark, isClubRow } from "../lib/picks/market.ts";
 
-const MAX_GOALS = 10;
-
-/** Log-likelihood pozorovaných skóre pod daným ρ (λ z uložené predikce). */
-function logLikelihood(rows: PredictionRow[], rho: number): number {
-  let ll = 0;
-  for (const r of rows) {
-    if (!r.available || r.homeGoals == null || r.awayGoals == null) continue;
-    const hg = r.homeGoals;
-    const ag = r.awayGoals;
-    if (hg > MAX_GOALS || ag > MAX_GOALS) continue;
-    const ph = poissonVector(r.lambdaHome);
-    const pa = poissonVector(r.lambdaAway);
-    let norm = 0;
-    for (let i = 0; i <= MAX_GOALS; i++)
-      for (let j = 0; j <= MAX_GOALS; j++)
-        norm += ph[i] * pa[j] * drawTau(i, j, r.lambdaHome, r.lambdaAway, rho);
-    const p =
-      (ph[hg] * pa[ag] * drawTau(hg, ag, r.lambdaHome, r.lambdaAway, rho)) /
-      (norm || 1);
-    if (p > 0) ll += Math.log(p);
-  }
-  return ll;
-}
-
-// 1X2 výběr pravděpodobností a skórování sdílí lib/picks/trackRecord.ts (ourProbs,
-// benchProbs, scoreProbs) → jeden zdroj pravdy s API track-recordem.
-
-/**
- * 1X2 multiclass log-loss + Brier při zostření λ parametrem `s` (ρ = produkční DC_RHO
- * přes default `drawTau`). Zostření drží součet λ → měří dopad jen na 1X2. `s = 1`
- * reprodukuje současný model. Hledáme `s`, které minimalizuje log-loss (oprava
- * „podsebevědomosti na favoritech" z reliability křivky).
- */
-function outcomeScoreAtSharpen(
-  rows: PredictionRow[],
-  s: number
-): { logloss: number; brier: number; n: number } {
-  let ll = 0;
-  let brier = 0;
-  let n = 0;
-  for (const r of rows) {
-    if (!r.available || r.homeGoals == null || r.awayGoals == null) continue;
-    const [lh, la] = sharpenLambdas(r.lambdaHome, r.lambdaAway, s);
-    const ph = poissonVector(lh);
-    const pa = poissonVector(la);
-    let home = 0;
-    let draw = 0;
-    let away = 0;
-    let total = 0;
-    for (let i = 0; i <= MAX_GOALS; i++)
-      for (let j = 0; j <= MAX_GOALS; j++) {
-        const p = ph[i] * pa[j] * drawTau(i, j, lh, la);
-        total += p;
-        if (i > j) home += p;
-        else if (i === j) draw += p;
-        else away += p;
-      }
-    const norm = total || 1;
-    home /= norm;
-    draw /= norm;
-    away /= norm;
-    const oH = r.homeGoals > r.awayGoals ? 1 : 0;
-    const oA = r.homeGoals < r.awayGoals ? 1 : 0;
-    const oD = r.homeGoals === r.awayGoals ? 1 : 0;
-    brier += (home - oH) ** 2 + (draw - oD) ** 2 + (away - oA) ** 2;
-    const pObs = oH ? home : oA ? away : draw;
-    ll += -Math.log(Math.max(pObs, 1e-9));
-    n++;
-  }
-  return n ? { logloss: ll / n, brier: brier / n, n } : { logloss: 0, brier: 0, n: 0 };
-}
+// Fit ρ/zostření i skórování 1X2 jsou sdílené čisté funkce (`lib/picks/fit.ts`,
+// `trackRecord.ts`) → tentýž kód žene kalibraci z DB i offline `npm run backtest`.
 
 async function main() {
   const rows = await getSettledPredictions(MODEL_VERSION);
@@ -98,6 +29,11 @@ async function main() {
     return;
   }
 
+  const club = rows.filter(isClubRow);
+  console.log(
+    `Z toho klubových: ${club.length} | reprezentačních: ${rows.length - club.length}`
+  );
+
   const tr = computeTrackRecord(rows);
   console.log("\n=== Úspěšnost (uložené predikce) ===");
   console.log("1X2 přesnost:", tr.outcomeAccuracy != null ? `${(tr.outcomeAccuracy * 100).toFixed(1)} %` : "—");
@@ -105,6 +41,32 @@ async function main() {
   console.log("Oba skórují:", tr.bttsAccuracy != null ? `${(tr.bttsAccuracy * 100).toFixed(1)} %` : "—");
   const ps = scoreProbs(rows, ourProbs);
   console.log(`Brier (1X2): ${ps.brier.toFixed(4)} | log-loss: ${ps.logloss.toFixed(4)} (n=${ps.n})`);
+
+  // Benchmark proti TRHU (odmaržované kurzy) – jediné měřítko, které rozhoduje, jestli
+  // mají value tipy smysl. Jen klubové zápasy (reprezentace kurzy nemají a jsou napříč
+  // konfederacemi nesrovnatelné).
+  const mb = computeMarketBenchmark(rows);
+  console.log("\n=== Benchmark vs. TRH (1X2, odmaržované kurzy, jen klubové) ===");
+  if (mb.n === 0 || !mb.our || !mb.market) {
+    console.log(
+      "Žádné odehrané klubové zápasy s kurzy. Kurzy se tahají jen klubovým ligám a jen " +
+        "do 72 h před výkopem → naplní se, až se rozjede klubová sezóna."
+    );
+  } else {
+    const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
+    console.log(`Společných zápasů: ${mb.n} | ⌀ marže sázkovky: ${((mb.avgOverround! - 1) * 100).toFixed(1)} %`);
+    console.log(`              náš model      trh (de-vig)`);
+    console.log(`1X2 přesnost: ${pct(mb.our.accuracy).padEnd(14)} ${pct(mb.market.accuracy)}`);
+    console.log(`Brier:        ${mb.our.brier.toFixed(4).padEnd(14)} ${mb.market.brier.toFixed(4)}  (nižší = lepší)`);
+    console.log(`log-loss:     ${mb.our.logloss.toFixed(4).padEnd(14)} ${mb.market.logloss.toFixed(4)}  (nižší = lepší)`);
+    const d = mb.market.logloss - mb.our.logloss;
+    console.log(
+      d > 0
+        ? `✅ Překonáváme trh o ${d.toFixed(4)} log-loss → value tipy mají oporu.`
+        : `⚠ Trh je lepší o ${(-d).toFixed(4)} log-loss → „kladná hrana" v EV je spíš chyba modelu než díra na trhu.`
+    );
+    if (mb.n < 100) console.log("(Vzorek < 100 – orientační.)");
+  }
 
   // Side-by-side benchmark: náš model vs. predikce API-Footballu na STEJNÉ podmnožině
   // (jen řádky, kde mají oba dostupnou predikci) → férové srovnání přesnosti.
@@ -131,50 +93,45 @@ async function main() {
   }
 
   console.log("\n=== MLE Dixon–Coles ρ ===");
-  let best = { rho: 0, ll: -Infinity };
-  for (let rho = -0.25; rho <= 0.0501; rho += 0.005) {
-    const r = Math.round(rho * 1000) / 1000;
-    const ll = logLikelihood(rows, r);
-    if (ll > best.ll) best = { rho: r, ll };
-  }
-  console.log(`Doporučené ρ (max věrohodnost): ${best.rho}  (LL=${best.ll.toFixed(2)})`);
-  console.log("Dolaď konstantu DC_RHO v lib/stats/predict.ts a bumpni MODEL_VERSION.");
+  const best = fitRho(rows);
+  console.log(`Doporučené ρ (max věrohodnost): ${best.rho}  (LL=${best.logLik.toFixed(2)})`);
+  console.log(
+    "Dolaď DC_RHO v lib/stats/predict.ts → pak `npm run reprice` (přepočte historii z λ). " +
+      "MODEL_VERSION NEbumpuj – ρ je post-parametr, dataset se nemá zahazovat."
+  );
 
   // Zostření λ (LAMBDA_SHARPEN): grid search minimalizující 1X2 log-loss. Drží součet λ
   // → opravuje jen 1X2 (favorité), Over 2.5 nechá být. s=1 = současný model (baseline).
   console.log("\n=== Zostření λ (LAMBDA_SHARPEN, oprava favoritů) ===");
-  const baseScore = outcomeScoreAtSharpen(rows, 1);
-  const S_MAX = 3.0; // horní mez gridu; argmin na hranici = podezření na overfit (viz níže)
-  let bestS = { s: 1, logloss: baseScore.logloss };
-  for (let s = 1.0; s <= S_MAX + 0.001; s += 0.05) {
-    const sr = Math.round(s * 100) / 100;
-    const sc = outcomeScoreAtSharpen(rows, sr);
-    if (sc.logloss < bestS.logloss) bestS = { s: sr, logloss: sc.logloss };
-  }
-  const bestScore = outcomeScoreAtSharpen(rows, bestS.s);
+  const sh = fitSharpen(rows);
   const fmt = (x: number) => x.toFixed(4);
   console.log(
-    `Baseline   s=1.00 → log-loss ${fmt(baseScore.logloss)} | Brier ${fmt(baseScore.brier)} (n=${baseScore.n})`
+    `Baseline   s=1.00 → log-loss ${fmt(sh.baseline.logloss)} | Brier ${fmt(sh.baseline.brier)} (n=${sh.baseline.n})`
   );
   console.log(
-    `Doporučené s=${bestS.s.toFixed(2)} → log-loss ${fmt(bestScore.logloss)} | Brier ${fmt(bestScore.brier)}`
+    `Doporučené s=${sh.best.toFixed(2)} → log-loss ${fmt(sh.bestScore.logloss)} | Brier ${fmt(sh.bestScore.brier)}`
   );
-  if (bestS.s === 1) {
+  if (sh.best === 1) {
     console.log("→ Zostření nepomáhá (s=1 je optimum) – nech LAMBDA_SHARPEN=1.0.");
   } else {
-    const gain = baseScore.logloss - bestScore.logloss;
-    console.log(`→ Zlepšení log-loss o ${fmt(gain)} (Brier ${fmt(baseScore.brier)} → ${fmt(bestScore.brier)}).`);
-    if (bestS.s >= S_MAX) {
+    const gain = sh.baseline.logloss - sh.bestScore.logloss;
+    console.log(`→ Zlepšení log-loss o ${fmt(gain)}.`);
+    if (sh.atGridEdge) {
       console.log(
-        `⚠ Optimum na hranici gridu (s=${S_MAX.toFixed(1)}) → skoro jistě overfit na malém vzorku. ` +
-          `NEPOUŽÍVAT teď; potvrď až na ~150–300 zápasech, kde optimum sedne dovnitř gridu.`
+        "⚠ Optimum na hranici gridu → overfit na malém vzorku (a/nebo strukturálně stlačená λ). " +
+          "Ověř přes `npm run backtest` na tisících zápasů, ne laděním tady."
       );
     } else {
       console.log(
-        "Pozor: na malém vzorku může být v šumu – nastav LAMBDA_SHARPEN v predict.ts a bumpni " +
-          "MODEL_VERSION jen když je vzorek dost velký (~150–300)."
+        "Pozor: na malém vzorku může být v šumu – nastav LAMBDA_SHARPEN v predict.ts (a spusť " +
+          "`npm run reprice`) jen když to potvrdí i `npm run backtest`. MODEL_VERSION NEbumpuj."
       );
     }
+  }
+  // Ověř, že baseline sedí na produkční konstantu (jistota, že fit měří to, co běží).
+  const check = outcomeScoreAtSharpen(rows, 1);
+  if (Math.abs(check.logloss - ps.logloss) > 0.02) {
+    console.log("\n⚠ Baseline fitu se liší od uložených pravděpodobností → řádky nejsou přepočtené (`npm run reprice`).");
   }
 }
 

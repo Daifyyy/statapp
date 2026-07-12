@@ -34,11 +34,13 @@ import {
 } from "./cache";
 import { selectCurrentInjuries } from "./injuries";
 import {
+  computeLeagueBaseline,
   computeLeagueGoalsAvg,
   deriveLeagueAccess,
   normalizeLeagueTable,
   pickTeamStanding,
 } from "./standings";
+import type { LeagueBaseline } from "@/lib/stats/predict";
 import { pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
@@ -220,6 +222,22 @@ export async function getLeagueStanding(
     };
   } catch {
     return { standing: null, leagueAvg: null };
+  }
+}
+
+/**
+ * Ligové měřítko pro λ (⌀ góly domácích/hostů v této lize). Sdílí `standings:` cache
+ * (per liga, TTL) → **0 API volání navíc**. Reprezentace tabulku nemají a mezisezónní
+ * tabulka je prázdná → `null` = predikce použije typický default (`DEFAULT_BASELINE`).
+ */
+export async function getLeagueBaseline(
+  leagueId: number
+): Promise<LeagueBaseline | null> {
+  if (isNationalLeague(leagueId)) return null;
+  try {
+    return computeLeagueBaseline(await cachedLeagueStandings(leagueId));
+  } catch {
+    return null;
   }
 }
 

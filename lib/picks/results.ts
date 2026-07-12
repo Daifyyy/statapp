@@ -23,6 +23,7 @@ export function summarizeSettled(rows: PredictionRow[]): SettledMatch[] {
       away: { id: r.awayTeamId, name: r.awayName, logoUrl: r.awayLogo },
       homeGoals: r.homeGoals,
       awayGoals: r.awayGoals,
+      afterExtraTime: r.status === "AET" || r.status === "PEN",
       predictedSide,
       predictedProb: probOfSide(r, predictedSide),
       outcomeHit: predictedSide === actualOutcome(r.homeGoals, r.awayGoals),

@@ -41,3 +41,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 scripts/.national-fixtures.json
+
+# Lokální cache pro npm run backtest (stažené historické zápasy)
+.cache/

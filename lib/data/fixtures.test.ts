@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { normalizeUpcomingFixtures } from "./fixtures";
+import { fullTimeGoals, normalizeUpcomingFixtures } from "./fixtures";
 import type { ApiFixture } from "./apiFootball";
+
+/** Odehraný zápas: `goals` = koncové skóre, `score.fulltime` = stav po 90 min. */
+function played(
+  goals: { home: number | null; away: number | null },
+  fulltime?: { home: number | null; away: number | null }
+): ApiFixture {
+  return {
+    fixture: { id: 1, date: "2026-06-20T18:00:00+00:00", status: { short: "AET" } },
+    league: { id: 1, season: 2026, name: "World Cup" },
+    teams: {
+      home: { id: 10, name: "Home", logo: "h.png" },
+      away: { id: 20, name: "Away", logo: "a.png" },
+    },
+    goals,
+    ...(fulltime ? { score: { fulltime } } : {}),
+  } as ApiFixture;
+}
 
 function fx(
   id: number,
@@ -76,5 +93,30 @@ describe("normalizeUpcomingFixtures", () => {
     expect(out[0].compareMode).toBe("NATIONAL");
     expect(out[0].homeCompareLeagueId).toBeNull();
     expect(out[0].awayCompareLeagueId).toBeNull();
+  });
+});
+
+describe("fullTimeGoals", () => {
+  it("zápas rozhodnutý v prodloužení → skóre po 90 min, ne koncové", () => {
+    // 1:1 po 90 min, 2:1 po prodloužení. Model predikuje 90 min → remíza.
+    expect(fullTimeGoals(played({ home: 2, away: 1 }, { home: 1, away: 1 }))).toEqual({
+      home: 1,
+      away: 1,
+    });
+  });
+
+  it("běžný zápas: score.fulltime == goals", () => {
+    expect(fullTimeGoals(played({ home: 3, away: 0 }, { home: 3, away: 0 }))).toEqual({
+      home: 3,
+      away: 0,
+    });
+  });
+
+  it("bez score.fulltime spadne zpět na goals", () => {
+    expect(fullTimeGoals(played({ home: 2, away: 1 }))).toEqual({ home: 2, away: 1 });
+  });
+
+  it("neznámé skóre → null", () => {
+    expect(fullTimeGoals(played({ home: null, away: null }))).toBeNull();
   });
 });

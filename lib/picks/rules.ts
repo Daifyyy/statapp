@@ -80,8 +80,12 @@ export function evaluateRule(row: PredictionRow, rule: PickRule): RuleMatch {
 function predictionOf(row: PredictionRow): MatchPrediction {
   return {
     available: row.available,
+    // Uložená λ jsou základní (před zostřením); pravidla je čtou jen jako „očekávané góly“,
+    // zostřenou variantu nepotřebují (pravděpodobnosti berou hotové z řádku).
     lambdaHome: row.lambdaHome,
     lambdaAway: row.lambdaAway,
+    lambdaHomeBase: row.lambdaHome,
+    lambdaAwayBase: row.lambdaAway,
     homeWin: row.homeWin,
     draw: row.draw,
     awayWin: row.awayWin,

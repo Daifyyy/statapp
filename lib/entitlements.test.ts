@@ -76,6 +76,8 @@ describe("toFreeResult", () => {
       available: true,
       lambdaHome: 1.5,
       lambdaAway: 1.1,
+      lambdaHomeBase: 1.5,
+      lambdaAwayBase: 1.1,
       homeWin: 0.4,
       draw: 0.3,
       awayWin: 0.3,

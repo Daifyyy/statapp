@@ -14,6 +14,7 @@ import type {
   ReliabilityCurve,
   ReliabilityReport,
 } from "@/lib/picks/reliability";
+import type { MarketBenchmark } from "@/lib/picks/market";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -88,6 +89,8 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [error, setError] = useState<string | null>(null);
   const [track, setTrack] = useState<TrackRecord | null>(null);
   const [benchmark, setBenchmark] = useState<BenchmarkTrackRecord | null>(null);
+  // `market` je už název pravidla (trh tipu) → benchmark proti sázkovce má vlastní jméno.
+  const [marketBench, setMarketBench] = useState<MarketBenchmark | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [reliability, setReliability] = useState<ReliabilityReport | null>(null);
 
@@ -124,6 +127,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         if (!active) return;
         if (d.trackRecord) setTrack(d.trackRecord);
         setBenchmark(d.benchmark ?? null);
+        setMarketBench(d.market ?? null);
         setBacktest(d.backtest ?? null);
         setReliability(d.reliability ?? null);
       })
@@ -164,6 +168,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
       )}
       {track && <TrackRecordPanel track={track} />}
+      {marketBench && marketBench.n > 0 && <MarketPanel market={marketBench} />}
       {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
       {reliability && <ReliabilityPanel reliability={reliability} />}
 
@@ -368,6 +373,64 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-lg font-bold tabular-nums text-foreground">{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
     </div>
+  );
+}
+
+/**
+ * Náš model vs. TRH (odmaržované kurzy) na stejných klubových zápasech. Nejtvrdší
+ * měřítko, jaké máme: dokud trh vede, jsou „value" tipy spíš chybou modelu než hranou.
+ * Reprezentace vynechané (nemají kurzy a jsou napříč konfederacemi nesrovnatelné).
+ */
+function MarketPanel({ market }: { market: MarketBenchmark }) {
+  const { n, our, market: mkt, avgOverround } = market;
+  if (!our || !mkt) return null;
+  const beatsMarket = our.logloss < mkt.logloss;
+  const diff = Math.abs(mkt.logloss - our.logloss);
+  return (
+    <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Náš model vs. kurzy sázkovky
+        </p>
+        <span className="text-[11px] text-muted">{n} klubových zápasů</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <div
+          className={`rounded-xl p-2.5 ${
+            beatsMarket ? "bg-positive/10 ring-1 ring-positive/30" : "bg-background"
+          }`}
+        >
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {our.logloss.toFixed(3)}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">Náš model</div>
+        </div>
+        <div
+          className={`rounded-xl p-2.5 ${
+            !beatsMarket ? "bg-positive/10 ring-1 ring-positive/30" : "bg-background"
+          }`}
+        >
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {mkt.logloss.toFixed(3)}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">Trh (bez marže)</div>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-muted">
+        Log-loss 1X2 (nižší = lepší) proti kurzům očištěným o marži
+        {avgOverround != null && ` (⌀ ${((avgOverround - 1) * 100).toFixed(1)} %)`}.{" "}
+        {beatsMarket ? (
+          <span className="font-semibold text-positive">
+            ✅ Model překonává trh o {diff.toFixed(3)} → value tipy mají oporu.
+          </span>
+        ) : (
+          <span className="font-semibold text-foreground">
+            ⚠ Trh je zatím lepší o {diff.toFixed(3)} → ber „hranu“ u tipů s rezervou.
+          </span>
+        )}
+        {n < 100 && " Malý vzorek – orientační."}
+      </p>
+    </section>
   );
 }
 

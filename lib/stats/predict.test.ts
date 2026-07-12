@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Metric, MetricValue, TeamComparison, Venue } from "@/lib/types";
-import { predictMatch, drawTau, poissonVector, sharpenLambdas } from "./predict";
+import {
+  predictMatch,
+  drawTau,
+  gridProbs,
+  poissonVector,
+  sharpenLambdas,
+  PREDICT_PARAMS,
+} from "./predict";
 
 /** Postaví minimální TeamComparison s danými hodnotami metrik (stejné pro všechny venue). */
 function team(
@@ -28,13 +35,62 @@ function team(
   };
 }
 
+/** Tým s hodnotami per varianta (nový model čte venue vůči ligovému měřítku). */
+function teamAt(
+  home: Partial<Record<Metric, number>>,
+  away: Partial<Record<Metric, number>>
+): TeamComparison {
+  const values: MetricValue[] = [];
+  const push = (venue: Venue, vals: Partial<Record<Metric, number>>) => {
+    for (const [metric, value] of Object.entries(vals)) {
+      values.push({
+        metric: metric as Metric,
+        venue,
+        value,
+        lowConfidence: false,
+        sampleSize: 10,
+        breakdown: [],
+      });
+    }
+  };
+  push("HOME", home);
+  push("AWAY", away);
+  return { team: { id: 1, name: "T", logoUrl: "", country: "" }, values, summary: [] };
+}
+
+/** Ligově průměrný tým: doma dává/dostává přesně tolik co průměr ligy, venku taky. */
+const AVERAGE_HOME = { GOALS_FOR: 1.5, GOALS_AGAINST: 1.2 }; // doma dá 1.5, dostane 1.2
+const AVERAGE_AWAY = { GOALS_FOR: 1.2, GOALS_AGAINST: 1.5 }; // venku dá 1.2, dostane 1.5
+
 describe("predictMatch", () => {
-  it("symetrické týmy → homeWin ≈ awayWin a součet ≈ 1", () => {
-    const a = team({ GOALS_FOR: 1.5, GOALS_AGAINST: 1.5 });
-    const b = team({ GOALS_FOR: 1.5, GOALS_AGAINST: 1.5 });
+  it("dva ligově průměrné týmy → λ = ligové měřítko (domácí výhoda z něj)", () => {
+    // Nový model normalizuje sílu vůči lize, takže průměrný pár dá přesně ligový průměr:
+    // 1.5 : 1.2. Domácí výhoda je v tom rozdílu – λ ji nepřidává zvlášť.
+    const a = teamAt(AVERAGE_HOME, AVERAGE_AWAY);
+    const b = teamAt(AVERAGE_HOME, AVERAGE_AWAY);
     const p = predictMatch(a, b);
+    expect(p.lambdaHome).toBeCloseTo(1.5, 6);
+    expect(p.lambdaAway).toBeCloseTo(1.2, 6);
     expect(p.homeWin + p.draw + p.awayWin).toBeCloseTo(1, 5);
-    expect(Math.abs(p.homeWin - p.awayWin)).toBeLessThan(0.02);
+    expect(p.homeWin).toBeGreaterThan(p.awayWin);
+  });
+
+  it("shrinkage: malý vzorek stáhne sílu k ligovému průměru", () => {
+    const strong = (sample: number): TeamComparison => ({
+      team: { id: 1, name: "T", logoUrl: "", country: "" },
+      values: [
+        { metric: "GOALS_FOR", venue: "HOME", value: 3.0, lowConfidence: false, sampleSize: sample, breakdown: [] },
+        { metric: "GOALS_AGAINST", venue: "HOME", value: 1.2, lowConfidence: false, sampleSize: sample, breakdown: [] },
+      ],
+      summary: [],
+    });
+    const opponent = teamAt(AVERAGE_HOME, AVERAGE_AWAY);
+    const thin = predictMatch(strong(2), opponent).lambdaHome;
+    const solid = predictMatch(strong(30), opponent).lambdaHome;
+    // Stejná syrová čísla, jiný vzorek: z dvou zápasů model nevěří, z třiceti ano.
+    expect(thin).toBeLessThan(solid);
+    expect(thin).toBeLessThan(2.4);
+    expect(solid).toBeGreaterThan(2.6);
   });
 
   it("silný útok doma vs slabá obrana hosta → výrazně vyšší homeWin", () => {
@@ -73,6 +129,39 @@ describe("predictMatch", () => {
     const p = predictMatch(onlyTotal(2, 1), onlyTotal(1, 2));
     expect(p.lambdaHome).toBeGreaterThan(0);
     expect(p.homeWin + p.draw + p.awayWin).toBeCloseTo(1, 5);
+  });
+
+  it("ukládaná λ jsou ZÁKLADNÍ (před zostřením) – z nich jde predikci přepočítat", () => {
+    const p = predictMatch(
+      team({ GOALS_FOR: 2.4, GOALS_AGAINST: 0.9 }),
+      team({ GOALS_FOR: 0.8, GOALS_AGAINST: 2.2 })
+    );
+    // Aktuálně sharpen = 1 (no-op) → zobrazovaná i základní λ jsou shodné…
+    expect(p.lambdaHomeBase).toBeCloseTo(p.lambdaHome, 10);
+    // …a mřížka nad základními λ musí reprodukovat uložené pravděpodobnosti (to je
+    // celý smysl: `reprice` počítá totéž z DB řádku, aniž by cokoli fetchoval).
+    const g = gridProbs(p.lambdaHomeBase, p.lambdaAwayBase);
+    expect(g.homeWin).toBeCloseTo(p.homeWin, 10);
+    expect(g.draw).toBeCloseTo(p.draw, 10);
+    expect(g.awayWin).toBeCloseTo(p.awayWin, 10);
+    expect(g.over25).toBeCloseTo(p.over25, 10);
+    expect(g.bttsYes).toBeCloseTo(p.bttsYes, 10);
+  });
+
+  it("post-parametry (ρ, zostření) mění mřížku, ne λ → přepočet je čistá matematika", () => {
+    const base: [number, number] = [1.9, 1.0];
+    const now = gridProbs(...base, PREDICT_PARAMS);
+    const sharper = gridProbs(...base, { rho: PREDICT_PARAMS.rho, sharpen: 2 });
+    const flatter = gridProbs(...base, { rho: -0.25, sharpen: 1 });
+
+    // Zostření: favorit dostane víc, součet pravděpodobností drží.
+    expect(sharper.homeWin).toBeGreaterThan(now.homeWin);
+    expect(sharper.homeWin + sharper.draw + sharper.awayWin).toBeCloseTo(1, 5);
+    // Zostření drží součet λ (celkové góly) → Over 2.5 se skoro nehne.
+    expect(sharper.lambdaHome + sharper.lambdaAway).toBeCloseTo(base[0] + base[1], 10);
+    expect(sharper.over25).toBeCloseTo(now.over25, 2);
+    // Zápornější ρ → víc remíz.
+    expect(flatter.draw).toBeGreaterThan(now.draw);
   });
 
   it("lowConfidence se propíše z podkladových metrik", () => {
@@ -173,14 +262,18 @@ describe("sharpenLambdas", () => {
 });
 
 describe("predictMatch – LAMBDA_SHARPEN no-op (default)", () => {
-  it("default (s=1) → predikce stojí na nezměněných λ z expectedGoals", () => {
-    // Domácí silnější: λ se nesmí defaultně zostřit (no-op), reportované λ = vstupní průměr.
-    const home = team({ GOALS_FOR: 2.2, GOALS_AGAINST: 1.0 });
-    const away = team({ GOALS_FOR: 0.9, GOALS_AGAINST: 1.8 });
-    const p = predictMatch(home, away);
-    // λ_home = mean(2.2, 1.8) = 2.0; λ_away = mean(0.9, 1.0) = 0.95 (žádné zostření).
-    expect(p.lambdaHome).toBeCloseTo(2.0);
-    expect(p.lambdaAway).toBeCloseTo(0.95);
+  it("default (s=1) → λ = ligové měřítko × síla útoku × slabost obrany (bez zostření)", () => {
+    // Bez shrinkage (k=0) je vzorec čitelný: λ_home = 1.5 × (2.4/1.5) × (1.8/1.5) = 2.88.
+    const home = teamAt({ GOALS_FOR: 2.4, GOALS_AGAINST: 1.2 }, AVERAGE_AWAY);
+    const away = teamAt(AVERAGE_HOME, { GOALS_FOR: 1.2, GOALS_AGAINST: 1.8 });
+    const p = predictMatch(home, away, {
+      tuning: { shrinkMatches: 0, strength: 1 },
+    });
+    expect(p.lambdaHome).toBeCloseTo(1.5 * (2.4 / 1.5) * (1.8 / 1.5), 6);
+    // Hosté průměrní proti průměrné domácí obraně → λ = ligové měřítko hostů.
+    expect(p.lambdaAway).toBeCloseTo(1.2, 6);
+    // Zostření je no-op → zobrazená λ = základní λ.
+    expect(p.lambdaHomeBase).toBeCloseTo(p.lambdaHome, 10);
   });
 });
 

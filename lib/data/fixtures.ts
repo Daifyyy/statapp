@@ -42,3 +42,27 @@ export function normalizeUpcomingFixtures(raw: ApiFixture[]): UpcomingFixture[] 
     })
     .sort((a, b) => a.kickoff.localeCompare(b.kickoff));
 }
+
+/**
+ * Skóre po **90 minutách** (regulérní hrací doba) – to, co predikuje model.
+ *
+ * `fixture.goals` je koncové skóre, takže u zápasů rozhodnutých v prodloužení (`AET`)
+ * nebo na penalty (`PEN`) nese góly ze 120 minut: vyřazovací zápas 1:1 po 90 min
+ * skončí v `goals` jako 2:1 → settle by z remízy udělal výhru a kalibrace by z toho
+ * počítala 1X2, Over 2.5 i Dixon–Coles ρ proti tomu, co model vůbec nemodeluje.
+ * `score.fulltime` drží stav po 90 min → settle bere jeho.
+ *
+ * Fallback na `goals` je pro případ, že API `score` nevrátí (u `FT` jsou obě hodnoty
+ * shodné, takže fallback nic nezkreslí). `null` = skóre neznámé.
+ */
+export function fullTimeGoals(
+  f: ApiFixture
+): { home: number; away: number } | null {
+  const ft = f.score?.fulltime;
+  if (typeof ft?.home === "number" && typeof ft?.away === "number") {
+    return { home: ft.home, away: ft.away };
+  }
+  const { home, away } = f.goals;
+  if (home == null || away == null) return null;
+  return { home, away };
+}

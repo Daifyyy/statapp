@@ -1,4 +1,4 @@
-import { getCompareTeam } from "./repository";
+import { getCompareTeam, getLeagueBaseline } from "./repository";
 import {
   getCompareNationalTeamFromFixture,
   getCompareNationalHomeAwayTeamFromFixture,
@@ -16,6 +16,7 @@ import {
   fetchOdds,
   FINISHED_STATUSES,
 } from "./apiFootball";
+import { fullTimeGoals } from "./fixtures";
 import {
   upsertPrediction,
   getUnsettledPredictions,
@@ -32,8 +33,15 @@ import {
  * settle-results: u odehraných predikcí dotáhne skutečný výsledek.
  */
 
-/** Verze modelu – bump při změně DC_RHO/logiky (kvůli kalibraci per verzi). */
-export const MODEL_VERSION = 1;
+/**
+ * Verze modelu = **co generuje λ** (okna, váhy, xG zpevnění, build týmů). Bump vynuluje
+ * dataset (kalibrace i track-record běží per verzi), protože stará λ už nejde srovnávat.
+ *
+ * **NEbumpuj kvůli ρ / zostření λ** – to jsou post-parametry nad uloženými λ
+ * (`PREDICT_PARAMS` v `lib/stats/predict.ts`). Změna konstanty + `npm run reprice`
+ * přepočte historii čistou matematikou, bez API a bez ztráty nasbíraných zápasů.
+ */
+export const MODEL_VERSION = 2;
 
 /** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
 export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];
@@ -81,6 +89,9 @@ export async function runPredictUpcoming(
     // venue-split (home/away z fixtures → predikce má domácí výhodu).
     const national = isNationalTournamentLeague(leagueId);
     const homeAway = national && isNationalHomeAwayLeague(leagueId);
+    // Ligové měřítko pro λ – 1× per liga, z už cachované tabulky (0 API navíc).
+    // Reprezentace tabulku nemají → null → predikce použije typický default.
+    const baseline = (await getLeagueBaseline(leagueId)) ?? undefined;
     const buildSide = (t: { id: number; name: string; logo: string }) => {
       if (!national) return getCompareTeam(t.id, leagueId, false);
       const meta = { name: t.name, logoUrl: t.logo, country: t.name };
@@ -96,7 +107,7 @@ export async function runPredictUpcoming(
           buildSide(f.teams.away),
         ]);
         if (!home || !away) continue;
-        const result = compareTeams(home, away);
+        const result = compareTeams(home, away, new Date(), { baseline });
         const p = result.prediction;
         if (!p) continue;
         await upsertPrediction({
@@ -111,8 +122,10 @@ export async function runPredictUpcoming(
           homeLogo: result.home.team.logoUrl,
           awayLogo: result.away.team.logoUrl,
           available: p.available,
-          lambdaHome: p.lambdaHome,
-          lambdaAway: p.lambdaAway,
+          // Ukládej ZÁKLADNÍ λ (před zostřením) – z něj jde predikci přepočítat při
+          // změně ρ/zostření (`npm run reprice`) bez resetu datasetu.
+          lambdaHome: p.lambdaHomeBase,
+          lambdaAway: p.lambdaAwayBase,
           homeWin: p.homeWin,
           draw: p.draw,
           awayWin: p.awayWin,
@@ -178,11 +191,13 @@ export async function runSettleResults(): Promise<{
     }
     for (const f of fixtures) {
       if (!FINISHED_STATUSES.has(f.fixture.status.short)) continue;
+      // Skóre po 90 min (ne koncové) – model predikuje regulérní hrací dobu, viz `fullTimeGoals`.
+      const ft = fullTimeGoals(f);
       await applyResult(
         f.fixture.id,
         f.fixture.status.short,
-        f.goals.home,
-        f.goals.away
+        ft?.home ?? null,
+        ft?.away ?? null
       );
       settled++;
     }
