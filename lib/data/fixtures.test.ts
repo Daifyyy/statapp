@@ -37,13 +37,16 @@ function fx(
   } as ApiFixture;
 }
 
+/** Fixní „teď" – všechny testovací výkopy níže leží po něm (= nadcházející). */
+const NOW = new Date("2026-06-23T10:00:00+00:00");
+
 describe("normalizeUpcomingFixtures", () => {
   it("vyřadí ligy mimo sledovaný seznam", () => {
     const raw = [
       fx(1, 39, "NS", "2026-06-23T18:00:00+00:00"), // Premier League – sledovaná
       fx(2, 999999, "NS", "2026-06-23T18:00:00+00:00"), // neznámá liga – pryč
     ];
-    const out = normalizeUpcomingFixtures(raw);
+    const out = normalizeUpcomingFixtures(raw, NOW);
     expect(out.map((f) => f.leagueId)).toEqual([39]);
   });
 
@@ -53,8 +56,30 @@ describe("normalizeUpcomingFixtures", () => {
       fx(2, 39, "NS", "2026-06-23T18:00:00+00:00"),
       fx(3, 39, "AET", "2026-06-23T12:00:00+00:00"),
     ];
-    const out = normalizeUpcomingFixtures(raw);
+    const out = normalizeUpcomingFixtures(raw, NOW);
     expect(out.map((f) => f.fixtureId)).toEqual([2]);
+  });
+
+  it("vyřadí zápas s výkopem v minulosti i když má status NS (hodinu stará cache)", () => {
+    // Přesně případ Argentina–Švýcarsko: zápas se ráno odehrál, ale denní rozpis
+    // v `ApiCache` ho ještě nese jako `NS` → status by ho v Programu nechal.
+    const raw = [
+      fx(1, 1, "NS", "2026-06-23T03:00:00+00:00"), // už začal → pryč
+      fx(2, 1, "NS", "2026-06-23T21:00:00+00:00"), // večer → zůstává
+    ];
+    const out = normalizeUpcomingFixtures(raw, NOW);
+    expect(out.map((f) => f.fixtureId)).toEqual([2]);
+  });
+
+  it("vyřadí odložené / zrušené / kontumované (drží původní datum výkopu)", () => {
+    const raw = [
+      fx(1, 39, "PST", "2026-06-23T18:00:00+00:00"),
+      fx(2, 39, "CANC", "2026-06-23T18:00:00+00:00"),
+      fx(3, 39, "ABD", "2026-06-23T18:00:00+00:00"),
+      fx(4, 39, "NS", "2026-06-23T18:00:00+00:00"),
+    ];
+    const out = normalizeUpcomingFixtures(raw, NOW);
+    expect(out.map((f) => f.fixtureId)).toEqual([4]);
   });
 
   it("řadí dle výkopu vzestupně", () => {
@@ -63,7 +88,7 @@ describe("normalizeUpcomingFixtures", () => {
       fx(2, 140, "NS", "2026-06-23T16:00:00+00:00"),
       fx(3, 135, "NS", "2026-06-23T18:00:00+00:00"),
     ];
-    const out = normalizeUpcomingFixtures(raw);
+    const out = normalizeUpcomingFixtures(raw, NOW);
     expect(out.map((f) => f.fixtureId)).toEqual([2, 3, 1]);
   });
 
@@ -72,24 +97,26 @@ describe("normalizeUpcomingFixtures", () => {
       fx(1, 39, "NS", "2026-06-23T18:00:00+00:00"), // klub
       fx(2, 1, "NS", "2026-06-23T18:00:00+00:00"), // MS = národní turnaj
     ];
-    const out = normalizeUpcomingFixtures(raw);
+    const out = normalizeUpcomingFixtures(raw, NOW);
     expect(out.find((f) => f.leagueId === 39)?.national).toBe(false);
     expect(out.find((f) => f.leagueId === 1)?.national).toBe(true);
   });
 
   it("klubový zápas má CLUB mód s leagueId u obou stran (deep-link ready)", () => {
-    const out = normalizeUpcomingFixtures([
-      fx(1, 39, "NS", "2026-06-23T18:00:00+00:00"),
-    ]);
+    const out = normalizeUpcomingFixtures(
+      [fx(1, 39, "NS", "2026-06-23T18:00:00+00:00")],
+      NOW
+    );
     expect(out[0].compareMode).toBe("CLUB");
     expect(out[0].homeCompareLeagueId).toBe(39);
     expect(out[0].awayCompareLeagueId).toBe(39);
   });
 
   it("reprezentační zápas má NATIONAL mód a konfederace null (dotahuje repo)", () => {
-    const out = normalizeUpcomingFixtures([
-      fx(1, 1, "NS", "2026-06-23T18:00:00+00:00"),
-    ]);
+    const out = normalizeUpcomingFixtures(
+      [fx(1, 1, "NS", "2026-06-23T18:00:00+00:00")],
+      NOW
+    );
     expect(out[0].compareMode).toBe("NATIONAL");
     expect(out[0].homeCompareLeagueId).toBeNull();
     expect(out[0].awayCompareLeagueId).toBeNull();

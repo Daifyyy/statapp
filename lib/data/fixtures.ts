@@ -9,20 +9,44 @@ import {
 const FIXTURE_LEAGUES = new Set(FIXTURE_LIST_LEAGUE_IDS);
 
 /**
+ * Statusy, po kterých zápas do Programu nepatří: dohrané (`FINISHED_STATUSES`) plus
+ * zrušené/odložené/kontumované. U těch drží API původní datum výkopu, takže by v rozpisu
+ * strašily jako „bude se hrát".
+ */
+const NOT_UPCOMING = new Set([
+  ...FINISHED_STATUSES,
+  "PST", // Postponed
+  "CANC", // Cancelled
+  "ABD", // Abandoned
+  "AWD", // Technical loss
+  "WO", // WalkOver
+]);
+
+/**
  * Profiltruje a normalizuje syrové zápasy z `/fixtures?date=` na lehký tvar pro
- * záložku „Zápasy": jen naše ligy (`FIXTURE_LEAGUES`), bez dohraných
- * (`FINISHED_STATUSES`), seřazené dle výkopu. Čistá funkce (testovatelná, bez DB).
+ * záložku „Zápasy": jen naše ligy (`FIXTURE_LEAGUES`), jen zápasy, které **ještě
+ * nezačaly**, seřazené dle výkopu. Čistá funkce (testovatelná, bez DB).
+ *
+ * **Status sám nestačí** – denní rozpis je v `ApiCache` až hodinu starý, takže odehraný
+ * zápas v něm ještě může nést `NS` a Program by ho ukazoval jako nadcházející. Proto
+ * platí i tvrdá podmínka „výkop je v budoucnu": zápas, který začal, do Programu nepatří,
+ * ať API hlásí cokoli (výsledek pak ukáže záložka Výsledky).
  *
  * Cíl deep-linku: klub → CLUB mód s `leagueId` u obou týmů; reprezentace → NATIONAL mód,
  * kde „ligou" je konfederace týmu – tu zde neznáme (potřebuje cachované seznamy), proto
  * `null` a dotahuje ji `getFixturesByDates` (real). Mock plní klubové fixtures rovnou.
  */
-export function normalizeUpcomingFixtures(raw: ApiFixture[]): UpcomingFixture[] {
+export function normalizeUpcomingFixtures(
+  raw: ApiFixture[],
+  now: Date = new Date()
+): UpcomingFixture[] {
+  const nowMs = now.getTime();
   return raw
     .filter(
       (f) =>
         FIXTURE_LEAGUES.has(f.league.id) &&
-        !FINISHED_STATUSES.has(f.fixture.status.short)
+        !NOT_UPCOMING.has(f.fixture.status.short) &&
+        new Date(f.fixture.date).getTime() > nowMs
     )
     .map((f) => {
       const national = isNationalTournamentLeague(f.league.id);

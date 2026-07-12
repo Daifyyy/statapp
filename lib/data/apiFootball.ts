@@ -57,8 +57,15 @@ async function doFetch<T>(
   }
   const res = await fetch(url, {
     headers: { "x-apisports-key": apiKey() },
-    // Historická data jsou neměnná → dlouhá revalidace (§1.1).
-    next: { revalidate: 60 * 60 * 24 },
+    // ŽÁDNÁ Next data cache. Cachovací vrstva je Postgres (`ApiCache` s TTL per
+    // endpoint + trvalá `MatchStatCache`) – tenhle fetch je to, co se volá, teprve
+    // když ta vrstva chce čerstvá data. Next fetch cache s pevnou revalidací tu
+    // seděla NAD ní a přebíjela každý kratší TTL: `cachedJson` po hodině správně
+    // sáhl pro nový denní rozpis, ale dostal 24 h starou odpověď a uložil si ji
+    // s čerstvou expirací → dohraný zápas (Argentina–Švýcarsko, status AET) se
+    // v Programu dál tvářil jako nadcházející. Totéž tiše potkávalo tabulky (6 h),
+    // zranění (6 h) i střelce (12 h).
+    cache: "no-store",
   });
   if (!res.ok) {
     throw new Error(`API-Football ${path} HTTP ${res.status}`);

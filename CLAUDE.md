@@ -212,6 +212,12 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
   (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
   `lib/data/mock/fixtures.ts` (funguje bez DB/API).
+  **Do Programu patří jen zápas, který ještě NEZAČAL** – `normalizeUpcomingFixtures` filtruje
+  na třech úrovních: naše liga, status mimo `NOT_UPCOMING` (dohrané + `PST`/`CANC`/`ABD`/`AWD`/`WO`,
+  ty drží původní datum a strašily by v rozpisu) a **výkop v budoucnu** (parametr `now`). Ta časová
+  podmínka je pojistka proti stavu, ne kosmetika: rozpis dne je v `ApiCache` až hodinu starý, takže
+  odehraný zápas v něm ještě může nést `NS` (odtud „Argentina–Švýcarsko se hraje ve 3:00", ačkoli
+  skončilo `AET 3:1`). Status sám o sobě nestačí.
 - **Data (Výsledky):** `getRecentResults()` (`repository.ts`) = posledních ~14 dní settlnutých
   predikcí (`getRecentSettledPredictions` z `predictionStore`, jen čte DB) → čistý mapper
   **`summarizeSettled`** (`lib/picks/results.ts`, testy `results.test.ts`) na `SettledMatch`
@@ -256,6 +262,12 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`types.ts`) značí metriky, kde je nižší hodnota lepší (obdržené góly, karty…).
 
 ## Rate-limiting / výkon
+- **Cachovací vrstva je JEN Postgres** (`ApiCache` s TTL per endpoint + trvalá `MatchStatCache`).
+  `apiGet` proto fetchuje s **`cache: "no-store"`** – Next data cache tam **nesmí** být. Seděla
+  nad naší vrstvou s pevnou 24h revalidací a **přebíjela každý kratší TTL**: `cachedJson` po hodině
+  správně sáhl pro nový denní rozpis, dostal 24 h starou odpověď a uložil si ji s čerstvou expirací
+  → dohraný zápas se v Programu tvářil jako nadcházející a stejně tiše zastarávaly tabulky (6 h),
+  zranění (6 h) i střelci (12 h). Nevracet zpět.
 - api-sports limit 300/min, ale edge nás reálně stropuje ~5 úspěšných volání/s a občas
   odmítá i pod limitem (distribuované nody). `lib/data/rateLimiter.ts` = semafor
   souběžnosti 3 + klouzavý minutový strop; `apiGet` retry s krátkým backoffem.
