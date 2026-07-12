@@ -116,10 +116,21 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   Dřív se xG používalo **jen na útok** a přínos byl mizivý (log-loss −0.002); s xG i na obraně je
   to **−0.0075** (1.0191 → 1.0116 na sezóně 2025; potvrzeno i na 2024). Čisté xG (w=1) je **horší**
   než mix → góly a xG se doplňují, nenahrazují.
-  **Změřeno backtestem** (hold-out 2025): starý model (aritmetický průměr útoku a obrany, váhy
-  15/30/55) log-loss **1.0474**, přesnost 46.6 %, ECE 0.022 → nový **1.0116**, **50.7 %**,
-  **ECE 0.008** (naivní konstanta 1.0726). Největší podíl mají **váhy**, druhý **xG na obraně**.
-  `MODEL_VERSION = 5` (λ se změnila → dataset predikcí se počítá od verze 5).
+- **Síly týmů = ratingy s korekcí na soupeře** (`lib/stats/ratings.ts`, `computeRatings`, „C2“):
+  λ se **primárně** staví z nich, okenní průměry metrik jsou už jen **fallback** (reprezentace,
+  cross-league porovnání, studená cache). Maherovo iterativní schéma: `góly ≈ ref × útok(i) ×
+  slabost_obrany(j)`, útoky se odhadnou při daných obranách a naopak (5 iterací), s
+  **exponenciálním časovým útlumem** (`halfLifeDays = 270` – nahrazuje tři pevná okna) a
+  shrinkage (2). Odpovídá to na „**s kým se hrálo**“ – tým po losu s elitou dosud vypadal slabě.
+  Zdroj: **už cachované zápasy** (`MatchStatCache`; domácí řádek nese góly i xG obou stran přes
+  `goalsAgainst`/`xgAgainst` → zápas jde složit bez párování) → `getLeagueRatings`, **0 volání API**,
+  výsledek cachovaný per liga (TTL 6 h). **Ratingy platí jen uvnitř jedné ligy** (jsou normalizované
+  na ligový průměr 1.0) → cross-league porovnání zůstává na okenním modelu.
+  Backtest: log-loss **1.0116 → 1.0001** (2025) a **1.0010 → 0.9869** (2024, hold-out).
+  **Změřeno backtestem** (3 511 zápasů): ráno (aritmetický průměr útoku a obrany, váhy 15/30/55)
+  log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → dnes **0.9924**, **51.8 %**, ECE 0.011
+  (naivní konstanta 1.0770). Pořadí přínosů: **váhy oken** > **ratingy (C2)** > **xG na obraně**.
+  `MODEL_VERSION = 6` (λ se změnila → dataset predikcí se počítá od verze 6).
 - **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem. Poissonova mřížka ho měla **horší
   než konstanta** „54.7 % vždy" (0.6920 vs. 0.6888) a přestřelený (ECE 0.033). Proto je BTTS
   **jediný trh, který nepochází z mřížky**: `scoringProb` ho staví z **empirických frekvencí**

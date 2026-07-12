@@ -30,8 +30,10 @@ import {
   cachedJson,
   getCachedMatchStats,
   saveMatchStats,
+  CURRENT_CACHE_VERSION,
   type MatchContext,
 } from "./cache";
+import { prisma } from "@/lib/db";
 import { selectCurrentInjuries } from "./injuries";
 import {
   computeLeagueBaseline,
@@ -40,7 +42,15 @@ import {
   normalizeLeagueTable,
   pickTeamStanding,
 } from "./standings";
-import type { LeagueBaseline } from "@/lib/stats/predict";
+import { DEFAULT_BASELINE, DEFAULT_TUNING, type LeagueBaseline } from "@/lib/stats/predict";
+import {
+  computeRatings,
+  RATING_MIN_MATCHES,
+  RATING_OPTIONS,
+  RATING_WINDOW_DAYS,
+  type RatingMatch,
+  type TeamStrength,
+} from "@/lib/stats/ratings";
 import { pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
@@ -238,6 +248,99 @@ export async function getLeagueBaseline(
     return computeLeagueBaseline(await cachedLeagueStandings(leagueId));
   } catch {
     return null;
+  }
+}
+
+/**
+ * Síly týmů ligy s **korekcí na soupeře a časovým útlumem** (`computeRatings`, C2) –
+ * to, z čeho se staví λ. Zdrojem jsou **už cachované zápasy** (`MatchStatCache`), takže
+ * **0 volání API**: jeden řádek nese góly obou stran (`goalsFor`/`goalsAgainst`) i xG obou
+ * stran (`xg`/`xgAgainst`), takže zápas jde zrekonstruovat i z poloviny dvojice.
+ *
+ * Výsledek se cachuje per liga (TTL 6 h) – síly se mezi koly nemění. Málo dat (nová liga,
+ * studená cache) → `null` a predikce spadne na okenní model.
+ */
+export async function getLeagueRatings(
+  leagueId: number
+): Promise<Map<number, TeamStrength> | null> {
+  if (isNationalLeague(leagueId)) return null;
+  try {
+    // Síly se mezi koly nemění → cachuj hotový výsledek (TTL 6 h jako tabulka). Map se
+    // do JSON neuloží, proto pole dvojic. `null` (málo dat) se necachuje – ať se to samo
+    // spraví, jakmile cache zápasů naroste.
+    const cached = await cachedJson<[number, TeamStrength][] | null>(
+      `ratings:${leagueId}:${CURRENT_SEASON}`,
+      STANDINGS_TTL,
+      async () => {
+        const table = await computeLeagueRatings(leagueId);
+        return table ? [...table.entries()] : null;
+      }
+    );
+    return cached && cached.length > 0 ? new Map(cached) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Vlastní výpočet sil ligy z cachovaných zápasů (bez cache vrstvy – tu řeší volající). */
+async function computeLeagueRatings(
+  leagueId: number
+): Promise<Map<number, TeamStrength> | null> {
+  {
+    const baseline = await getLeagueBaseline(leagueId);
+    const teams = await getTeamsByLeague(leagueId);
+    if (teams.length === 0) return null;
+
+    // JEDEN dotaz na všechny zápasy ligy; domácí a hostující řádek se spáruje podle
+    // `fixtureId` v paměti (dotaz na soupeře po jednom by byl N+1).
+    const since = new Date(Date.now() - RATING_WINDOW_DAYS * 24 * 3600 * 1000);
+    const rows = await prisma.matchStatCache.findMany({
+      where: {
+        teamId: { in: teams.map((t) => t.id) },
+        context: "league",
+        schemaVersion: CURRENT_CACHE_VERSION,
+        date: { gte: since },
+      },
+      select: {
+        teamId: true,
+        fixtureId: true,
+        date: true,
+        isHome: true,
+        goalsFor: true,
+        goalsAgainst: true,
+        xg: true,
+        xgAgainst: true,
+      },
+    });
+
+    // Domácí řádek nese skóre i xG OBOU stran (`goalsAgainst`/`xgAgainst`) → k sestavení
+    // zápasu stačí; hostující řádek dodá jen id soupeře.
+    const awayIdOf = new Map<number, number>();
+    for (const r of rows) if (!r.isHome) awayIdOf.set(r.fixtureId, r.teamId);
+
+    const matches: RatingMatch[] = [];
+    for (const r of rows) {
+      if (!r.isHome || r.goalsFor == null || r.goalsAgainst == null) continue;
+      const awayId = awayIdOf.get(r.fixtureId);
+      if (awayId == null || awayId === r.teamId) continue;
+      matches.push({
+        date: r.date.toISOString(),
+        homeId: r.teamId,
+        awayId,
+        homeGoals: r.goalsFor,
+        awayGoals: r.goalsAgainst,
+        homeXg: r.xg ?? undefined,
+        awayXg: r.xgAgainst ?? undefined,
+      });
+    }
+    if (matches.length < RATING_MIN_MATCHES) return null;
+
+    return computeRatings(matches, new Date().toISOString(), {
+      ...RATING_OPTIONS,
+      xgWeight: DEFAULT_TUNING.xgWeight, // stejná váha xG jako v λ (jeden zdroj pravdy)
+      home: baseline?.home ?? DEFAULT_BASELINE.home,
+      away: baseline?.away ?? DEFAULT_BASELINE.away,
+    });
   }
 }
 

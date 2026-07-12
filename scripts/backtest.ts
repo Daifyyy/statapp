@@ -86,6 +86,21 @@ const naivePick: ProbPick = () => NAIVE_PROBS;
 const over25Hit = (r: PredictionRow) => r.homeGoals! + r.awayGoals! >= 3;
 const bttsHit = (r: PredictionRow) => r.homeGoals! > 0 && r.awayGoals! > 0;
 
+/** `--ratings` / `--ratings=halfLifeDays,shrinkMatches,iterations` (C2). */
+function ratingsFromArgs():
+  | { halfLifeDays: number; shrinkMatches: number; xgWeight: number; iterations: number }
+  | undefined {
+  const flag = process.argv.find((a) => a === "--ratings" || a.startsWith("--ratings="));
+  if (!flag) return undefined;
+  const [hl, k, it] = flag.includes("=") ? nums(flag.split("=")[1]) : [];
+  return {
+    halfLifeDays: hl ?? 180,
+    shrinkMatches: k ?? 4,
+    xgWeight: DEFAULT_TUNING.xgWeight,
+    iterations: it ?? 5,
+  };
+}
+
 /** Log-loss + Brier binárního trhu (Přes 2.5 / oba skórují) nad odehranými řádky. */
 function binaryScore(
   rows: PredictionRow[],
@@ -270,6 +285,34 @@ async function main() {
     return;
   }
 
+  // Grid ratingů (`--grid-ratings`): poločas paměti × shrinkage. Sleduj log-loss I ECE –
+  // ratingy zvedají skill, ale můžou model udělat přesebevědomým.
+  if (process.argv.includes("--grid-ratings")) {
+    console.log("\n=== Grid ratingů (C2): poločas [dny] × shrinkage ===");
+    console.log("hl\\k      2                4                8               12");
+    for (const hl of [90, 120, 180, 270, 365]) {
+      const cells: string[] = [];
+      for (const k of [2, 4, 8, 12]) {
+        const r = backtest(history, {
+          seasons,
+          minMatches,
+          ratings: {
+            halfLifeDays: hl,
+            shrinkMatches: k,
+            xgWeight: DEFAULT_TUNING.xgWeight,
+            iterations: 5,
+          },
+        }).filter((x) => x.available);
+        const s = scoreProbs(r, ourProbs);
+        const ece = computeReliability(r).outcome.ece ?? 0;
+        cells.push(`${s.logloss.toFixed(4)}/${ece.toFixed(3)}`.padStart(17));
+      }
+      console.log(`${String(hl).padEnd(8)}${cells.join("")}`);
+    }
+    console.log("(log-loss/ECE; nižší = lepší. Okenní model: 1.0116/0.008)");
+    return;
+  }
+
   // `--tune=k,s[,t]` = jednorázový běh s konkrétními parametry λ (bez nich produkční default).
   const tuneArg = arg("tune");
   const tuning = tuneArg
@@ -278,12 +321,18 @@ async function main() {
         strength: nums(tuneArg)[1],
         totalSpread: nums(tuneArg)[2] ?? DEFAULT_TUNING.totalSpread,
         scoringStrength: nums(tuneArg)[3] ?? DEFAULT_TUNING.scoringStrength,
+        xgWeight: nums(tuneArg)[4] ?? DEFAULT_TUNING.xgWeight,
       }
     : undefined;
   if (tuning) console.log(`Ladění λ: ${JSON.stringify(tuning)}`);
 
+  // `--ratings[=halfLife,shrink,iter]` = síly s korekcí na soupeře a časovým útlumem (C2)
+  // místo okenních průměrů. Bez přepínače jede dosavadní model → dvojice běhů měří rozdíl.
+  const ratings = ratingsFromArgs();
+  if (ratings) console.log(`Ratingy (C2): ${JSON.stringify(ratings)}`);
+
   console.time("backtest");
-  const rows = backtest(history, { seasons, minMatches, tuning });
+  const rows = backtest(history, { seasons, minMatches, tuning, ratings });
   console.timeEnd("backtest");
 
   const usable = rows.filter((r) => r.available);

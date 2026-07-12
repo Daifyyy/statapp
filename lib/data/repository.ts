@@ -15,6 +15,7 @@ import type {
   Transfer,
 } from "@/lib/types";
 import type { LeagueBaseline } from "@/lib/stats/predict";
+import type { TeamStrength } from "@/lib/stats/ratings";
 import { isRealDataConfigured } from "@/lib/db";
 import { generateLeague } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
@@ -236,6 +237,17 @@ export async function getLeagueBaseline(
   leagueId: number
 ): Promise<LeagueBaseline | null> {
   if (useReal) return real.getLeagueBaseline(leagueId);
+  return null;
+}
+
+/**
+ * Síly týmů ligy s korekcí na soupeře a časovým útlumem (C2) – z už cachovaných zápasů,
+ * **0 volání API**. `null` (mock, reprezentace, studená cache) → predikce použije okenní model.
+ */
+export async function getLeagueRatings(
+  leagueId: number
+): Promise<Map<number, TeamStrength> | null> {
+  if (useReal) return real.getLeagueRatings(leagueId);
   return null;
 }
 

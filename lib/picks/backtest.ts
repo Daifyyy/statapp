@@ -6,6 +6,12 @@ import {
   type LeagueBaseline,
   type PredictTuning,
 } from "@/lib/stats/predict";
+import {
+  computeRatings,
+  type RatingMatch,
+  type RatingOptions,
+  type TeamStrength,
+} from "@/lib/stats/ratings";
 
 /**
  * Offline backtest: přehraje historické zápasy **stejným jádrem** (`compareTeams` →
@@ -139,6 +145,12 @@ export interface BacktestOptions {
   minMatches?: number;
   /** Ladicí parametry λ – grid search v `scripts/backtest.ts` (bez nich produkční default). */
   tuning?: PredictTuning;
+  /**
+   * Síly z `computeRatings` (korekce na soupeře + časový útlum) místo okenních průměrů.
+   * `undefined` = dosavadní model → dvojice běhů měří, co C2 přidává. Ligové měřítko
+   * (`home`/`away`) doplní backtest sám z tabulky předchozí sezóny.
+   */
+  ratings?: Omit<RatingOptions, "home" | "away">;
 }
 
 /**
@@ -154,6 +166,26 @@ export function backtest(
   const rows: PredictionRow[] = [];
   // Ligové měřítko se počítá 1× per liga+sezóna (z předchozí sezóny), ne pro každý zápas.
   const baselines = new Map<string, LeagueBaseline>();
+  // Zápasy per liga (pro ratingy) – ať se nefiltruje celá historie pro každý zápas.
+  const byLeague = new Map<number, RatingMatch[]>();
+  if (opts.ratings) {
+    for (const m of history) {
+      const list = byLeague.get(m.leagueId) ?? [];
+      list.push({
+        date: m.date,
+        homeId: m.homeId,
+        awayId: m.awayId,
+        homeGoals: m.homeGoals,
+        awayGoals: m.awayGoals,
+        homeXg: m.homeMetrics?.XG,
+        awayXg: m.awayMetrics?.XG,
+      });
+      byLeague.set(m.leagueId, list);
+    }
+  }
+  // Ratingy se přepočítávají po KOLECH (per liga a den), ne pro každý zápas zvlášť –
+  // zápasy téhož dne mají stejnou minulost, takže by to bylo jen dražší, ne přesnější.
+  const ratingCache = new Map<string, Map<number, TeamStrength>>();
 
   for (const m of history) {
     if (!seasons.has(m.season)) continue;
@@ -163,6 +195,25 @@ export function backtest(
     if (!baseline) {
       baseline = baselineFor(history, m.leagueId, m.season);
       baselines.set(key, baseline);
+    }
+
+    let strength: { home: TeamStrength; away: TeamStrength } | undefined;
+    if (opts.ratings) {
+      const day = m.date.slice(0, 10);
+      const rk = `${m.leagueId}:${day}`;
+      let table = ratingCache.get(rk);
+      if (!table) {
+        table = computeRatings(byLeague.get(m.leagueId) ?? [], m.date, {
+          ...opts.ratings,
+          home: baseline.home,
+          away: baseline.away,
+        });
+        ratingCache.set(rk, table);
+      }
+      const h = table.get(m.homeId);
+      const a = table.get(m.awayId);
+      // Tým bez historie (nováček v 1. kole) → ratingy nemá; spadni na okenní model.
+      if (h && a) strength = { home: h, away: a };
     }
 
     const home = buildTeamAt(
@@ -190,6 +241,7 @@ export function backtest(
     const p = compareTeams(home, away, new Date(m.date), {
       baseline,
       tuning: opts.tuning,
+      strength,
     }).prediction;
     if (!p) continue;
 

@@ -7,6 +7,7 @@ import type {
 } from "@/lib/types";
 import { lowConfidenceOf, sampleOrTotal, valueOf } from "./metricLookup";
 import { computeReadiness } from "./readiness";
+import type { TeamStrength } from "./ratings";
 
 const MAX_GOALS = 10; // mřížka Poissonu (0..10 pro každý tým)
 const MIN_LAMBDA = 0.2;
@@ -85,6 +86,12 @@ export const DEFAULT_TUNING: PredictTuning = {
 export interface PredictOptions {
   baseline?: LeagueBaseline;
   tuning?: PredictTuning;
+  /**
+   * Předpočítané síly obou týmů (poměry k lize, 1.0 = průměr) – z `lib/stats/ratings.ts`
+   * s korekcí na soupeře a časovým útlumem. Když jsou k dispozici, λ se staví z nich;
+   * jinak se síla odvodí z okenních průměrů metrik (fallback: reprezentace, chybějící data).
+   */
+  strength?: { home: TeamStrength; away: TeamStrength };
 }
 
 /**
@@ -309,8 +316,24 @@ export function predictMatch(
 ): MatchPrediction {
   const baseline = opts.baseline ?? DEFAULT_BASELINE;
   const tuning = opts.tuning ?? DEFAULT_TUNING;
-  const rawHome = expectedGoals(home, away, true, baseline, tuning);
-  const rawAway = expectedGoals(away, home, false, baseline, tuning);
+  const s = opts.strength;
+  // Síly buď z ratingů (korekce na soupeře + časový útlum), nebo z okenních průměrů metrik.
+  // `strength` funguje i tady: exponent stahuje poměry k lize (1.0 = ber je naplno).
+  const pow = (x: number) => Math.pow(x, tuning.strength);
+  const rawHome = s
+    ? clamp(
+        baseline.home * pow(s.home.attack) * pow(s.away.defense),
+        MIN_LAMBDA,
+        MAX_LAMBDA
+      )
+    : expectedGoals(home, away, true, baseline, tuning);
+  const rawAway = s
+    ? clamp(
+        baseline.away * pow(s.away.attack) * pow(s.home.defense),
+        MIN_LAMBDA,
+        MAX_LAMBDA
+      )
+    : expectedGoals(away, home, false, baseline, tuning);
   const readiness = computeReadiness(home, away);
 
   // Útlum rozptylu SOUČTU λ (kolik gólů zápas nabídne) k ligovému průměru; rozdíl λ

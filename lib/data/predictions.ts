@@ -1,4 +1,4 @@
-import { getCompareTeam, getLeagueBaseline } from "./repository";
+import { getCompareTeam, getLeagueBaseline, getLeagueRatings } from "./repository";
 import {
   getCompareNationalTeamFromFixture,
   getCompareNationalHomeAwayTeamFromFixture,
@@ -41,7 +41,7 @@ import {
  * (`PREDICT_PARAMS` v `lib/stats/predict.ts`). Změna konstanty + `npm run reprice`
  * přepočte historii čistou matematikou, bez API a bez ztráty nasbíraných zápasů.
  */
-export const MODEL_VERSION = 5;
+export const MODEL_VERSION = 6;
 
 /** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
 export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];
@@ -92,6 +92,9 @@ export async function runPredictUpcoming(
     // Ligové měřítko pro λ – 1× per liga, z už cachované tabulky (0 API navíc).
     // Reprezentace tabulku nemají → null → predikce použije typický default.
     const baseline = (await getLeagueBaseline(leagueId)) ?? undefined;
+    // Síly s korekcí na soupeře (C2) – taky 1× per liga, z cachovaných zápasů (0 API).
+    // Reprezentace/studená cache → null → padne se na okenní model.
+    const ratings = national ? null : await getLeagueRatings(leagueId);
     const buildSide = (t: { id: number; name: string; logo: string }) => {
       if (!national) return getCompareTeam(t.id, leagueId, false);
       const meta = { name: t.name, logoUrl: t.logo, country: t.name };
@@ -107,7 +110,13 @@ export async function runPredictUpcoming(
           buildSide(f.teams.away),
         ]);
         if (!home || !away) continue;
-        const result = compareTeams(home, away, new Date(), { baseline });
+        // Ratingy jen když je má liga pro OBA týmy (nováček bez historie → okenní model).
+        const rh = ratings?.get(f.teams.home.id);
+        const ra = ratings?.get(f.teams.away.id);
+        const result = compareTeams(home, away, new Date(), {
+          baseline,
+          strength: rh && ra ? { home: rh, away: ra } : undefined,
+        });
         const p = result.prediction;
         if (!p) continue;
         await upsertPrediction({
