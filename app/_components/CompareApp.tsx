@@ -26,7 +26,6 @@ import { CategoryScores } from "./CategoryScores";
 import { PlayStyleChart } from "./PlayStyleChart";
 import { computeCategoryScores } from "@/lib/stats/categories";
 import { computePlayStyle } from "@/lib/stats/playStyle";
-import { TeamLogo } from "./TeamLogo";
 import { TeamHeading } from "./TeamHeading";
 import { TeamCombobox } from "./TeamCombobox";
 import { AppHeader } from "./AppHeader";
