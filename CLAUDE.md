@@ -151,7 +151,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   **Změřeno backtestem** (3 511 zápasů): ráno (aritmetický průměr útoku a obrany, váhy 15/30/55)
   log-loss **1.0494**, přesnost 46.6 %, ECE 0.022 → dnes **0.9924**, **51.8 %**, ECE 0.011
   (naivní konstanta 1.0770). Pořadí přínosů: **váhy oken** > **ratingy (C2)** > **xG na obraně**.
-  `MODEL_VERSION = 6` (λ se změnila → dataset predikcí se počítá od verze 6).
+  `MODEL_VERSION = 7` (λ se změnila → dataset predikcí se počítá od verze 7; verze 6 = klubové
+  ratingy C2, verze 7 = globální ratingy reprezentací).
 - **BTTS („oba skórují") NEMÁ signál** – doložené, ne dojem. Poissonova mřížka ho měla **horší
   než konstanta** „54.7 % vždy" (0.6920 vs. 0.6888) a přestřelený (ECE 0.033). Proto je BTTS
   **jediný trh, který nepochází z mřížky**: `scoringProb` ho staví z **empirických frekvencí**
@@ -251,8 +252,18 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     (≥ `SEASON_COMPLETE_MIN`), je baseline ona (mezisezóna) → naplní se i nováčkům.
   - **LAST10 / LAST5** (30 / 55 %) = nejnovějších 10 / 5 zápasů dle data (napříč sezónami).
 - Reprezentace = časová okna BASE (12–24 m) / LAST12 / LAST6; soutěžní zápasy
-  mají vyšší váhu než přáteláky. Mají **užší sadu metrik** (`METRICS_BY_ENTITY` –
-  bez xG, držení, přihrávek, zákroků… které u nich v API/mocku chybí).
+  mají vyšší váhu než přáteláky.
+  **Reprezentace mají skoro plnou sadu metrik** (`METRICS_BY_ENTITY`) – vyloučené je **jen xG**.
+  Dřív se jim vynechávalo i držení, přihrávky, střely z/mimo vápno, zákroky a zblokované střely
+  s odůvodněním „u reprezentací statistiky chybí". **Změřeno na 1 533 reprezentačních řádcích
+  `MatchStatCache` a je to jinak:** když něco chybí, chybí **celá odpověď `/fixtures/statistics`**
+  (~třetina reprezentačních zápasů) – ne jednotlivé metriky. Mezi zápasy, které statistiky mají,
+  je držení míče v **99,5 %** (přesnost přihrávek 99,1 %, střely z vápna 99,4 %) = stejně dostupné
+  jako střely a rohy, které se zobrazovaly celou dobu. Důsledkem starého blocklistu byla trvale
+  prázdná kategorie „Hra s míčem" a dimenze „Kontrola míče"/„Styl útoku" u reprezentací.
+  **xG je jediná skutečná výjimka** (jen 30,9 % zápasů se statistikami; přáteláky **2,0 %**) →
+  zůstává vyloučené a λ reprezentací jede na gólech. Chybějící třetina se řeší sama: metrika bez
+  dat nemá vzorek (`weightedAverage` renormalizuje váhy, `lowConfidence` odznak varuje).
   Reprezentační zápasy jsou **venue-neutrální** (`isNeutral: true` v `realRepository`
   i mocku) → doma/venku se nedělí (hrají na neutrální půdě a API to nehlásí spolehlivě),
   vše jde do TOTAL; UI v režimu Reprezentace přepínač Doma/Venku skrývá.
@@ -464,14 +475,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (Útok / Obrana / Hra s míčem / Tvorba šancí / Disciplína), každý 0–10 pro oba týmy.
   Normalizace je **relativní** (ne absolutní): `ratio = home / (home + away)` → `score = ratio × 10`.
   Metriky s `LOWER_IS_BETTER` invertovány. Jeden nebo oba null → metrika se přeskočí (nezkresluje váhy).
-  `available: false` pro národní týmy kde chybí klíčové metriky (`METRICS_BY_ENTITY`).
+  `available: false`, až když kategorii nezbude **žádná** metrika s daty.
 - **Styl hry** (`lib/stats/playStyle.ts`, `app/_components/PlayStyleChart.tsx`):
-  čistá funkce `computePlayStyle(homeValues, awayValues, venue, mode)` → 4 `PlayStyleDimension` (Kontrola
+  čistá funkce `computePlayStyle(homeValues, awayValues, venue)` → 4 `PlayStyleDimension` (Kontrola
   míče / Styl útoku / Pressing / Efektivita střel). Škálování je **absolutní** (fixní rozsahy), ne
   relativní vůči soupeři → říká „tenhle tým hraje kombinačně" nezávisle na soupeři.
   Formule: Kontrola míče = `clamp((POSSESSION−30)/40, 0,1)×10`; Styl útoku = `SHOTS_INSIDE/(inside+outside)×10`;
   Pressing = `clamp((FOULS−8)/12, 0,1)×10`; Efektivita = `SHOTS_ON_TARGET/SHOTS×10`.
-  Dimenze Kontrola míče + Styl útoku: `available: false` pro národní týmy (chybí POSSESSION/SHOTS_INSIDE_BOX).
+  Dostupnost dimenze se řídí **výhradně daty** (metrika chybí → `available: false`); funkce proto
+  ani nebere `mode`. Dřív měly Kontrola míče + Styl útoku natvrdo `unavailableForNational: true`,
+  což je reprezentacím zhaslo **i když data byla** – viz „Reprezentace mají skoro plnou sadu metrik".
 - **Ligový benchmark** (`lib/data/standings.ts`, `computeLeagueGoalsAvg`): průměrné góly
   vstřelené/obdržené **na tým za zápas** z celé ligy (z již cachovaného `ApiStandingRow[]`).
   Denominátor = `∑ played` (součet zápasů všech týmů) = správná měřítko pro porovnání s
@@ -483,6 +496,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (logo + jméno, mobilní/desktopová velikost), importovaný z `CategoryScores`, `PlayStyleChart`
   i `CompareApp` — žádné duplicity.
 - **Nové typy** (`lib/types.ts`): `CategoryKey`, `CategoryScore`, `PlayStyleDimension`, `LeagueGoalsAvg`.
+
+## Záložka Tabulky (FREE, `/tabulky`)
+- **Princip:** celá tabulka vybrané klubové ligy (pozice, V-R-P, góly, rozdíl, body, forma) s barevným
+  zvýrazněním evropských / postupových / sestupových zón. **0 API volání navíc** – sdílí `standings:`
+  cache s Porovnáním, Programem i Hrou, takže cold liga spustí nejvýš 1 upstream fetch (a ten pak
+  využijí ostatní záložky).
+- **Čisté funkce** (`lib/data/standings.ts`, testy `standings.test.ts`): `normalizeLeagueTable`
+  (`ApiStandingRow[]` → `LeagueTableRow[]`, řadí dle `rank`) + `zoneFromDescription`
+  (`description` → `LeagueTableZone` = champions/europa/conference/promotion/relegation).
+  `zoneFromDescription` **sdílí pasti s `deriveLeagueAccess`** (viz Hra): soutěž se hledá jen **PŘED
+  závorkou** (domácí play-off o Evropu „(Conference League - Play Offs)" se nepočítá), **jistý sestup**
+  popisek **začíná** slovem `relegation` a nesmí obsahovat `round`/`group`/`play-off` (to je baráž
+  nebo fázový split nadstavby). Neznámý popisek → `null` (žádné zvýraznění), ne odhad.
+- **Data:** `getLeagueTable(leagueId)` (`repository.ts` → real/mock) vrací `{rows, leagueAvg}`;
+  reprezentace/nedostupná liga → `null`. Route `app/api/standings/table` je **FREE** (veřejná
+  statistika, bez auth), ale **rate-limitovaná** jako `/api/standings` (cold cache = upstream fetch);
+  chyba → `{table: null}` + 200, aby UI ukázalo prázdný stav, ne error. Předsezóna (0 odehraných) =
+  prázdný stav. Mock: deterministická tabulka z mock týmů → funguje bez DB/API.
+- **UI `TabulkyApp.tsx`** (client, mobile-first): horizontální pásek lig (`CLUB_LEAGUES`), poslední
+  zvolená liga v `localStorage`, `ZoneBar` + legenda dedupovaná **podle popisku** (jako v Hře).
 
 ## Záložka Přestupy (category-first, zdroj = API-Football)
 - **Princip:** přestupy top-5 lig se stahují **dávkově na pozadí** do tabulky `Transfer`;
@@ -648,10 +681,15 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   API `app/api/game/route.ts`: `GET`/`PUT` (upsert, zod validace vč. `profile`/`plan`/`instruction`/
   `morale`/`fitness`/`scouting`/… + `current` nullable + size cap 512 KB + rate-limit; ukládá **původní**
   objekt)/`DELETE`. `app/api/game/leagues` + `app/api/game/league?id=`. `SaveState` = `{version,
-  profile:ManagerProfile, manager:{reputation}, current:SeasonState|null, history[]}`;
-  `SAVE_VERSION` = **9**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
-  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → 7 → 8 → 9) a jen doplní nová pole; teprve neznámá verze se
+  profile:ManagerProfile, manager:{reputation}, current:SeasonState|null, history[]}` + volitelné
+  `tournament`/`tournamentHistory` (reprezentace) a `cup`/`cupHistory` (klubový pohár);
+  `SAVE_VERSION` = **10**. Appka běží živě → bump **nesmí zahodit rozehranou kariéru**: `migrateSave`
+  (`HraApp.tsx`) migruje **řetězeně** (5 → 6 → … → 10) a jen doplní nová pole; teprve neznámá verze se
   zahodí. „Nová kariéra" nemaže profil (jen `current:null`).
+  **Ukládání je frontové** (nejvýš jeden `PUT` naráz, vždy se pošle nejnovější stav): dva rychlé
+  requesty se mohly vrátit v opačném pořadí a **starší stav přepsal novější** (rychlé klikání, dva
+  otevřené taby). Nevracet zpět na „fire-and-forget" `PUT` per akce. Scoped `app/hra/error.tsx`
+  (error boundary), potvrzovací dialogy jsou vlastní modal (ne nativní `confirm()`).
 - **UI `HraApp.tsx`** (client, mobile-first): anonym → přihlášení; **bez aktivní kariéry → `ManagerHub`**
   (profil + „Začni kariéru" → gated výběr ligy→klubu, sekce „Nejvyšší ligy" / „2. ligy"); s kariérou →
   sezóna (predikce + **scouting** (`ScoutCard`: hlášený styl / „styl neznámý", konfidence obarvená dle
@@ -659,9 +697,14 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`FitnessBar`, ukazuje i posun kondice za kolo dle plánu) + **„Čísla soupeře"** (`EvidencePanel`) +
   **plán** + **vedlejší instrukce**
   (`InstructionPicker`) + **event karta**, popup `MatchResultToast`, tabulka, forma, cíl) +
-  taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab): hlavička + kariérní rekordy +
-  **klub vs reprezentace** (reprezentace = placeholder „🔜 připravujeme", Phase 4) + `AchievementsGrid`
-  (odemčené barevně dle tier, zamčené šedé). `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno") a
+  taby **Kariéra** a **Profil**. `ProfilePanel` (sdílený hub/tab, **žije v `app/_components/hra/Profile.tsx`**
+  – vytknutý z `HraApp.tsx` i s hubem, výběrem reprezentace, rekordy, historií a achievementy):
+  hlavička + kariérní rekordy + **klub / reprezentace / pohár** (skutečné rekordy, ne placeholder)
+  + `AchievementsGrid`
+  (odemčené barevně dle tier, zamčené šedé). Nákladné komponenty (tabulka, pavouk, achievementy)
+  jsou `React.memo`. Scouting hlásí nejistotu **vizuálně** (`StyleCompass` místo holého „spíš útočný");
+  kreslí se pořád jen z `reportedStyle`/`confidence`, **nikdy ze skryté pravdy**. `EvidencePanel`
+  ukazuje srovnávací pruhy vůči ligovému průměru. `SeasonDone` ukazuje nově odemčené („🏅 Odemčeno") a
   **`DevelopmentPanel`** (rozdělení rozvojových bodů před „Pokračovat"/postupem/sestupem).
   Ligová tabulka **zvýrazňuje pohárové/postupové/sestupové zóny** (barevný okraj + legenda, přes
   `evaluateSeason`/`EUROPE_LABEL`: LM=home, EL=away, KL/postup=positive, sestup=negative; legenda
@@ -875,8 +918,36 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Reprezentační achievementy** (12 v `TOURNAMENT_ACHIEVEMENTS`): vč. „David proti Goliášovi"
   (semifinále s prestiží ≤ 65 — čte `TournamentSummary.teamPrestige`), „Neporažený mistr", „Ofenzivní
   smršť" (15+ gólů), „Kočovný selektor" (5 národů). Slučují se s ligovými v `ALL_ACHIEVEMENTS`.
-- **Možná rozšíření (TODO):** klubový pohár / Liga mistrů (znovupoužije `tournament.ts`);
-  víc soutěží (Copa/AFCON…) = položka v `COMPETITIONS`.
+- **Klubový pohár (Liga mistrů-styl) — HOTOVO** (`lib/game/clubCup.ts` + `clubCupPool.ts`, čisté +
+  `clubCup.test.ts`): třetí režim vedle klubové ligy a reprezentace, staví na témže `tournament.ts`
+  (skupiny + pavouk), běží **paralelně** ke klubové sezóně jako sub-tab.
+  - **Kvalifikace se NEODEHRÁVÁ, jen vyhodnotí** (na rozdíl od `nationalCompetitions.ts`): klub, který
+    minulou sezónu skončil na evropské příčce (`SeasonSummary.europe !== "NONE"` → `clubQualifies`),
+    je příští sezónu v poháru. Proto `CupRun` nemá fázi `qualification` ani `tournament: null` mezistav.
+  - **Formát** `CLUB_CUP_FORMAT`: 8 skupin po 4 = **32 týmů** → osmifinále (`bestThirds: 0`).
+    Vědomé zjednodušení reálné LM.
+  - **Pole = ty + vážený los ze statického poolu** (`CLUB_CUP_POOL`): 40 **fiktivních** klubů ve
+    4 tierech, ratingy deterministicky z **fixního interního seedu** (`POOL_SEED`) → pool je **stabilní
+    napříč hrami** (hráč pozná „věčné giganty"), stejně jako `NATIONAL_TEAMS` u reprezentací. Reálná
+    jména se **nepoužívají** – appka nemá cross-league snapshot 12 lig, ze kterého by je postavila
+    daty; `lib/game/` zůstává offline. ID prostor `9_000_000+` = mimo API-Football i fiktivní ligu.
+  - **Vlastní RNG proud** `RNG_SALT_CUP`. `startCupRun` musí po přepnutí saltu **přepočítat počáteční
+    `pendingEvent`** – `newTournament` ho spočítala ještě pod `RNG_SALT_TOURNAMENT`, takže první event
+    poháru by na stejném seedu koreloval s prvním eventem reprezentačního turnaje.
+  - **Vlastní reputace i síň slávy:** `updateReputationCup` (paralelní k `updateReputation`/
+    `…Tournament`, se stejným `applyCeiling`), `CupSummary` + `foldCup` plní **vlastní pole**
+    `AllTimeRecords` (`cupsPlayed`/`cupTitles`) – ligové `titles` se nedotknou. Třetí registr
+    `CUP_ACHIEVEMENTS` + `newlyEarnedCup`, slučuje se v `ALL_ACHIEVEMENTS`.
+  - Agency (plán, counter, instrukce, morálka, kondice, eventy) běží beze změny přes `AgencyState`;
+    `cupPreview` ignoruje zvolený plán (anti-exploit, jako `yourNextMatch`/`runPreview`).
+- **Sdílení dohraného výsledku** (sezóna / turnaj / pohár): `shareOrCopy` (`app/_components/share.ts`,
+  nativní share sheet s fallbackem na schránku, sdílené s `AppHeader`) → veřejná landing stránka
+  **`/hra/vysledek`** + OG karta **`/og/hra`**. Stránka čte **jen query string** (klub, headline,
+  kontext, tituly) – **žádný lookup cizího save** (appka pro něj nemá veřejné API), takže scraper
+  odkazu nespustí žádné API ani DB volání. Stejný vzor jako sdílení Porovnání.
+- **Možná rozšíření (TODO):** víc reprezentačních soutěží (Copa/AFCON…) = položka v `COMPETITIONS`;
+  reálný snapshot klubů do `CLUB_CUP_POOL` přes cross-league fetch skript (analogicky
+  `npm run build-national-teams`) místo fiktivních jmen.
 - Vědomá výjimka ze scope „jen statistiky" (nová tabulka/modul), jako predikce a přestupy.
 
 ## PWA (instalace na iOS/Android)
@@ -901,10 +972,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   fetch), složí `title`/`description`, `alternates.canonical` (`/porovnani?…`, dedup permutací
   parametrů) a OG/twitter (`summary_large_image`) s odkazem na `/og?h=&a=`. Lookup selže-li →
   vrátí `{}` a dědí statická metadata z `layout.tsx`. Metabase = `AUTH_URL`.
-- **`app/sitemap.ts` + `app/robots.ts`** (Next metadata routes): sitemap = 4 hlavní záložky
-  (`/` Zápasy, `/porovnani`, `/predikce`, `/transfers`; konkrétní porovnání se neindexují
-  plošně – kombinatorika + canonical), robots povolí vše kromě `/api/`. BASE z `AUTH_URL`
-  (fallback prod doména).
+- **Druhý OG obrázek** `app/og/hra/route.tsx` + landing `app/hra/vysledek/page.tsx`: sdílení
+  dohrané sezóny / turnaje / poháru z Manažera (viz „Sdílení dohraného výsledku"). Taky **bez
+  server lookupu** – vše přijde v query stringu.
+- **`app/sitemap.ts` + `app/robots.ts`** (Next metadata routes): sitemap = 6 hlavních záložek
+  (`/` Zápasy, `/porovnani`, `/tabulky`, `/predikce`, `/transfers`, `/hra`; konkrétní porovnání
+  se neindexují plošně – kombinatorika + canonical, a `/digest` je vynechaný záměrně jako
+  PRO-locked), robots povolí vše kromě `/api/`. BASE z `AUTH_URL` (fallback prod doména).
 - **Analytika:** Vercel Web Analytics (`@vercel/analytics`), `<Analytics/>` v `layout.tsx`
   (pageviews zdarma, bez cookies; aktivní jen na Vercelu v produkci). Vlastní eventy přes
   `track(...)`: `share` (`AppHeader`), `signin_from_prolock` / `trial_unlock` (`ProLock`).

@@ -1,6 +1,6 @@
 "use client";
 
-import type { EntityType, PlayStyleDimension } from "@/lib/types";
+import type { PlayStyleDimension } from "@/lib/types";
 import { TeamHeading } from "./TeamHeading";
 
 /**
@@ -14,14 +14,12 @@ export function PlayStyleChart({
   awayName,
   homeLogo,
   awayLogo,
-  mode,
 }: {
   dimensions: PlayStyleDimension[];
   homeName: string;
   awayName: string;
   homeLogo: string;
   awayLogo: string;
-  mode: EntityType;
 }) {
   const hasUnavailable = dimensions.some((d) => !d.available);
 
@@ -55,9 +53,7 @@ export function PlayStyleChart({
 
       {hasUnavailable && (
         <p className="mt-3 text-[10px] text-muted">
-          {mode === "NATIONAL"
-            ? "* Omezená data pro reprezentace (POSSESSION, střely z vápna)."
-            : "* Data pro tuto dimenzi nejsou k dispozici."}
+          * Data pro tuto dimenzi nejsou k dispozici.
         </p>
       )}
     </section>

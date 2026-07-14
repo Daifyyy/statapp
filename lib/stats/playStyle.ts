@@ -1,4 +1,4 @@
-import type { EntityType, MetricValue, PlayStyleDimension, Venue } from "@/lib/types";
+import type { MetricValue, PlayStyleDimension, Venue } from "@/lib/types";
 import { valueOrTotal } from "./metricLookup";
 
 function clamp(v: number, min: number, max: number): number {
@@ -51,8 +51,6 @@ interface DimDef {
   leftLabel: string;
   rightLabel: string;
   score: ScoreFn;
-  /** Dimenze není k dispozici pro reprezentace (chybí POSSESSION / SHOTS_INSIDE_BOX). */
-  unavailableForNational?: boolean;
 }
 
 const DIMS: DimDef[] = [
@@ -62,7 +60,6 @@ const DIMS: DimDef[] = [
     leftLabel: "Přímá hra",
     rightLabel: "Kontrola",
     score: possessionScore,
-    unavailableForNational: true,
   },
   {
     key: "buildup",
@@ -70,7 +67,6 @@ const DIMS: DimDef[] = [
     leftLabel: "Nakopávané",
     rightLabel: "Kombinační",
     score: buildupScore,
-    unavailableForNational: true,
   },
   {
     key: "pressing",
@@ -92,29 +88,18 @@ const DIMS: DimDef[] = [
  * Spočítá 4 stylové dimenze (0–10) pro oba týmy najednou.
  * Hodnoty jsou absolutní (fixní škála), ne relativní vůči soupeři —
  * aby skóre vyjadřovalo styl týmu nezávisle na konkrétním soupeři.
- * Chybí-li data (reprezentace bez POSSESSION/SHOTS_INSIDE_BOX), dimenze je `available: false`.
+ *
+ * Dostupnost se řídí **výhradně daty**: chybí-li metrika, dimenze je `available: false`.
+ * Dřív měly „Kontrola míče" a „Styl útoku" natvrdo příznak `unavailableForNational`, který
+ * tuhle kontrolu obcházel a reprezentacím je zhasl i tehdy, když data byla – a ona jsou
+ * (držení míče má 99,5 % reprezentačních zápasů se statistikami, viz `NATIONAL_EXCLUDED`).
  */
 export function computePlayStyle(
   homeValues: MetricValue[],
   awayValues: MetricValue[],
-  venue: Venue,
-  mode: EntityType
+  venue: Venue
 ): PlayStyleDimension[] {
-  const isNational = mode === "NATIONAL";
-
   return DIMS.map((dim) => {
-    if (dim.unavailableForNational && isNational) {
-      return {
-        key: dim.key,
-        label: dim.label,
-        leftLabel: dim.leftLabel,
-        rightLabel: dim.rightLabel,
-        homeScore: 5,
-        awayScore: 5,
-        available: false,
-      };
-    }
-
     const hs = dim.score(homeValues, venue);
     const as_ = dim.score(awayValues, venue);
     const available = hs !== null && as_ !== null;

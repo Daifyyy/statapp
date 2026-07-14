@@ -216,7 +216,10 @@ describe("compareTeams (smoke)", () => {
     expect(res.away.values.length).toBeGreaterThan(0);
   });
 
-  it("reprezentace nezahrnují xG ani statistiky držení/přihrávek", () => {
+  // Reprezentacím se vynechává POUZE xG (má ho jen ~31 % zápasů se statistikami, u přáteláků
+  // 2 %). Držení/přihrávky/střely z vápna se dřív vynechávaly taky, ale to bylo měřením
+  // vyvráceno – mají je 99 % zápasů, u kterých API vůbec statistiky vrátí (viz NATIONAL_EXCLUDED).
+  it("reprezentace nezahrnují xG, ale držení/přihrávky ano", () => {
     const matches = Array.from({ length: 8 }, (_, i) =>
       clubMatch(i, i * 14, { competitive: true })
     );
@@ -226,7 +229,9 @@ describe("compareTeams (smoke)", () => {
     });
     const res = compareTeams(nat(1), nat(2), NOW);
     expect(res.metrics).not.toContain("XG");
-    expect(res.metrics).not.toContain("POSSESSION");
+    expect(res.metrics).toContain("POSSESSION");
+    expect(res.metrics).toContain("PASS_ACCURACY");
+    expect(res.metrics).toContain("SHOTS_INSIDE_BOX");
     expect(res.metrics).toContain("GOALS_FOR");
   });
 });

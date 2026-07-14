@@ -79,20 +79,23 @@ export const ALL_METRICS: Metric[] = [
 ];
 
 /**
- * Metriky, které u reprezentací typicky chybí v API (/fixtures/statistics bývá
- * neúplné) nebo je mock neumí věrně modelovat – pro NATIONAL je vynecháme. §3.4
+ * Metriky, které u reprezentací v API reálně chybí – pro NATIONAL je vynecháme.
+ *
+ * Seznam byl dřív mnohem širší (držení, přihrávky, střely z/mimo vápno, zákroky,
+ * zblokované) s odůvodněním „u reprezentací statistiky typicky chybí". **Změřeno na
+ * 1 533 reprezentačních řádcích `MatchStatCache` a je to jinak:** chybí-li něco, chybí
+ * CELÁ odpověď `/fixtures/statistics` (~třetina reprezentačních zápasů) – ne jednotlivé
+ * metriky. Mezi zápasy, které statistiky vůbec mají, je držení míče v **99,5 %**
+ * (přesnost přihrávek 99,1 %, střely z vápna 99,4 %) – tedy stejně dostupné jako střely
+ * a rohy, které jsme celou dobu zobrazovali. Ta chybějící třetina se řeší sama: metrika
+ * bez dat prostě nemá vzorek (`weightedAverage` renormalizuje váhy, `lowConfidence`
+ * odznak upozorní).
+ *
+ * `XG` je jediná skutečná výjimka: jen **30,9 %** reprezentačních zápasů se statistikami
+ * ho má (soutěžní 40,5 %, přáteláky **2,0 %**) → zůstává vyloučené. Predikce ho u
+ * reprezentací proto nepoužívá (λ jede na gólech).
  */
-const NATIONAL_EXCLUDED: Metric[] = [
-  "XG",
-  "POSSESSION",
-  "PASS_ACCURACY",
-  "PASSES_TOTAL",
-  "PASSES_ACCURATE",
-  "SAVES",
-  "BLOCKED_SHOTS",
-  "SHOTS_INSIDE_BOX",
-  "SHOTS_OUTSIDE_BOX",
-];
+const NATIONAL_EXCLUDED: Metric[] = ["XG"];
 
 export const METRICS_BY_ENTITY: Record<EntityType, Metric[]> = {
   CLUB: ALL_METRICS,

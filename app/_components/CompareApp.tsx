@@ -611,11 +611,8 @@ function ResultPanel({
     [result, venue, entityMode]
   );
   const styleDimensions = useMemo(
-    () =>
-      result
-        ? computePlayStyle(result.home.values, result.away.values, venue, entityMode)
-        : [],
-    [result, venue, entityMode]
+    () => (result ? computePlayStyle(result.home.values, result.away.values, venue) : []),
+    [result, venue]
   );
 
   if (error) {
@@ -781,7 +778,6 @@ function ResultPanel({
           awayName={result.away.team.name}
           homeLogo={result.home.team.logoUrl}
           awayLogo={result.away.team.logoUrl}
-          mode={entityMode}
         />
       )}
 
