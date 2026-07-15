@@ -17,6 +17,9 @@ import type { SessionUser } from "./sessionUser";
 
 type View = "program" | "results";
 
+/** Stabilní prázdné pole (nemění referenci mezi rendery → nezpouští efekty nadarmo). */
+const NO_FIXTURES: UpcomingFixture[] = [];
+
 /** Živý zápas svítí, dokud je jeho výkop v tomto okně před „teď" (plausibilita pollu). */
 const LIVE_WINDOW_MS = 2.5 * 60 * 60 * 1000;
 
@@ -185,12 +188,15 @@ export function ZapasyApp({
   const active = days[dayIdx] ?? days[0];
   const isPro = user?.tier === "PRO";
 
-  const { scores, loaded } = useLiveScores(view === "program", active?.fixtures ?? []);
+  const { scores, loaded } = useLiveScores(
+    view === "program",
+    active?.fixtures ?? NO_FIXTURES
+  );
   const { favFixtures, favLeagues, toggle } = useFavorites(!!isPro);
 
   // SSR snapshot překrytý živým skóre (dohrané zmizí, běžící přepíšou minutu/skóre).
   const dayFixtures = useMemo(
-    () => mergeLive(active?.fixtures ?? [], scores, loaded),
+    () => mergeLive(active?.fixtures ?? NO_FIXTURES, scores, loaded),
     [active, scores, loaded]
   );
 

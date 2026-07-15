@@ -34,6 +34,7 @@ export function TeamLogo({
       width={size}
       height={size}
       loading="lazy"
+      decoding="async"
       onError={() => setBroken(true)}
       className="shrink-0 object-contain"
       style={{ width: size, height: size }}
