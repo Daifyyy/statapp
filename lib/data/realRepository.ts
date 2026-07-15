@@ -32,6 +32,7 @@ import {
 import { normalizeUpcomingFixtures } from "./fixtures";
 import {
   cachedJson,
+  cachedJsonMemo,
   getCachedMatchStats,
   saveMatchStats,
   CURRENT_CACHE_VERSION,
@@ -611,7 +612,8 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
  */
 export async function getLiveFixtures(): Promise<LiveScore[]> {
   try {
-    const raw = await cachedJson("fixlive", LIVE_TTL, () =>
+    // Krátká paměťová vrstva (30 s) před DB (90 s): poll N uživatelů nečte Neon N×.
+    const raw = await cachedJsonMemo("fixlive", 30, LIVE_TTL, () =>
       fetchLiveFixtures(FIXTURE_LIST_LEAGUE_IDS)
     );
     return raw

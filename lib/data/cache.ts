@@ -36,6 +36,29 @@ export async function cachedJson<T>(
   return data;
 }
 
+/**
+ * Krátká **in-process** vrstva před `cachedJson` pro pár horkých, sdílených klíčů
+ * (živé skóre): při pollu N uživatelů se týž payload nečte N× z Neonu, ale drží se
+ * `memTtlSeconds` v paměti instance. Padne s instancí (serverless) → jen zrychlení,
+ * ne zdroj pravdy; DB TTL zůstává autoritativní. Používat jen pro malé, často čtené,
+ * na uživateli nezávislé odpovědi (jinak roste paměť a hrozí stale mezi instancemi).
+ */
+const memoryHits = new Map<string, { value: unknown; expires: number }>();
+
+export async function cachedJsonMemo<T>(
+  key: string,
+  memTtlSeconds: number,
+  dbTtlSeconds: number,
+  fetcher: () => Promise<T>
+): Promise<T> {
+  const now = Date.now();
+  const hit = memoryHits.get(key);
+  if (hit && hit.expires > now) return hit.value as T;
+  const value = await cachedJson<T>(key, dbTtlSeconds, fetcher);
+  memoryHits.set(key, { value, expires: now + memTtlSeconds * 1000 });
+  return value;
+}
+
 // ---- Trvalá cache per-zápas statistik (MatchStatCache) ----
 
 type Row = Prisma.MatchStatCacheGetPayload<object>;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getLeagueTable } from "@/lib/data/repository";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
+import { publicCache } from "@/lib/cacheHeaders";
 
 /**
  * Celá ligová tabulka pro záložku Tabulky (FREE – veřejná statistika, bez auth gate).
@@ -17,7 +18,8 @@ export async function GET(req: Request) {
   }
   try {
     const table = await getLeagueTable(leagueId);
-    return NextResponse.json({ table });
+    // Veřejná, pomalu se měnící statistika → CDN cache (5 min) šetří funkci i Neon.
+    return NextResponse.json({ table }, { headers: publicCache(300, 600) });
   } catch {
     return NextResponse.json({ table: null });
   }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStanding } from "@/lib/data/repository";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
+import { publicCache } from "@/lib/cacheHeaders";
 
 /**
  * Postavení týmu v ligové tabulce (líně načítaný FREE kontext mimo kritickou cestu
@@ -19,7 +20,10 @@ export async function GET(req: Request) {
   }
   try {
     const { standing, leagueAvg } = await getStanding(teamId, leagueId);
-    return NextResponse.json({ standing, leagueAvg });
+    return NextResponse.json(
+      { standing, leagueAvg },
+      { headers: publicCache(300, 600) }
+    );
   } catch {
     return NextResponse.json({ standing: null, leagueAvg: null });
   }

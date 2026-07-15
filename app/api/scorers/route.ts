@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTopScorers } from "@/lib/data/repository";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
+import { publicCache } from "@/lib/cacheHeaders";
 
 /**
  * Nejlepší střelci ligy patřící k týmu (líně načítaný FREE kontext v Porovnání).
@@ -19,7 +20,7 @@ export async function GET(req: Request) {
   }
   try {
     const scorers = await getTopScorers(teamId, leagueId);
-    return NextResponse.json({ scorers });
+    return NextResponse.json({ scorers }, { headers: publicCache(600, 1200) });
   } catch {
     return NextResponse.json({ scorers: [] });
   }
