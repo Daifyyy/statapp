@@ -154,6 +154,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
       />
 

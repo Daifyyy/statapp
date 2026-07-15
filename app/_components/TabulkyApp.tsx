@@ -91,6 +91,7 @@ export function TabulkyApp({ user }: { user: SessionUser | null }) {
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
       />
 

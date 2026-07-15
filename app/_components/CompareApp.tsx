@@ -431,6 +431,7 @@ export function CompareApp({
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
         share
       />

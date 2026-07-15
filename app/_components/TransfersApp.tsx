@@ -154,6 +154,7 @@ function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: Leagu
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
       />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>
@@ -341,6 +342,7 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/predikce", label: "Tipy", emoji: "📈" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
       />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>

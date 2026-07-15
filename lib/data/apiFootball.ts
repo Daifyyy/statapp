@@ -406,6 +406,12 @@ export async function fetchPrediction(
  */
 const PREFERRED_BOOKMAKERS = [8, 6, 11, 2];
 
+/**
+ * Preference pro tipovačku (ROI deník): Pinnacle (id 4) první – ostré, nízkomaržní
+ * kurzy jsou nejférovější benchmark „porazil bys trh". Zbytek jako fallback.
+ */
+export const PINNACLE_FIRST_BOOKMAKERS = [4, 8, 6, 11, 2];
+
 /** Referenční kurzy jednoho zápasu (decimal odds; null = trh u sázkovky chybí). */
 export interface MatchOdds {
   bookmaker: string;
@@ -414,6 +420,11 @@ export interface MatchOdds {
   away: number | null;
   over25: number | null;
   btts: number | null;
+  // Opačné strany over/under a BTTS – pro ROI deník tipovačky (0 volání navíc, jen
+  // druhá hodnota z už stažené odpovědi). Predikční pipeline je nepoužívá (ukládá jen
+  // Over 2.5 / BTTS Yes), proto volitelné.
+  under25?: number | null;
+  bttsNo?: number | null;
 }
 
 /** Desetinný kurz z hodnoty daného labelu (case-insensitive); platný jen > 1. */
@@ -432,24 +443,31 @@ function oddOf(
  * když API kurzy nemá (časté mimo top-5 / daleko před výkopem) nebo je řádek prázdný.
  * Stejně jako benchmark: mimo `compareTeams`, fetch 1×/zápas, jen klubové ligy.
  */
-export async function fetchOdds(fixture: number): Promise<MatchOdds | null> {
+export async function fetchOdds(
+  fixture: number,
+  preferred: number[] = PREFERRED_BOOKMAKERS
+): Promise<MatchOdds | null> {
   const res = await apiGet("/odds", { fixture }, oddsSchema);
   const books = res[0]?.bookmakers ?? [];
   if (books.length === 0) return null;
   const book =
-    PREFERRED_BOOKMAKERS.map((id) => books.find((b) => b.id === id)).find(
+    preferred.map((id) => books.find((b) => b.id === id)).find(
       (b): b is (typeof books)[number] => b != null
     ) ?? books[0];
   const betValues = (betId: number) =>
     book.bets.find((b) => b.id === betId)?.values ?? [];
   const mw = betValues(1);
+  const goals = betValues(5);
+  const btts = betValues(8);
   const out: MatchOdds = {
     bookmaker: book.name,
     home: oddOf(mw, "Home"),
     draw: oddOf(mw, "Draw"),
     away: oddOf(mw, "Away"),
-    over25: oddOf(betValues(5), "Over 2.5"),
-    btts: oddOf(betValues(8), "Yes"),
+    over25: oddOf(goals, "Over 2.5"),
+    btts: oddOf(btts, "Yes"),
+    under25: oddOf(goals, "Under 2.5"),
+    bttsNo: oddOf(btts, "No"),
   };
   // Bez jediného použitelného kurzu nemá smysl řádek ukládat.
   if (out.home == null && out.over25 == null && out.btts == null) return null;

@@ -74,6 +74,7 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
+          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}
       />
 

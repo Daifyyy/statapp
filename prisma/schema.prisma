@@ -91,6 +91,7 @@ model User {
   sessions         Session[]
   savedComparisons SavedComparison[]
   gameSave         GameSave?
+  tips             UserTip[]
 }
 
 model Account {
@@ -252,6 +253,52 @@ model SavedComparison {
 
   @@unique([userId, homeTeamId, awayTeamId, homeLeagueId, awayLeagueId])
   @@index([userId, savedAt])
+}
+
+/// Osobní tip uživatele (záložka Tipovačka = tréninkový deník intuice). Uživatel tipuje
+/// nadcházející příležitost (1X2 / Over-Under 2.5 gólů / BTTS) BEZ zobrazení kurzu; kurz se
+/// snapshotuje na pozadí při vložení a odhalí se až u vyhodnocení → z něj úspěšnost a ROI.
+/// Meta zápasu je snapshot (jako SavedComparison), aby výpis nevyžadoval refetch. Výsledek
+/// dotáhne cron settle-tips (join na fixtureId). Jeden tip na trh a zápas.
+model UserTip {
+  id         String   @id @default(cuid())
+  userId     String
+  fixtureId  Int
+  // snapshot zápasu pro zobrazení bez refetche
+  leagueId   Int
+  leagueName String
+  kickoff    DateTime
+  homeTeamId Int
+  awayTeamId Int
+  homeName   String
+  awayName   String
+  homeLogo   String?
+  awayLogo   String?
+  national   Boolean  @default(false)
+  // příležitost: market "win"|"over25"|"btts"; selection dle trhu
+  // (win → home|draw|away, over25 → over|under, btts → yes|no). `line` pro over/under.
+  market     String
+  selection  String
+  line       Float?
+  stake      Float    @default(1)
+  note       String?
+  // snapshot kurzu (skrytý při tipování, odhalený u vyhodnocení). null = kurz nebyl k dispozici.
+  odds       Float?
+  oddsBook   String?
+  oddsAt     DateTime?
+  // výsledek (doplní settle cron po odehrání; skóre po 90 min jako u predikcí)
+  status     String    @default("NS")
+  homeGoals  Int?
+  awayGoals  Int?
+  hit        Boolean?
+  settledAt  DateTime?
+  placedAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fixtureId, market])
+  @@index([userId, placedAt])
+  @@index([status, fixtureId])
 }
 
 /// Uložená rozehraná hra „Manažer" (klubový simulátor ligy) – vázaná na profil.
