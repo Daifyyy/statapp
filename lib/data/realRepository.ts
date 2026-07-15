@@ -4,6 +4,7 @@ import type {
   League,
   LeagueGoalsAvg,
   LeagueTable,
+  LiveScore,
   MatchStat,
   Metric,
   Scorer,
@@ -15,12 +16,14 @@ import {
   fetchFixturesByDate,
   fetchLastFixtures,
   fetchLeagueTeams,
+  fetchLiveFixtures,
   fetchTeamFixtures,
   fetchTeamInjuries,
   fetchLeagueSeasonFixtures,
   fetchLeagueStandings,
   fetchLeagueTopScorers,
   FINISHED_STATUSES,
+  LIVE_STATUSES,
   STAT_TYPE_MAP,
   type ApiFixture,
   type ApiFixtureStats,
@@ -62,6 +65,7 @@ import {
   CLUB_LEAGUES,
   CURRENT_SEASON,
   EURO_LEAGUE_IDS,
+  FIXTURE_LIST_LEAGUE_IDS,
   FRIENDLIES_LEAGUE_ID,
   NATIONAL_HISTORY_LEAGUE_IDS,
   NATIONAL_LEAGUES,
@@ -77,6 +81,7 @@ const INJ_TTL = 60 * 60 * 6; // 6 h pro zranění (soupiska se mění průběžn
 const STANDINGS_TTL = 60 * 60 * 6; // 6 h pro tabulku (mění se jen po odehraném kole)
 const SCORERS_TTL = 60 * 60 * 12; // 12 h pro střelce (žebříček se hýbe pomalu)
 const FIX_TTL = 60 * 60; // 1 h pro denní rozpis (časy/zápasy se mohou měnit)
+const LIVE_TTL = 90; // 90 s pro živé skóre (sdílené mezi všemi klienty → strop nákladů)
 const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
 const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
@@ -596,6 +601,31 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
     }
   }
   return days;
+}
+
+/**
+ * Živé skóre našich lig – 1 sdílené upstream volání za `LIVE_TTL` (nezávisle na počtu
+ * uživatelů). Malý payload (živých je pár), proto krátký TTL snese klientský poll.
+ * Výpadek/chyba → prázdné pole (UI se schová). Filtr na `LIVE_STATUSES` je pojistka
+ * (API by mělo vrátit jen živé), `elapsed`/`goals` nesou minutu a skóre.
+ */
+export async function getLiveFixtures(): Promise<LiveScore[]> {
+  try {
+    const raw = await cachedJson("fixlive", LIVE_TTL, () =>
+      fetchLiveFixtures(FIXTURE_LIST_LEAGUE_IDS)
+    );
+    return raw
+      .filter((f) => LIVE_STATUSES.has(f.fixture.status.short))
+      .map((f) => ({
+        fixtureId: f.fixture.id,
+        status: f.fixture.status.short,
+        elapsed: f.fixture.status.elapsed ?? null,
+        homeGoals: f.goals.home,
+        awayGoals: f.goals.away,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 // ---- Sestavení reprezentace ----

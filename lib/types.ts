@@ -208,12 +208,32 @@ export interface UpcomingFixture {
   /** Pozice v ligové tabulce (FREE kontext; jen kluby, doplněno server-side). */
   homeRank?: number | null;
   awayRank?: number | null;
+  /** Zápas právě běží (SSR snapshot z denního rozpisu; klient obnovuje pollem). */
+  live?: boolean;
+  /** Uplynulé minuty živého zápasu (null u pauzy/penalt). */
+  elapsed?: number | null;
+  /** Živé skóre (jen když `live`). */
+  liveHome?: number | null;
+  liveAway?: number | null;
 }
 
 /** Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". */
 export interface FixtureDay {
   date: string;
   fixtures: UpcomingFixture[];
+}
+
+/**
+ * Živý stav jednoho zápasu z lehkého `/api/fixtures/live` endpointu. Klient jím
+ * autoritativně přepisuje SSR snapshot (minuta/skóre/status), zápas mimo tuto sadu
+ * je dohraný → z Programu zmizí.
+ */
+export interface LiveScore {
+  fixtureId: number;
+  status: string;
+  elapsed: number | null;
+  homeGoals: number | null;
+  awayGoals: number | null;
 }
 
 export interface Team {

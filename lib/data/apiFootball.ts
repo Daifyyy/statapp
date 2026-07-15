@@ -124,7 +124,11 @@ const fixtureItemSchema = z.object({
   fixture: z.object({
     id: z.number(),
     date: z.string(),
-    status: z.object({ short: z.string() }),
+    status: z.object({
+      short: z.string(),
+      // uplynulé minuty (jen u živých zápasů; jinak null/chybí)
+      elapsed: z.number().nullable().optional(),
+    }),
     venue: z
       .object({ id: z.number().nullable(), name: z.string().nullable() })
       .partial()
@@ -356,6 +360,20 @@ export function fetchFixturesByIds(ids: number[]) {
 }
 
 /**
+ * Jen **živé** zápasy zadaných lig – `/fixtures?live=<id-id-…>`. Malý payload (živých je
+ * v jeden okamžik pár), levné → snese krátký TTL a klientský poll. Nese `status.elapsed`
+ * (minuta) i `goals` (živé skóre). Prázdné `leagueIds` → prázdný výsledek bez volání.
+ */
+export function fetchLiveFixtures(leagueIds: number[]) {
+  if (leagueIds.length === 0) return Promise.resolve([] as ApiFixture[]);
+  return apiGet(
+    "/fixtures",
+    { live: leagueIds.join("-") },
+    z.array(fixtureItemSchema)
+  );
+}
+
+/**
  * Všechny zápasy daného dne (`date` = `YYYY-MM-DD`) napříč ligami – 1 volání. `timezone`
  * zajistí správné hranice dne (jinak bere zónu účtu). Filtr na naše ligy se dělá u nás.
  */
@@ -539,3 +557,19 @@ export const STAT_TYPE_MAP: Record<string, Metric> = {
 
 /** Stav „odehráno" pro API-Football (full time / after ET / penalties). */
 export const FINISHED_STATUSES = new Set(["FT", "AET", "PEN"]);
+
+/**
+ * Stavy, kdy zápas **právě běží** (1./2. poločas, poločasová pauza, prodloužení, penalty,
+ * přerušení). Živý zápas z Programu nemizí – svítí s minutou a skóre.
+ */
+export const LIVE_STATUSES = new Set([
+  "1H", // první poločas
+  "HT", // poločasová přestávka
+  "2H", // druhý poločas
+  "ET", // prodloužení
+  "BT", // přestávka před prodloužením
+  "P", // penaltový rozstřel
+  "SUSP", // dočasně pozastaveno
+  "INT", // přerušeno
+  "LIVE", // obecně živě
+]);

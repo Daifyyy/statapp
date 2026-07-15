@@ -6,6 +6,7 @@ import type {
   LeagueGoalsAvg,
   LeagueTable,
   LeagueTableRow,
+  LiveScore,
   MatchPick,
   PredictionRow,
   Scorer,
@@ -86,6 +87,11 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
     : mockFixturesByDates(dates);
   await enrichFixtureRanks(days);
   return days;
+}
+
+/** Živé skóre našich lig (real = sdílené API+cache; mock = prázdno). */
+export async function getLiveFixtures(): Promise<LiveScore[]> {
+  return useReal ? real.getLiveFixtures() : [];
 }
 
 /** Doplní klubovým zápasům pozici obou týmů v tabulce (FREE kontext; reprezentace přeskočí). */

@@ -1,5 +1,5 @@
 import type { UpcomingFixture } from "@/lib/types";
-import { FINISHED_STATUSES, type ApiFixture } from "./apiFootball";
+import { FINISHED_STATUSES, LIVE_STATUSES, type ApiFixture } from "./apiFootball";
 import {
   FIXTURE_LIST_LEAGUE_IDS,
   isNationalTournamentLeague,
@@ -29,8 +29,10 @@ const NOT_UPCOMING = new Set([
  *
  * **Status sám nestačí** – denní rozpis je v `ApiCache` až hodinu starý, takže odehraný
  * zápas v něm ještě může nést `NS` a Program by ho ukazoval jako nadcházející. Proto
- * platí i tvrdá podmínka „výkop je v budoucnu": zápas, který začal, do Programu nepatří,
- * ať API hlásí cokoli (výsledek pak ukáže záložka Výsledky).
+ * platí i tvrdá podmínka „výkop je v budoucnu": zápas, který ještě nezačal, JE nadcházející.
+ * Zápas, který **právě běží** (`LIVE_STATUSES`), do Programu patří taky – svítí s minutou
+ * a skóre; jeho živost čteme **jen z API statusu**, ne z „výkop proběhl" (drží invariant
+ * proti stale cache – stale-`NS`-po-výkopu se stále vyhodí). Dohrané → do Výsledků.
  *
  * Cíl deep-linku: klub → CLUB mód s `leagueId` u obou týmů; reprezentace → NATIONAL mód,
  * kde „ligou" je konfederace týmu – tu zde neznáme (potřebuje cachované seznamy), proto
@@ -42,14 +44,19 @@ export function normalizeUpcomingFixtures(
 ): UpcomingFixture[] {
   const nowMs = now.getTime();
   return raw
-    .filter(
-      (f) =>
-        FIXTURE_LEAGUES.has(f.league.id) &&
-        !NOT_UPCOMING.has(f.fixture.status.short) &&
+    .filter((f) => {
+      if (!FIXTURE_LEAGUES.has(f.league.id)) return false;
+      const status = f.fixture.status.short;
+      if (LIVE_STATUSES.has(status)) return true; // právě běží → svítí v Programu
+      // jinak jen ještě nezačaté (a status není zrušený/dohraný)
+      return (
+        !NOT_UPCOMING.has(status) &&
         new Date(f.fixture.date).getTime() > nowMs
-    )
+      );
+    })
     .map((f) => {
       const national = isNationalTournamentLeague(f.league.id);
+      const live = LIVE_STATUSES.has(f.fixture.status.short);
       return {
         fixtureId: f.fixture.id,
         leagueId: f.league.id,
@@ -62,6 +69,12 @@ export function normalizeUpcomingFixtures(
         compareMode: national ? ("NATIONAL" as const) : ("CLUB" as const),
         homeCompareLeagueId: national ? null : f.league.id,
         awayCompareLeagueId: national ? null : f.league.id,
+        ...(live && {
+          live: true,
+          elapsed: f.fixture.status.elapsed ?? null,
+          liveHome: f.goals.home,
+          liveAway: f.goals.away,
+        }),
       };
     })
     .sort((a, b) => a.kickoff.localeCompare(b.kickoff));
