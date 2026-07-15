@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
-import type { FixtureDay, SettledMatch, UpcomingFixture } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { signIn } from "next-auth/react";
+import type {
+  FixtureDay,
+  LiveScore,
+  SettledMatch,
+  UpcomingFixture,
+} from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { RankBadge } from "./RankBadge";
@@ -10,6 +16,152 @@ import { buildCompareHref } from "./compareHref";
 import type { SessionUser } from "./sessionUser";
 
 type View = "program" | "results";
+
+/** Živý zápas svítí, dokud je jeho výkop v tomto okně před „teď" (plausibilita pollu). */
+const LIVE_WINDOW_MS = 2.5 * 60 * 60 * 1000;
+
+/** Je pravděpodobné, že se právě něco hraje (→ smysl pollovat živé skóre)? */
+function plausiblyLive(fixtures: UpcomingFixture[], now: number): boolean {
+  return fixtures.some((f) => {
+    if (f.live) return true;
+    const k = new Date(f.kickoff).getTime();
+    return k <= now && k >= now - LIVE_WINDOW_MS;
+  });
+}
+
+/**
+ * Klientský poll živého skóre (~90 s). Běží jen když je záložka viditelná a je plausibilně
+ * živo (jinak 0 volání – offseason ticho). Náklad stropuje sdílená serverová cache.
+ */
+function useLiveScores(
+  enabled: boolean,
+  fixtures: UpcomingFixture[]
+): { scores: Map<number, LiveScore>; loaded: boolean } {
+  const [scores, setScores] = useState<Map<number, LiveScore>>(new Map());
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    async function tick(): Promise<void> {
+      if (document.hidden || !plausiblyLive(fixtures, Date.now())) return;
+      try {
+        const r = await fetch("/api/fixtures/live");
+        const d: { live?: LiveScore[] } = await r.json();
+        if (!active) return;
+        const map = new Map<number, LiveScore>();
+        for (const l of d.live ?? []) map.set(l.fixtureId, l);
+        setScores(map);
+        setLoaded(true);
+      } catch {
+        // živý stav je best-effort – necháme běžet SSR snapshot
+      }
+    }
+    void tick();
+    const timer = setInterval(() => void tick(), 90_000);
+    const onVis = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [enabled, fixtures]);
+
+  return { scores, loaded };
+}
+
+/**
+ * Autoritativní překryv SSR snapshotu živým skóre: běžící zápas přepíše minutu/skóre,
+ * zápas, který ze živé sady vypadl (dohráno), z Programu **zmizí** (opraví i stale SSR).
+ * Dokud poll neproběhl (`loaded=false`), věříme SSR (nic neskrýváme).
+ */
+function mergeLive(
+  fixtures: UpcomingFixture[],
+  scores: Map<number, LiveScore>,
+  loaded: boolean
+): UpcomingFixture[] {
+  return fixtures
+    .filter((f) => {
+      if (scores.has(f.fixtureId)) return true; // právě běží
+      return !(loaded && f.live); // byl živý, teď už není → dohráno → ven
+    })
+    .map((f) => {
+      const l = scores.get(f.fixtureId);
+      if (!l) return f;
+      return {
+        ...f,
+        live: true,
+        elapsed: l.elapsed,
+        liveHome: l.homeGoals,
+        liveAway: l.awayGoals,
+      };
+    });
+}
+
+/** Oblíbené: live první, pak dle výkopu (primární sekce nahoře). */
+function sortFavorites(a: UpcomingFixture, b: UpcomingFixture): number {
+  const al = a.live ? 0 : 1;
+  const bl = b.live ? 0 : 1;
+  if (al !== bl) return al - bl;
+  return a.kickoff.localeCompare(b.kickoff);
+}
+
+/** Oblíbené IDs uživatele (PRO) + optimistický toggle s revertem při chybě. */
+function useFavorites(isPro: boolean): {
+  favFixtures: Set<number>;
+  favLeagues: Set<number>;
+  toggle: (type: "fixture" | "league", id: number, on: boolean) => void;
+} {
+  const [favFixtures, setFavFixtures] = useState<Set<number>>(new Set());
+  const [favLeagues, setFavLeagues] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!isPro) return;
+    let active = true;
+    fetch("/api/fixtures/favorites")
+      .then((r) => r.json())
+      .then((d: { locked?: boolean; fixtures?: number[]; leagues?: number[] }) => {
+        if (!active || d.locked) return;
+        setFavFixtures(new Set(d.fixtures ?? []));
+        setFavLeagues(new Set(d.leagues ?? []));
+      })
+      .catch(() => {
+        // bez oblíbených se Program vykreslí normálně
+      });
+    return () => {
+      active = false;
+    };
+  }, [isPro]);
+
+  const toggle = useCallback(
+    (type: "fixture" | "league", id: number, on: boolean) => {
+      const setter = type === "fixture" ? setFavFixtures : setFavLeagues;
+      const apply = (add: boolean) =>
+        setter((prev) => {
+          const n = new Set(prev);
+          if (add) n.add(id);
+          else n.delete(id);
+          return n;
+        });
+      apply(on); // optimistic
+      fetch("/api/fixtures/favorites", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type, id, on }),
+      })
+        .then((r) => {
+          if (!r.ok) apply(!on); // revert
+        })
+        .catch(() => apply(!on));
+    },
+    []
+  );
+
+  return { favFixtures, favLeagues, toggle };
+}
 
 /**
  * Záložka „Zápasy" = domovská obrazovka pro rychlý přístup k predikci. Dvě části
@@ -28,7 +180,37 @@ export function ZapasyApp({
 }) {
   const [view, setView] = useState<View>("program");
   const [dayIdx, setDayIdx] = useState(0);
+  const [onlyFav, setOnlyFav] = useState(false);
+  const [proCta, setProCta] = useState(false);
   const active = days[dayIdx] ?? days[0];
+  const isPro = user?.tier === "PRO";
+
+  const { scores, loaded } = useLiveScores(view === "program", active?.fixtures ?? []);
+  const { favFixtures, favLeagues, toggle } = useFavorites(!!isPro);
+
+  // SSR snapshot překrytý živým skóre (dohrané zmizí, běžící přepíšou minutu/skóre).
+  const dayFixtures = useMemo(
+    () => mergeLive(active?.fixtures ?? [], scores, loaded),
+    [active, scores, loaded]
+  );
+
+  const isFavorite = useCallback(
+    (f: UpcomingFixture) => favFixtures.has(f.fixtureId) || favLeagues.has(f.leagueId),
+    [favFixtures, favLeagues]
+  );
+  const favList = useMemo(
+    () => dayFixtures.filter(isFavorite).sort(sortFavorites),
+    [dayFixtures, isFavorite]
+  );
+
+  // Klik na hvězdu: PRO toggluje, ostatní dostanou PRO CTA (žádná perzistence).
+  const onFavClick = useCallback(
+    (type: "fixture" | "league", id: number, on: boolean) => {
+      if (isPro) toggle(type, id, on);
+      else setProCta(true);
+    },
+    [isPro, toggle]
+  );
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
@@ -56,8 +238,50 @@ export function ZapasyApp({
       {view === "program" ? (
         <>
           <DayTabs days={days} active={dayIdx} onSelect={setDayIdx} />
-          {active && active.fixtures.length > 0 ? (
-            <LeagueGroups fixtures={active.fixtures} />
+
+          {proCta && (
+            <ProCtaBanner
+              signedIn={!!user}
+              onDismiss={() => setProCta(false)}
+            />
+          )}
+
+          {(favFixtures.size > 0 || favLeagues.size > 0) && (
+            <FavoriteToggle onlyFav={onlyFav} onChange={setOnlyFav} />
+          )}
+
+          {active && dayFixtures.length > 0 ? (
+            <>
+              {!onlyFav && favList.length > 0 && (
+                <FavoritesSection
+                  fixtures={favList}
+                  favFixtures={favFixtures}
+                  onToggleFixture={(id, on) => onFavClick("fixture", id, on)}
+                />
+              )}
+              {onlyFav ? (
+                favList.length > 0 ? (
+                  <FavoritesSection
+                    fixtures={favList}
+                    favFixtures={favFixtures}
+                    onToggleFixture={(id, on) => onFavClick("fixture", id, on)}
+                  />
+                ) : (
+                  <Empty>
+                    Na tento den nemáš žádný oblíbený zápas. Přidej si zápas nebo ligu
+                    hvězdičkou, nebo vypni filtr „Jen oblíbené&ldquo;.
+                  </Empty>
+                )
+              ) : (
+                <LeagueGroups
+                  fixtures={dayFixtures}
+                  favFixtures={favFixtures}
+                  favLeagues={favLeagues}
+                  onToggleFixture={(id, on) => onFavClick("fixture", id, on)}
+                  onToggleLeague={(id, on) => onFavClick("league", id, on)}
+                />
+              )}
+            </>
           ) : (
             <Empty>
               Na tento den nemáme naplánované zápasy ve sledovaných ligách. Mimo sezónu
@@ -74,6 +298,96 @@ export function ZapasyApp({
         </Empty>
       )}
     </main>
+  );
+}
+
+function FavoriteToggle({
+  onlyFav,
+  onChange,
+}: {
+  onlyFav: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="mt-3 flex justify-end">
+      <button
+        type="button"
+        onClick={() => onChange(!onlyFav)}
+        aria-pressed={onlyFav}
+        className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+          onlyFav
+            ? "border-warning bg-warning/10 text-foreground"
+            : "border-border bg-surface text-muted hover:text-foreground"
+        }`}
+      >
+        {onlyFav ? "★" : "☆"} Jen oblíbené
+      </button>
+    </div>
+  );
+}
+
+function ProCtaBanner({
+  signedIn,
+  onDismiss,
+}: {
+  signedIn: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
+      <span className="text-foreground">
+        ⭐ Oblíbené zápasy a ligy jsou funkce PRO.
+      </span>
+      <div className="flex shrink-0 items-center gap-2">
+        {!signedIn && (
+          <button
+            type="button"
+            onClick={() => void signIn("google")}
+            className="rounded-full bg-foreground px-3 py-1 text-xs font-semibold text-background transition hover:opacity-90"
+          >
+            Přihlásit se
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Zavřít"
+          className="text-muted transition hover:text-foreground"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Primární sekce oblíbených zápasů (plochá, nad ligovými kontejnery; live první). */
+function FavoritesSection({
+  fixtures,
+  favFixtures,
+  onToggleFixture,
+}: {
+  fixtures: UpcomingFixture[];
+  favFixtures: Set<number>;
+  onToggleFixture: (id: number, on: boolean) => void;
+}) {
+  return (
+    <section className="mt-4">
+      <div className="flex items-center gap-2 px-1">
+        <span aria-hidden>⭐</span>
+        <h2 className="text-sm font-semibold text-foreground">Oblíbené</h2>
+      </div>
+      <ul className="mt-2 space-y-2">
+        {fixtures.map((f) => (
+          <FixtureRow
+            key={f.fixtureId}
+            fixture={f}
+            isFavorite={favFixtures.has(f.fixtureId)}
+            onToggleFavorite={(on) => onToggleFixture(f.fixtureId, on)}
+          />
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -172,7 +486,19 @@ interface LeagueGroup {
   fixtures: UpcomingFixture[];
 }
 
-function LeagueGroups({ fixtures }: { fixtures: UpcomingFixture[] }) {
+function LeagueGroups({
+  fixtures,
+  favFixtures,
+  favLeagues,
+  onToggleFixture,
+  onToggleLeague,
+}: {
+  fixtures: UpcomingFixture[];
+  favFixtures: Set<number>;
+  favLeagues: Set<number>;
+  onToggleFixture: (id: number, on: boolean) => void;
+  onToggleLeague: (id: number, on: boolean) => void;
+}) {
   // Seskup dle ligy; pořadí lig dle nejbližšího výkopu (fixtures jsou už dle času).
   const groups = useMemo<LeagueGroup[]>(() => {
     const map = new Map<number, LeagueGroup>();
@@ -192,26 +518,153 @@ function LeagueGroups({ fixtures }: { fixtures: UpcomingFixture[] }) {
     return [...map.values()];
   }, [fixtures]);
 
+  // Rozbalené ligy (výchozí: vše sbaleno, bez auto-rozbalení).
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
   return (
-    <div className="mt-4 space-y-5">
+    <div className="mt-4 space-y-3">
       {groups.map((g) => (
-        <section key={g.leagueId}>
-          <div className="flex items-center gap-2 px-1">
-            <TeamLogo src={g.logoUrl} alt={g.name} size={18} />
-            <h2 className="text-sm font-semibold text-foreground">{g.name}</h2>
-          </div>
-          <ul className="mt-2 space-y-2">
-            {g.fixtures.map((f) => (
-              <FixtureRow key={f.fixtureId} fixture={f} />
-            ))}
-          </ul>
-        </section>
+        <LeagueContainer
+          key={g.leagueId}
+          group={g}
+          open={expanded.has(g.leagueId)}
+          onToggleOpen={() =>
+            setExpanded((prev) => {
+              const n = new Set(prev);
+              if (n.has(g.leagueId)) n.delete(g.leagueId);
+              else n.add(g.leagueId);
+              return n;
+            })
+          }
+          isLeagueFavorite={favLeagues.has(g.leagueId)}
+          onToggleLeague={(on) => onToggleLeague(g.leagueId, on)}
+          favFixtures={favFixtures}
+          onToggleFixture={onToggleFixture}
+        />
       ))}
     </div>
   );
 }
 
-function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
+function LeagueContainer({
+  group,
+  open,
+  onToggleOpen,
+  isLeagueFavorite,
+  onToggleLeague,
+  favFixtures,
+  onToggleFixture,
+}: {
+  group: LeagueGroup;
+  open: boolean;
+  onToggleOpen: () => void;
+  isLeagueFavorite: boolean;
+  onToggleLeague: (on: boolean) => void;
+  favFixtures: Set<number>;
+  onToggleFixture: (id: number, on: boolean) => void;
+}) {
+  const hasLive = group.fixtures.some((f) => f.live);
+  // Nejbližší (nadcházející) výkop pro přehled ve sbalené hlavičce.
+  const nextKickoff = group.fixtures.find((f) => !f.live)?.kickoff;
+  const nextTime = nextKickoff
+    ? new Date(nextKickoff).toLocaleTimeString("cs-CZ", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <TeamLogo src={group.logoUrl} alt={group.name} size={18} />
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+            {group.name}
+          </span>
+          {hasLive && <LiveDot />}
+          <span className="shrink-0 text-xs text-muted">({group.fixtures.length})</span>
+          {!open && nextTime && (
+            <span className="shrink-0 text-xs text-muted">· {nextTime}</span>
+          )}
+        </button>
+        <StarButton
+          on={isLeagueFavorite}
+          onClick={() => onToggleLeague(!isLeagueFavorite)}
+          label={isLeagueFavorite ? "Odebrat ligu z oblíbených" : "Přidat ligu do oblíbených"}
+        />
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          aria-label={open ? "Sbalit" : "Rozbalit"}
+          className="shrink-0 text-muted transition hover:text-foreground"
+        >
+          {open ? "▲" : "▼"}
+        </button>
+      </div>
+      {open && (
+        <ul className="space-y-2 px-3 pb-3">
+          {group.fixtures.map((f) => (
+            <FixtureRow
+              key={f.fixtureId}
+              fixture={f}
+              isFavorite={favFixtures.has(f.fixtureId)}
+              onToggleFavorite={(on) => onToggleFixture(f.fixtureId, on)}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Pulzující červená tečka = liga/zápas má právě živý zápas. */
+function LiveDot() {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0" aria-label="Živě">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-negative opacity-75" />
+      <span className="relative inline-flex h-2 w-2 rounded-full bg-negative" />
+    </span>
+  );
+}
+
+function StarButton({
+  on,
+  onClick,
+  label,
+}: {
+  on: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={on}
+      className={`shrink-0 text-base leading-none transition ${
+        on ? "text-warning" : "text-muted hover:text-foreground"
+      }`}
+    >
+      {on ? "★" : "☆"}
+    </button>
+  );
+}
+
+function FixtureRow({
+  fixture,
+  isFavorite,
+  onToggleFavorite,
+}: {
+  fixture: UpcomingFixture;
+  isFavorite: boolean;
+  onToggleFavorite: (on: boolean) => void;
+}) {
   const time = new Date(fixture.kickoff).toLocaleTimeString("cs-CZ", {
     hour: "2-digit",
     minute: "2-digit",
@@ -224,12 +677,27 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (
     <div className="flex items-center gap-2">
-      <span className="w-10 shrink-0 text-[11px] leading-tight text-muted">{time}</span>
+      {fixture.live ? (
+        <span className="flex w-10 shrink-0 flex-col items-start gap-0.5 leading-tight">
+          <span className="flex items-center gap-1 text-[11px] font-bold text-negative">
+            <LiveDot />
+            {fixture.elapsed != null ? `${fixture.elapsed}'` : "živě"}
+          </span>
+        </span>
+      ) : (
+        <span className="w-10 shrink-0 text-[11px] leading-tight text-muted">{time}</span>
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
         <TeamLogo src={fixture.home.logoUrl} alt={fixture.home.name} size={20} />
         <span className="min-w-0 truncate font-medium text-home">{fixture.home.name}</span>
         <RankBadge rank={fixture.homeRank} />
-        <span className="shrink-0 text-muted">–</span>
+        {fixture.live ? (
+          <span className="shrink-0 font-bold tabular-nums text-negative">
+            {fixture.liveHome ?? 0}:{fixture.liveAway ?? 0}
+          </span>
+        ) : (
+          <span className="shrink-0 text-muted">–</span>
+        )}
         <TeamLogo src={fixture.away.logoUrl} alt={fixture.away.name} size={20} />
         <span className="min-w-0 truncate font-medium text-away">{fixture.away.name}</span>
         <RankBadge rank={fixture.awayRank} />
@@ -242,14 +710,21 @@ function FixtureRow({ fixture }: { fixture: UpcomingFixture }) {
     </div>
   );
   return (
-    <li>
-      {href != null ? (
-        <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
-          {inner}
-        </Link>
-      ) : (
-        <div className={cardClass}>{inner}</div>
-      )}
+    <li className="flex items-center gap-1.5">
+      <div className="min-w-0 flex-1">
+        {href != null ? (
+          <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
+            {inner}
+          </Link>
+        ) : (
+          <div className={cardClass}>{inner}</div>
+        )}
+      </div>
+      <StarButton
+        on={isFavorite}
+        onClick={() => onToggleFavorite(!isFavorite)}
+        label={isFavorite ? "Odebrat zápas z oblíbených" : "Přidat zápas do oblíbených"}
+      />
     </li>
   );
 }
