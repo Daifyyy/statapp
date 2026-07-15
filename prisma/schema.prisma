@@ -92,6 +92,8 @@ model User {
   savedComparisons SavedComparison[]
   gameSave         GameSave?
   tips             UserTip[]
+  favoriteLeagues  FavoriteLeague[]
+  favoriteFixtures FavoriteFixture[]
 }
 
 model Account {
@@ -311,4 +313,28 @@ model GameSave {
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Oblíbená liga uživatele (PRO) – v Programu Zápasů se všechny její zápasy počítají jako
+/// oblíbené (primární sekce + filtr „Jen oblíbené"). Bez snapshot meta – filtr pracuje jen
+/// nad už načteným 7denním Programem, stačí id.
+model FavoriteLeague {
+  userId    String
+  leagueId  Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, leagueId])
+}
+
+/// Oblíbený konkrétní zápas uživatele (PRO). Sjednocení s FavoriteLeague řídí „oblíbenost".
+model FavoriteFixture {
+  userId    String
+  fixtureId Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, fixtureId])
 }
