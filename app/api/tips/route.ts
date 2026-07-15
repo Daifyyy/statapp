@@ -13,7 +13,8 @@ import {
 } from "@/lib/data/tipStore";
 import { computeTipStats } from "@/lib/tips/stats";
 import { pickOddsForTip } from "@/lib/tips/odds";
-import { fetchOdds, PINNACLE_FIRST_BOOKMAKERS } from "@/lib/data/apiFootball";
+import { fetchOdds, PINNACLE_FIRST_BOOKMAKERS, type MatchOdds } from "@/lib/data/apiFootball";
+import { cachedJson } from "@/lib/data/cache";
 import type { TipMarket, TipSelection } from "@/lib/tips/types";
 
 // Osobní tipovačka (tréninkový deník). Přihlášení povinné (anonym → 401), jinak
@@ -102,7 +103,10 @@ export async function POST(req: Request) {
   let oddsBook: string | null = null;
   if (isRealDataConfigured() && !d.national) {
     try {
-      const mo = await fetchOdds(d.fixtureId, PINNACLE_FIRST_BOOKMAKERS);
+      // Kurz per zápas přes 30min cache → víc tipů / re-tip na týž zápas nevolá API znovu.
+      const mo = await cachedJson<MatchOdds | null>(`odds:${d.fixtureId}`, 30 * 60, () =>
+        fetchOdds(d.fixtureId, PINNACLE_FIRST_BOOKMAKERS)
+      );
       const picked = pickOddsForTip(mo, d.market, d.selection);
       if (picked != null) {
         odds = picked;
