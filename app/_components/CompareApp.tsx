@@ -7,6 +7,7 @@ import type {
   Injury,
   League,
   LeagueGoalsAvg,
+  LeagueTable,
   Metric,
   Scorer,
   Standing,
@@ -21,6 +22,7 @@ import { FormSummary } from "./FormSummary";
 import { InsightChips } from "./InsightChips";
 import { InjuryList } from "./InjuryList";
 import { StandingContext } from "./StandingContext";
+import { StandingsTable, ZoneLegend } from "./StandingsTable";
 import { ScorerList } from "./ScorerList";
 import { CategoryScores } from "./CategoryScores";
 import { PlayStyleChart } from "./PlayStyleChart";
@@ -154,6 +156,30 @@ function useStanding(
     };
   }, [teamId, leagueId, enabled]);
   return { standing, leagueAvg };
+}
+
+/** Líně dotáhne celou ligovou tabulku (FREE; jen klub vs. klub stejné ligy). */
+function useLeagueTable(
+  leagueId: number | null,
+  enabled: boolean
+): LeagueTable | null {
+  const [table, setTable] = useState<LeagueTable | null>(null);
+  useEffect(() => {
+    // ResultPanel je keyed na dvojici týmů → při změně ligy/týmů remountuje se svěží
+    // state, takže při vypnutí stačí nefetchovat (žádný synchronní setState v efektu).
+    if (!enabled || leagueId == null) return;
+    let active = true;
+    fetch(`/api/standings/table?league=${leagueId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (active) setTable(d.table ?? null);
+      })
+      .catch(() => active && setTable(null));
+    return () => {
+      active = false;
+    };
+  }, [leagueId, enabled]);
+  return table;
 }
 
 /** Líně dotáhne nejlepší střelce týmu ze žebříčku ligy (FREE kontext, mimo porovnání). */
@@ -551,6 +577,8 @@ export function CompareApp({
         homeScorers={homeScorers}
         awayScorers={awayScorers}
         homeLeagueAvg={homeLeagueAvg}
+        homeLeagueId={homeLeagueId}
+        awayLeagueId={awayLeagueId}
         user={user}
         trialAvailable={trialAvailable}
         unlocking={unlocking}
@@ -577,6 +605,8 @@ function ResultPanel({
   homeScorers,
   awayScorers,
   homeLeagueAvg,
+  homeLeagueId,
+  awayLeagueId,
   user,
   trialAvailable,
   unlocking,
@@ -595,6 +625,8 @@ function ResultPanel({
   homeScorers: Scorer[];
   awayScorers: Scorer[];
   homeLeagueAvg: LeagueGoalsAvg | null;
+  homeLeagueId: number | null;
+  awayLeagueId: number | null;
   user: SessionUser | null;
   trialAvailable: boolean;
   unlocking: boolean;
@@ -603,6 +635,13 @@ function ResultPanel({
   const [viewMode, setViewMode] = useState<ViewMode>("raw");
   const entityMode: EntityType =
     result?.source === "NATIONAL" || result?.source === "NATIONAL_FB" ? "NATIONAL" : "CLUB";
+  // Ligová tabulka jen pro klub vs. klub stejné ligy (FREE, i pro zamčený výsledek).
+  const sameLeague =
+    entityMode === "CLUB" && homeLeagueId != null && homeLeagueId === awayLeagueId;
+  const leagueTable = useLeagueTable(
+    sameLeague ? homeLeagueId : null,
+    sameLeague && result != null
+  );
   const categoryScores = useMemo(
     () =>
       result
@@ -694,6 +733,15 @@ function ResultPanel({
       <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
 
       <StandingContext home={homeStanding} away={awayStanding} venue={venue} />
+
+      {leagueTable && leagueTable.rows.some((r) => r.played > 0) && (
+        <LeagueTableSection
+          table={leagueTable}
+          highlightTeamIds={
+            new Set([result.home.team.id, result.away.team.id])
+          }
+        />
+      )}
 
       {(homeScorers.length > 0 || awayScorers.length > 0) && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -971,6 +1019,38 @@ function plural(n: number): string {
   if (n === 1) return "hráč";
   if (n >= 2 && n <= 4) return "hráči";
   return "hráčů";
+}
+
+/** Collapsible ligová tabulka v Porovnání (default sbalená; oba týmy zvýrazněné). */
+function LeagueTableSection({
+  table,
+  highlightTeamIds,
+}: {
+  table: LeagueTable;
+  highlightTeamIds: Set<number>;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="rounded-2xl border border-border bg-surface shadow-sm">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
+      >
+        <span className="text-sm font-semibold text-foreground">Ligová tabulka</span>
+        <span className="text-muted" aria-hidden>
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+      {open && (
+        <div className="px-3 pb-4">
+          <StandingsTable rows={table.rows} highlightTeamIds={highlightTeamIds} />
+          <ZoneLegend rows={table.rows} />
+        </div>
+      )}
+    </section>
+  );
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
