@@ -207,11 +207,16 @@ function TipovatView({
   onPlaced: () => Promise<void>;
 }) {
   const [dayIdx, setDayIdx] = useState(0);
-  const active = days[dayIdx] ?? days[0];
+  // Na živý zápas nejde tipnout (POST /api/tips ho stejně odmítne) → vyřaď ho z nabídky.
+  const tippableDays = useMemo(
+    () => days.map((d) => ({ ...d, fixtures: d.fixtures.filter((f) => !f.live) })),
+    [days]
+  );
+  const active = tippableDays[dayIdx] ?? tippableDays[0];
 
   return (
     <>
-      <DayTabs days={days} active={dayIdx} onSelect={setDayIdx} />
+      <DayTabs days={tippableDays} active={dayIdx} onSelect={setDayIdx} />
       {active && active.fixtures.length > 0 ? (
         <LeagueGroups
           fixtures={active.fixtures}
