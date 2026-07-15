@@ -128,6 +128,53 @@ const DC_RHO = -0.03;
 const LAMBDA_SHARPEN = 1.0;
 
 /**
+ * Kalibrace 1X2 (Platt scaling) – **oprava TVARU** chyby, ne jen síly. `LAMBDA_SHARPEN`
+ * (nahoře) škáluje jen rozdíl λ jedním číslem a backtest ukázal, že to nepomáhá, protože
+ * chyba je nesouměrná: model je přesebevědomý na favoritech (64 % → realita 57 %) A
+ * PODsebevědomý na outsiderech (7 % → 14 %) zároveň – jeden multiplikátor nemůže narovnat
+ * oba konce najednou. Platt scaling na logitu to umí: `p' = σ(a·logit(p) + b)`, `a < 1`
+ * stlačí VŠECHNY pravděpodobnosti k 1/3 (favority i outsidery současně), `b` posune střed.
+ * Aplikuje se na finální 1X2 z mřížky (po ρ i zostření), ne na λ – proto žije vedle nich
+ * jako další `PredictParams`, ne v `sharpenLambdas`. `a = 1, b = 0` je přesný no-op.
+ * Fituje se přes `fitCalibration` (`lib/picks/fit.ts`) nad `npm run backtest`, ne nad pár
+ * desítkami zápasů z DB (stejná zásada jako u `LAMBDA_SHARPEN`). Zatím nekalibrováno.
+ */
+const CALIB_A = 1.0;
+const CALIB_B = 0.0;
+
+/** `p → logit(p)`, clampnuté proti ±∞ na krajích. */
+function logit(p: number): number {
+  const c = clamp(p, 1e-6, 1 - 1e-6);
+  return Math.log(c / (1 - c));
+}
+
+/** Inverzní logit (sigmoida). */
+function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-x));
+}
+
+/**
+ * Platt scaling nad hotovým 1X2 (po ρ i zostření): `p' = σ(a·logit(p) + b)` na každé
+ * ze tří pravděpodobností, pak renormalizace na součet 1 (transformace samostatně sum=1
+ * nezachová). `a = 1, b = 0` je přesný no-op (žádná renormalizace, žádná ztráta přesnosti).
+ * Exportováno pro `calibrate.ts`/`backtest.ts` (grid search) a testy.
+ */
+export function calibrateOutcome(
+  home: number,
+  draw: number,
+  away: number,
+  a: number = CALIB_A,
+  b: number = CALIB_B
+): [number, number, number] {
+  if (a === 1 && b === 0) return [home, draw, away];
+  const ch = sigmoid(a * logit(home) + b);
+  const cd = sigmoid(a * logit(draw) + b);
+  const ca = sigmoid(a * logit(away) + b);
+  const sum = ch + cd + ca;
+  return sum > 0 ? [ch / sum, cd / sum, ca / sum] : [home, draw, away];
+}
+
+/**
  * **Zkoušeno a zamítnuto: bivariační Poisson (společný šok λ₃).** Nezávislý Poisson
  * předpokládá, že góly obou týmů spolu nesouvisí; λ₃ přidává kladnou korelaci a měl
  * narovnat „oba skórují". Backtest (3 511 zápasů): BTTS log-loss 0.6920 → 0.6915 (šum),
@@ -139,11 +186,12 @@ const LAMBDA_SHARPEN = 1.0;
  */
 
 /**
- * **Post-processingové parametry mřížky** – aplikují se až NA λ, samotné λ negenerují.
+ * **Post-processingové parametry mřížky** – aplikují se až NA λ (ρ, zostření) nebo až NA
+ * hotové 1X2 (kalibrace), samotné λ negenerují.
  *
  * Proto **nepatří pod `MODEL_VERSION`**: uložený řádek predikce nese základní λ, takže
- * změna ρ/zostření se dá na historii přepočítat čistou matematikou bez jediného API volání
- * (`npm run reprice`) – žádný reset datasetu. `MODEL_VERSION` (`lib/data/predictions.ts`)
+ * změna ρ/zostření/kalibrace se dá na historii přepočítat čistou matematikou bez jediného
+ * API volání (`npm run reprice`) – žádný reset datasetu. `MODEL_VERSION` (`lib/data/predictions.ts`)
  * verzuje jen to, co λ *vyrábí* (okna, váhy, xG zpevnění, build týmů) – tam přepočet nestačí,
  * protože bys musel znovu stáhnout a přepočítat vstupy.
  *
@@ -153,11 +201,16 @@ const LAMBDA_SHARPEN = 1.0;
 export interface PredictParams {
   rho: number;
   sharpen: number;
+  /** Platt scaling 1X2 (`a` = strmost, `b` = posun) – viz komentář u `CALIB_A`. */
+  calibA: number;
+  calibB: number;
 }
 
 export const PREDICT_PARAMS: PredictParams = {
   rho: DC_RHO,
   sharpen: LAMBDA_SHARPEN,
+  calibA: CALIB_A,
+  calibB: CALIB_B,
 };
 
 /** Pravděpodobnosti odvozené z jedné mřížky skóre (vzájemně konzistentní). */
@@ -216,12 +269,23 @@ export function gridProbs(
     .slice(0, TOP_SCORES)
     .map((s) => ({ home: s.home, away: s.away, prob: s.prob / norm }));
 
+  // Kalibrace 1X2 (Platt scaling) se aplikuje AŽ TADY, na hotové pravděpodobnosti z
+  // opravené mřížky – Over 2.5/BTTS/topScores z ní zůstávají nedotčené (diagnostikovaná
+  // chyba je specifická pro 1X2, viz komentář u `CALIB_A`).
+  const [chome, cdraw, caway] = calibrateOutcome(
+    homeWin / norm,
+    draw / norm,
+    awayWin / norm,
+    params.calibA,
+    params.calibB
+  );
+
   return {
     lambdaHome: lh,
     lambdaAway: la,
-    homeWin: homeWin / norm,
-    draw: draw / norm,
-    awayWin: awayWin / norm,
+    homeWin: chome,
+    draw: cdraw,
+    awayWin: caway,
     bttsYes: bttsYes / norm,
     over25: over25 / norm,
     topScores,

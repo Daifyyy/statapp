@@ -50,6 +50,8 @@ function rowFrom(
     modelVersion: 0,
     rho: PREDICT_PARAMS.rho,
     sharpen: PREDICT_PARAMS.sharpen,
+    calibA: PREDICT_PARAMS.calibA,
+    calibB: PREDICT_PARAMS.calibB,
     status,
     homeGoals,
     awayGoals,

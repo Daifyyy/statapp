@@ -255,6 +255,8 @@ export function backtestNational(
       modelVersion: 0,
       rho: PREDICT_PARAMS.rho,
       sharpen: PREDICT_PARAMS.sharpen,
+      calibA: PREDICT_PARAMS.calibA,
+      calibB: PREDICT_PARAMS.calibB,
       status: "FT",
       homeGoals: m.homeGoals,
       awayGoals: m.awayGoals,

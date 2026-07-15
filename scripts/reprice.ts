@@ -14,13 +14,22 @@ import { gridProbs, PREDICT_PARAMS } from "../lib/stats/predict.ts";
 const apply = process.argv.includes("--apply");
 const EPS = 1e-9;
 
-/** Řádek je aktuální, jen když sedí OBA post-parametry (null = starý řádek → přepočítat). */
-function isCurrent(rho: number | null, sharpen: number | null): boolean {
+/** Řádek je aktuální, jen když sedí VŠECHNY post-parametry (null = starý řádek → přepočítat). */
+function isCurrent(
+  rho: number | null,
+  sharpen: number | null,
+  calibA: number | null,
+  calibB: number | null
+): boolean {
   return (
     rho != null &&
     sharpen != null &&
+    calibA != null &&
+    calibB != null &&
     Math.abs(rho - PREDICT_PARAMS.rho) < EPS &&
-    Math.abs(sharpen - PREDICT_PARAMS.sharpen) < EPS
+    Math.abs(sharpen - PREDICT_PARAMS.sharpen) < EPS &&
+    Math.abs(calibA - PREDICT_PARAMS.calibA) < EPS &&
+    Math.abs(calibB - PREDICT_PARAMS.calibB) < EPS
   );
 }
 
@@ -28,7 +37,8 @@ const pct = (x: number) => `${(x * 100).toFixed(1)} %`;
 
 async function main() {
   console.log(
-    `Model v${MODEL_VERSION} | post-parametry: ρ=${PREDICT_PARAMS.rho}, zostření=${PREDICT_PARAMS.sharpen}` +
+    `Model v${MODEL_VERSION} | post-parametry: ρ=${PREDICT_PARAMS.rho}, zostření=${PREDICT_PARAMS.sharpen}, ` +
+      `kalibrace a=${PREDICT_PARAMS.calibA}/b=${PREDICT_PARAMS.calibB}` +
       (apply ? "" : "  [suchý běh – zapiš přes -- --apply]")
   );
 
@@ -48,11 +58,13 @@ async function main() {
       awayWin: true,
       rho: true,
       sharpen: true,
+      calibA: true,
+      calibB: true,
     },
     orderBy: { kickoff: "asc" },
   });
 
-  const stale = rows.filter((r) => !isCurrent(r.rho, r.sharpen));
+  const stale = rows.filter((r) => !isCurrent(r.rho, r.sharpen, r.calibA, r.calibB));
   console.log(
     `Řádků s predikcí: ${rows.length} | k přepočtu: ${stale.length} | aktuálních: ${rows.length - stale.length}`
   );
@@ -92,6 +104,8 @@ async function main() {
           // ho přepočítat nejde – mřížkovou hodnotou bychom ho jen pokazili.
           rho: PREDICT_PARAMS.rho,
           sharpen: PREDICT_PARAMS.sharpen,
+          calibA: PREDICT_PARAMS.calibA,
+          calibB: PREDICT_PARAMS.calibB,
         },
       });
     }

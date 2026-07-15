@@ -13,9 +13,11 @@ import { FINISHED_STATUSES } from "./apiFootball";
  * bez benchmarku – ten má vlastní cyklus přes `saveBenchmark`). */
 export type PredictionUpsert = Omit<
   PredictionRow,
-  // ρ/zostření nedodává volající – razítkuje je store z aktuálních `PREDICT_PARAMS`.
+  // ρ/zostření/kalibrace nedodává volající – razítkuje je store z aktuálních `PREDICT_PARAMS`.
   | "rho"
   | "sharpen"
+  | "calibA"
+  | "calibB"
   | "status"
   | "homeGoals"
   | "awayGoals"
@@ -56,6 +58,8 @@ function toRow(p: FixturePrediction): PredictionRow {
     modelVersion: p.modelVersion,
     rho: p.rho,
     sharpen: p.sharpen,
+    calibA: p.calibA,
+    calibB: p.calibB,
     status: p.status,
     homeGoals: p.homeGoals,
     awayGoals: p.awayGoals,
@@ -98,6 +102,8 @@ export async function upsertPrediction(row: PredictionUpsert): Promise<void> {
     // Čím byly pravděpodobnosti odvozeny z λ – `reprice` podle toho pozná zastaralý řádek.
     rho: PREDICT_PARAMS.rho,
     sharpen: PREDICT_PARAMS.sharpen,
+    calibA: PREDICT_PARAMS.calibA,
+    calibB: PREDICT_PARAMS.calibB,
     predictedAt: new Date(),
   };
   await prisma.fixturePrediction.upsert({

@@ -270,6 +270,8 @@ export function backtest(
       modelVersion: 0, // backtest, ne produkční řádek
       rho: PREDICT_PARAMS.rho,
       sharpen: PREDICT_PARAMS.sharpen,
+      calibA: PREDICT_PARAMS.calibA,
+      calibB: PREDICT_PARAMS.calibB,
       status: "FT",
       homeGoals: m.homeGoals,
       awayGoals: m.awayGoals,

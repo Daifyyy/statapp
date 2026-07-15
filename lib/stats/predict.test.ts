@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Metric, MetricValue, TeamComparison, Venue } from "@/lib/types";
 import {
   predictMatch,
+  calibrateOutcome,
   dampenTotal,
   drawTau,
   gridProbs,
@@ -155,8 +156,8 @@ describe("predictMatch", () => {
   it("post-parametry (ρ, zostření) mění mřížku, ne λ → přepočet je čistá matematika", () => {
     const base: [number, number] = [1.9, 1.0];
     const now = gridProbs(...base, PREDICT_PARAMS);
-    const sharper = gridProbs(...base, { rho: PREDICT_PARAMS.rho, sharpen: 2 });
-    const flatter = gridProbs(...base, { rho: -0.25, sharpen: 1 });
+    const sharper = gridProbs(...base, { ...PREDICT_PARAMS, sharpen: 2 });
+    const flatter = gridProbs(...base, { ...PREDICT_PARAMS, rho: -0.25, sharpen: 1 });
 
     // Zostření: favorit dostane víc, součet pravděpodobností drží.
     expect(sharper.homeWin).toBeGreaterThan(now.homeWin);
@@ -262,6 +263,52 @@ describe("sharpenLambdas", () => {
     const [lh, la] = sharpenLambdas(2.5, 0.5, 5);
     expect(lh).toBeLessThanOrEqual(5);
     expect(la).toBeGreaterThanOrEqual(0.2);
+  });
+});
+
+describe("calibrateOutcome (Platt scaling 1X2)", () => {
+  it("a=1, b=0 je přesný no-op", () => {
+    expect(calibrateOutcome(0.6, 0.25, 0.15, 1, 0)).toEqual([0.6, 0.25, 0.15]);
+  });
+
+  it("vrátí trojici se součtem 1", () => {
+    const [h, d, a] = calibrateOutcome(0.6, 0.25, 0.15, 0.7, 0.1);
+    expect(h + d + a).toBeCloseTo(1, 10);
+  });
+
+  it("a < 1 stlačí extrémy blíž k 1/3 (favorita i outsidera zároveň)", () => {
+    const [h, , a] = calibrateOutcome(0.7, 0.15, 0.15, 0.5, 0);
+    expect(h).toBeLessThan(0.7); // favorit stažen dolů
+    expect(a).toBeGreaterThan(0.15); // outsider tažen nahoru
+  });
+
+  it("a > 1 zostří extrémy dál od 1/3", () => {
+    const [h, , a] = calibrateOutcome(0.7, 0.15, 0.15, 1.5, 0);
+    expect(h).toBeGreaterThan(0.7);
+    expect(a).toBeLessThan(0.15);
+  });
+
+  it("zachová pořadí pravděpodobností (monotónní transformace)", () => {
+    const [h, d, a] = calibrateOutcome(0.5, 0.3, 0.2, 0.8, 0.2);
+    expect(h).toBeGreaterThan(d);
+    expect(d).toBeGreaterThan(a);
+  });
+});
+
+describe("gridProbs – kalibrace 1X2 (default no-op)", () => {
+  it("výchozí PREDICT_PARAMS.calibA/calibB neovlivní 1X2 ani ostatní trhy", () => {
+    const withCalib = gridProbs(1.8, 1.0);
+    const withoutCalib = gridProbs(1.8, 1.0, { ...PREDICT_PARAMS, calibA: 1, calibB: 0 });
+    expect(withCalib).toEqual(withoutCalib);
+  });
+
+  it("nenulová kalibrace nechá Over 2.5/BTTS/topScores beze změny, jen posune 1X2", () => {
+    const base = gridProbs(1.8, 1.0);
+    const calibrated = gridProbs(1.8, 1.0, { ...PREDICT_PARAMS, calibA: 0.6, calibB: 0 });
+    expect(calibrated.over25).toBeCloseTo(base.over25, 10);
+    expect(calibrated.bttsYes).toBeCloseTo(base.bttsYes, 10);
+    expect(calibrated.homeWin).not.toBeCloseTo(base.homeWin, 6);
+    expect(calibrated.homeWin + calibrated.draw + calibrated.awayWin).toBeCloseTo(1, 8);
   });
 });
 

@@ -28,6 +28,8 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     modelVersion: 1,
     rho: -0.13,
     sharpen: 1,
+    calibA: 1,
+    calibB: 0,
     status: "NS",
     homeGoals: null,
     awayGoals: null,

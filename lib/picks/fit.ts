@@ -1,5 +1,5 @@
 import type { PredictionRow } from "@/lib/types";
-import { drawTau, poissonVector, sharpenLambdas } from "@/lib/stats/predict";
+import { calibrateOutcome, drawTau, poissonVector, sharpenLambdas } from "@/lib/stats/predict";
 
 /**
  * Fitování **post-parametrů** modelu (Dixon–Coles ρ, zostření λ) nad odehranými řádky.
@@ -118,5 +118,72 @@ export function fitSharpen(rows: PredictionRow[], sMax = 3.0): SharpenFit {
     baseline,
     bestScore: outcomeScoreAtSharpen(rows, best),
     atGridEdge: best >= sMax,
+  };
+}
+
+/**
+ * 1X2 log-loss + Brier při Platt kalibraci `(a, b)` nad **hotovým** 1X2 z řádku
+ * (`r.homeWin/draw/awayWin` = po ρ+zostření, jako aktuálně produkčně běží). `a=1,b=0`
+ * = current model (viz `calibrateOutcome` v `predict.ts` pro zdůvodnění tvaru).
+ */
+export function outcomeScoreAtCalibration(
+  rows: PredictionRow[],
+  a: number,
+  b: number
+): OutcomeScore {
+  let ll = 0;
+  let brier = 0;
+  let n = 0;
+  for (const r of rows) {
+    if (!r.available || r.homeGoals == null || r.awayGoals == null) continue;
+    const [home, draw, away] = calibrateOutcome(r.homeWin, r.draw, r.awayWin, a, b);
+    const oH = r.homeGoals > r.awayGoals ? 1 : 0;
+    const oA = r.homeGoals < r.awayGoals ? 1 : 0;
+    const oD = r.homeGoals === r.awayGoals ? 1 : 0;
+    brier += (home - oH) ** 2 + (draw - oD) ** 2 + (away - oA) ** 2;
+    ll += -Math.log(Math.max(oH ? home : oA ? away : draw, 1e-9));
+    n++;
+  }
+  return n ? { logloss: ll / n, brier: brier / n, n } : { logloss: 0, brier: 0, n: 0 };
+}
+
+export interface CalibFit {
+  a: number;
+  b: number;
+  baseline: OutcomeScore;
+  bestScore: OutcomeScore;
+  /** Optimum na hranici gridu = podezření na overfit (rozšiř vzorek, ne grid). */
+  atGridEdge: boolean;
+}
+
+/**
+ * Grid search Platt parametrů `(a, b)` minimalizující 1X2 log-loss (`a=1,b=0` = baseline).
+ * Rozsah `a` [0.4, 1.6] pokrývá „silně stlač" až „silně zostři"; `b` [-0.3, 0.3] pokrývá
+ * posun středu. Sdílené s `sharpenLambdas`-fitem: nezávislé opravy různého tvaru chyby.
+ */
+export function fitCalibration(rows: PredictionRow[]): CalibFit {
+  const baseline = outcomeScoreAtCalibration(rows, 1, 0);
+  const aMin = 0.4;
+  const aMax = 1.6;
+  const bMin = -0.3;
+  const bMax = 0.3;
+  let best = { a: 1, b: 0 };
+  let bestLogloss = baseline.logloss;
+  for (let a = aMin; a <= aMax + 0.001; a += 0.05) {
+    const ar = Math.round(a * 100) / 100;
+    for (let b = bMin; b <= bMax + 0.001; b += 0.02) {
+      const br = Math.round(b * 100) / 100;
+      const sc = outcomeScoreAtCalibration(rows, ar, br);
+      if (sc.logloss < bestLogloss) {
+        best = { a: ar, b: br };
+        bestLogloss = sc.logloss;
+      }
+    }
+  }
+  return {
+    ...best,
+    baseline,
+    bestScore: outcomeScoreAtCalibration(rows, best.a, best.b),
+    atGridEdge: best.a <= aMin || best.a >= aMax || best.b <= bMin || best.b >= bMax,
   };
 }

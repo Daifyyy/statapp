@@ -169,6 +169,12 @@ model FixturePrediction {
   /// z doby před zavedením polí (default ρ=−0.13, zostření 1.0).
   rho           Float?
   sharpen       Float?
+  /// Platt kalibrace 1X2 (`p' = σ(a·logit(p) + b)`), aplikovaná AŽ na hotové V/R/P
+  /// (po ρ+zostření) – oprava tvaru chyby (přesebevědomí na favoritech, viz predict.ts).
+  /// Stejný cyklus jako rho/sharpen: post-parametr nad λ, `reprice` ho umí dorovnat.
+  /// null = řádek z doby před zavedením (default a=1, b=0 = no-op).
+  calibA        Float?
+  calibB        Float?
   predictedAt   DateTime  @default(now())
   // Výsledek (doplní settle cron po odehrání)
   status        String    @default("NS")

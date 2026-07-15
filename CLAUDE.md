@@ -448,6 +448,20 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   **s = 1.00 (žádné zlepšení)**. Zostření by model zhoršilo. Příčina není komprese λ, ale **šum**:
   55 % váhy nese LAST5 (pět zápasů!) → λ přestřeluje na krátkodobé sérii a extrémní
   pravděpodobnosti neustojí. Léčba je **shrinkage/regularizace λ**, ne zostření (viz plán C1/C2).
+- **Kalibrace 1X2 (Platt scaling, `CALIB_A`/`CALIB_B` v `predict.ts`, `calibrateOutcome`) –
+  PŘIPRAVENO, ZATÍM NEFITNUTO:** `LAMBDA_SHARPEN` škáluje jen rozdíl λ jedním číslem a na
+  backtestu nepomohlo, protože chyba je **nesouměrná** (přesebevědomí na favoritech A
+  podsebevědomí na outsiderech zároveň) – jeden multiplikátor nemůže narovnat oba konce.
+  Platt scaling na logitu (`p' = σ(a·logit(p)+b)`) to umí: `a<1` stlačí favority i outsidery
+  k 1/3 najednou. Aplikuje se AŽ na hotové V/R/P z mřížky (po ρ+zostření), Over 2.5/BTTS/
+  topScores nedotčené. Stejný cyklus jako ρ/zostření: post-parametr nad λ (`FixturePrediction.
+  calibA/calibB`, **ne** pod `MODEL_VERSION`), `npm run reprice` ho umí dorovnat na historii
+  bez API volání. Fit `fitCalibration`/`outcomeScoreAtCalibration` (`lib/picks/fit.ts`, grid
+  search `a∈[0.4,1.6]`/`b∈[-0.3,0.3]`) sdílený mezi `calibrate.ts` (živá DB) a `backtest.ts`
+  (offline historie) – stejná zásada jako u zostření: fituj na tisících zápasů z backtestu,
+  ne na desítkách z DB. **`CALIB_A=1.0`/`CALIB_B=0.0` je zatím přesný no-op** (default) –
+  čeká na `npm run backtest` (potřebuje `.cache/backtest`, tj. API klíč pro první stažení
+  historie) a ověření, že grid search nekončí na hranici (overfit).
 - **Interní benchmark vs. API-Football** (jen offline měření, **nikdy ve FREE/PRO API**,
   **nesahá na `compareTeams`**): paralelní sloupce `bench*` na řádku `FixturePrediction`
   (predikce API-Footballu 1X2). `fetchPrediction` (`apiFootball.ts`) parsne `percent`

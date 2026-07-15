@@ -23,7 +23,7 @@ import { PREDICTION_LEAGUES } from "../lib/data/predictions.ts";
 import { backtest, NAIVE_PROBS, type HistoryMatch } from "../lib/picks/backtest.ts";
 import { DEFAULT_TUNING, gridProbs, PREDICT_PARAMS } from "../lib/stats/predict.ts";
 import type { PredictionRow } from "../lib/types.ts";
-import { fitRho, fitSharpen } from "../lib/picks/fit.ts";
+import { fitCalibration, fitRho, fitSharpen } from "../lib/picks/fit.ts";
 import { computeReliability } from "../lib/picks/reliability.ts";
 import {
   computeTrackRecord,
@@ -450,6 +450,14 @@ async function main() {
   );
   if (sh.atGridEdge) {
     console.log("⚠ Optimum na hranici gridu → model je strukturálně stlačený (viz λ), ne jen „málo zostřený“.");
+  }
+  const cal = fitCalibration(usable);
+  console.log(
+    `Kalibrace 1X2: a=${cal.a.toFixed(2)}, b=${cal.b.toFixed(2)} → log-loss ${cal.baseline.logloss.toFixed(4)} → ` +
+      `${cal.bestScore.logloss.toFixed(4)} | dnes: a=${PREDICT_PARAMS.calibA}, b=${PREDICT_PARAMS.calibB}`
+  );
+  if (cal.atGridEdge) {
+    console.log("⚠ Optimum kalibrace na hranici gridu → ověř na širším vzorku, než to nastavíš natvrdo.");
   }
   console.log(
     "\nPozn.: backtest jede BEZ xG (to je 1 volání/zápas) → produkční λ má navíc xG složku."

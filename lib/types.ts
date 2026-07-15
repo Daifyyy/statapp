@@ -517,6 +517,13 @@ export interface PredictionRow {
    */
   rho: number | null;
   sharpen: number | null;
+  /**
+   * Platt kalibrace 1X2 (`a` = strmost, `b` = posun), aplikovaná AŽ na hotové V/R/P
+   * (po ρ+zostření). Stejný cyklus jako `rho`/`sharpen` – `null` = řádek z doby před
+   * zavedením polí (spočítaný no-opem a=1, b=0).
+   */
+  calibA: number | null;
+  calibB: number | null;
   status: string; // "NS" | "FT" | "AET" | "PEN" | …
   homeGoals: number | null;
   awayGoals: number | null;

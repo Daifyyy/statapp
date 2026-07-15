@@ -6,7 +6,12 @@
 // 2) Reportuje úspěšnost (1X2), Brier skóre a log-loss uložených predikcí.
 import { getSettledPredictions } from "../lib/data/predictionStore.ts";
 import { MODEL_VERSION } from "../lib/data/predictions.ts";
-import { fitRho, fitSharpen, outcomeScoreAtSharpen } from "../lib/picks/fit.ts";
+import {
+  fitCalibration,
+  fitRho,
+  fitSharpen,
+  outcomeScoreAtSharpen,
+} from "../lib/picks/fit.ts";
 import {
   computeTrackRecord,
   scoreProbs,
@@ -128,6 +133,34 @@ async function main() {
       );
     }
   }
+  // Platt kalibrace 1X2 (a, b): oprava TVARU chyby (favorit i outsider zároveň), ne jen
+  // síly jako zostření. Grid search nad hotovým 1X2 z uložených řádků.
+  console.log("\n=== Kalibrace 1X2 (Platt scaling, oprava tvaru chyby) ===");
+  const cal = fitCalibration(rows);
+  console.log(
+    `Baseline   a=1.00, b=0.00 → log-loss ${fmt(cal.baseline.logloss)} | Brier ${fmt(cal.baseline.brier)} (n=${cal.baseline.n})`
+  );
+  console.log(
+    `Doporučené a=${cal.a.toFixed(2)}, b=${cal.b.toFixed(2)} → log-loss ${fmt(cal.bestScore.logloss)} | Brier ${fmt(cal.bestScore.brier)}`
+  );
+  if (cal.a === 1 && cal.b === 0) {
+    console.log("→ Kalibrace nepomáhá (a=1,b=0 je optimum) – nech CALIB_A=1.0, CALIB_B=0.0.");
+  } else {
+    const gain = cal.baseline.logloss - cal.bestScore.logloss;
+    console.log(`→ Zlepšení log-loss o ${fmt(gain)}.`);
+    if (cal.atGridEdge) {
+      console.log(
+        "⚠ Optimum na hranici gridu → overfit na malém vzorku. Ověř přes `npm run backtest` " +
+          "na tisících zápasů, ne laděním na pár desítkách z DB."
+      );
+    } else {
+      console.log(
+        "Pozor: na malém vzorku může být v šumu – nastav CALIB_A/CALIB_B v predict.ts (a spusť " +
+          "`npm run reprice`) jen když to potvrdí i `npm run backtest`. MODEL_VERSION NEbumpuj."
+      );
+    }
+  }
+
   // Ověř, že baseline sedí na produkční konstantu (jistota, že fit měří to, co běží).
   const check = outcomeScoreAtSharpen(rows, 1);
   if (Math.abs(check.logloss - ps.logloss) > 0.02) {
