@@ -1,16 +1,26 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { ZapasyApp } from "./_components/ZapasyApp";
 import { getFixturesByDates, getRecentResults } from "@/lib/data/repository";
-import { getCurrentUser } from "@/lib/authUser";
 import { InstallLink } from "./_components/InstallLink";
-import type { SessionUser } from "./_components/sessionUser";
 
 export const metadata: Metadata = {
   title: "Fotbalové zápasy tento týden — Predictapp",
   description:
     "Nadcházející fotbalové zápasy na tento týden podle ligy. Klikni a získej rovnou statistické porovnání a predikci.",
 };
+
+/**
+ * Domovská stránka je **statická (ISR)**: nečte cookies ani `searchParams` (starý
+ * sdílený odkaz `/?home=&away=` přesměruje `middleware.ts`), přihlášeného uživatele
+ * načte `ZapasyApp` klientsky (`/api/me`). Rozpis + výsledky (shodné pro všechny) se tak
+ * vygenerují 1× za `revalidate` a servírují z CDN → rychlé TTFB, žádný per-request SSR
+ * ani session dotaz na kritické cestě. Živé skóre dorovná klientský poll (viz `ZapasyApp`).
+ */
+// Vynuceně statické: datová vrstva při cache-miss volá `fetch(no-store)` (API-Football),
+// což by jinak stránku překlopilo do dynamic. `force-static` to potlačí – čerstvost drží
+// naše vlastní `cachedJson` TTL (Neon) a ISR regenerace každých `revalidate` s.
+export const dynamic = "force-static";
+export const revalidate = 600; // 10 min – rozpis se přes den mění minimálně
 
 /** Kolik dní dopředu načítat do rozpisu (dnes + dalších 6). */
 const LOOKAHEAD_DAYS = 7;
@@ -25,34 +35,7 @@ function pragueDate(d: Date): string {
   }).format(d);
 }
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  const sp = await searchParams;
-  // Zpětná kompatibilita: starý sdílený odkaz na porovnání (`/?home=&away=`) přesměruj
-  // na novou cestu /porovnani (zachová sdílení i OG kartu).
-  if (sp.home != null && sp.away != null) {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(sp)) {
-      if (v == null) continue;
-      qs.set(k, Array.isArray(v) ? (v[0] ?? "") : v);
-    }
-    redirect(`/porovnani?${qs.toString()}`);
-  }
-
-  const cu = await getCurrentUser();
-  const user: SessionUser | null = cu
-    ? {
-        id: cu.id,
-        name: cu.name,
-        image: cu.image,
-        tier: cu.tier,
-        proTrialUsed: cu.proTrialUsed,
-      }
-    : null;
-
+export default async function Home() {
   const now = new Date();
   const dates = Array.from({ length: LOOKAHEAD_DAYS }, (_, i) =>
     pragueDate(new Date(now.getTime() + i * 24 * 60 * 60 * 1000))
@@ -64,7 +47,7 @@ export default async function Home({
 
   return (
     <div className="flex-1">
-      <ZapasyApp days={days} results={results} user={user} />
+      <ZapasyApp days={days} results={results} />
       <footer className="mx-auto max-w-3xl px-4 py-8 text-center text-xs text-muted">
         <p>
           Klikni na zápas a otevře se statistické porovnání obou týmů s predikcí —

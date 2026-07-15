@@ -20,6 +20,26 @@ type View = "program" | "results";
 /** Stabilní prázdné pole (nemění referenci mezi rendery → nezpouští efekty nadarmo). */
 const NO_FIXTURES: UpcomingFixture[] = [];
 
+/** Klientské načtení přihlášeného uživatele (statická stránka ho v SSR nemá). */
+function useCurrentUser(): SessionUser | null {
+  const [user, setUser] = useState<SessionUser | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((d: { user?: SessionUser | null }) => {
+        if (active) setUser(d.user ?? null);
+      })
+      .catch(() => {
+        // bez usera běží stránka jako anonym (FREE)
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  return user;
+}
+
 /** Živý zápas svítí, dokud je jeho výkop v tomto okně před „teď" (plausibilita pollu). */
 const LIVE_WINDOW_MS = 2.5 * 60 * 60 * 1000;
 
@@ -175,12 +195,13 @@ function useFavorites(isPro: boolean): {
 export function ZapasyApp({
   days,
   results,
-  user,
 }: {
   days: FixtureDay[];
   results: SettledMatch[];
-  user: SessionUser | null;
 }) {
+  // Stránka je statická (ISR) → uživatele načteme klientsky (anon = null; PRO odemkne
+  // oblíbené). Krátký flash „nepřihlášen" v hlavičce je cena za CDN-cacheovaný shell.
+  const user = useCurrentUser();
   const [view, setView] = useState<View>("program");
   const [dayIdx, setDayIdx] = useState(0);
   const [onlyFav, setOnlyFav] = useState(false);
