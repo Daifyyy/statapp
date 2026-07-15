@@ -6,7 +6,7 @@ import { TeamLogo } from "./TeamLogo";
 import { StandingsTable, ZoneLegend } from "./StandingsTable";
 import { CLUB_LEAGUES } from "@/lib/data/catalog";
 import type { LeagueTable } from "@/lib/types";
-import type { SessionUser } from "./sessionUser";
+import { useCurrentUser } from "./useCurrentUser";
 
 const DEFAULT_LEAGUE = 39; // Premier League
 const STORAGE_KEY = "tabulky:league";
@@ -50,7 +50,8 @@ function restoreLeague(apply: (id: number) => void): void {
  * ligy. Mobile-first: úzké obrazovky skryjí rozšířené sloupce (V-R-P, forma), nescrolluje
  * se vodorovně celá stránka. Poslední zvolená liga se pamatuje v `localStorage`.
  */
-export function TabulkyApp({ user }: { user: SessionUser | null }) {
+export function TabulkyApp() {
+  const user = useCurrentUser();
   const [leagueId, setLeagueId] = useState(DEFAULT_LEAGUE);
   const [table, setTable] = useState<LeagueTable | null>(null);
   const [status, setStatus] = useState<Status>("loading");
