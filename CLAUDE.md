@@ -213,12 +213,22 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
   (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
   `lib/data/mock/fixtures.ts` (funguje bez DB/API).
-  **Do Programu patří jen zápas, který ještě NEZAČAL** – `normalizeUpcomingFixtures` filtruje
-  na třech úrovních: naše liga, status mimo `NOT_UPCOMING` (dohrané + `PST`/`CANC`/`ABD`/`AWD`/`WO`,
-  ty drží původní datum a strašily by v rozpisu) a **výkop v budoucnu** (parametr `now`). Ta časová
-  podmínka je pojistka proti stavu, ne kosmetika: rozpis dne je v `ApiCache` až hodinu starý, takže
-  odehraný zápas v něm ještě může nést `NS` (odtud „Argentina–Švýcarsko se hraje ve 3:00", ačkoli
-  skončilo `AET 3:1`). Status sám o sobě nestačí.
+  **Do Programu patří zápas, který ještě NEZAČAL, NEBO právě běží** – `normalizeUpcomingFixtures`
+  pustí buď **živý** zápas (`LIVE_STATUSES`), nebo **nadcházející** (status mimo `NOT_UPCOMING`
+  = dohrané + `PST`/`CANC`/`ABD`/`AWD`/`WO` **a** výkop v budoucnu, parametr `now`); vše navíc jen
+  z našich lig. Ta časová podmínka pro nadcházející je pojistka proti stavu, ne kosmetika: rozpis dne
+  je v `ApiCache` až hodinu starý, takže odehraný zápas v něm ještě může nést `NS` (odtud
+  „Argentina–Švýcarsko se hraje ve 3:00", ačkoli skončilo `AET 3:1`) – status sám o sobě nestačí.
+  **Živost čteme VÝHRADNĚ z API statusu**, ne z „výkop proběhl" (drží tentýž invariant: stale-`NS`-
+  po-výkopu jde stále ven). Živý zápas nese `live/elapsed/liveHome/liveAway` pro první paint.
+- **Živé skóre (Program nezhasne, svítí):** samostatný lehký endpoint **`GET /api/fixtures/live`**
+  (FREE, rate-limit) → `getLiveFixtures` = **1 sdílené upstream volání za `fixlive` cache (~90 s)**
+  napříč všemi uživateli (`fetchLiveFixtures(FIXTURE_LIST_LEAGUE_IDS)` = `/fixtures?live=<ids>`, malý
+  payload). Klientský hook `useLiveScores` v `ZapasyApp` pollí ~90 s, ale **jen** když (a) je aktivní
+  Program, (b) `!document.hidden` (pauza při skryté záložce) a (c) je plausibilně živo (aspoň jeden
+  zápas dne má výkop v `[now−2.5 h, now]`) → offseason = 0 pollů. `mergeLive` je **autoritativní**:
+  přepíše minutu/skóre ze SSR a zápas, který ze živé sady vypadl (dohráno), z Programu **odebere**
+  (opraví i stale SSR); dokud poll neproběhl, věří SSR. `LiveScore` typ, mock vrací `[]`.
 - **Data (Výsledky):** `getRecentResults()` (`repository.ts`) = posledních ~14 dní settlnutých
   predikcí (`getRecentSettledPredictions` z `predictionStore`, jen čte DB) → čistý mapper
   **`summarizeSettled`** (`lib/picks/results.ts`, testy `results.test.ts`) na `SettledMatch`
@@ -237,8 +247,20 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`null`), řádek je neklikací.
 - **UI `ZapasyApp.tsx`** (client, mobile-first): přepínač Program/Výsledky; v Programu
   **horizontálně scrollovatelný pásek dní** (Dnes/Zítra/„So 28. 6.", víkendy zvýrazněné),
-  v rámci dne **skupiny podle ligy**; ve Výsledcích plochý seznam nejnovější první + souhrn
-  „trefeno X z Y". Řádky klikací dle `buildCompareHref` (klub vždy; reprezentace po dohledání konfederací).
+  v rámci dne **rozbalovací kontejnery podle ligy** (`LeagueContainer`): klikací hlavička
+  (logo + název + počet + nejbližší výkop + **pulzující červená tečka**, má-li liga živý zápas),
+  **výchozí = vše sbaleno, žádné auto-rozbalení** (rozhodnutí uživatele). Živý řádek ukazuje místo
+  času výkopu **🔴 minutu + živé skóre** (`LiveDot` blik = `bg-negative` + `animate-ping`). Ve
+  Výsledcích plochý seznam nejnovější první + souhrn „trefeno X z Y". Řádky klikací dle
+  `buildCompareHref` (klub vždy; reprezentace po dohledání konfederací).
+- **Oblíbené zápasy + ligy + filtr (PRO):** tabulky **`FavoriteLeague`/`FavoriteFixture`** (userId FK,
+  cascade; bez snapshot meta – filtr pracuje jen nad už načteným 7denním Programem, stačí id).
+  Route **`GET/POST /api/fixtures/favorites`** (PRO přes `getEntitlement`; anon/FREE → `{locked}`/403,
+  rate-limit `fav:`), store `favoritesStore.ts` (idempotentní upsert/deleteMany). **Logika
+  oblíbenosti = sjednocení:** zápas je oblíbený, když je jeho `fixtureId` ve `FavoriteFixture` **nebo**
+  `leagueId` ve `FavoriteLeague`. UI (`useFavorites`, optimistic toggle s revertem): **hvězda** na
+  hlavičce ligy i na řádku zápasu, **primární sekce „⭐ Oblíbené" nahoře** (živé první, pak dle výkopu),
+  přepínač **„⭐ Jen oblíbené"**. Non-PRO klik → PRO CTA (`signIn`/banner), žádná perzistence.
 - **Zpětná kompatibilita:** starý sdílený odkaz `/?home=&away=` v `app/page.tsx`
   **přesměruje** na `/porovnani?…` (zachová sdílení i OG kartu). Nav „Zápasy" (📅) + přesměrování
   „Porovnání" na `/porovnani` je napříč `CompareApp`/`PicksApp`/`TransfersApp`.
@@ -509,6 +531,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Sdílená komponenta** `app/_components/TeamHeading.tsx`: extrahovaný `TeamHeading`
   (logo + jméno, mobilní/desktopová velikost), importovaný z `CategoryScores`, `PlayStyleChart`
   i `CompareApp` — žádné duplicity.
+- **Ligová tabulka rovnou v Porovnání** (FREE): pod pozicemi (`StandingContext`) **collapsible
+  „Ligová tabulka"** (default sbalená) s celou tabulkou ligy a **oběma týmy zvýrazněnými**
+  (`highlightTeamIds`). Líný hook `useLeagueTable(leagueId, enabled)` (vzor `useStanding`) →
+  `/api/standings/table`, aktivní **jen `mode==="CLUB" && homeLeagueId===awayLeagueId`** (různé
+  ligy/reprezentace → nevykreslí se); FREE i pro `result.locked`. Sdílí `standings:` cache
+  (0 API navíc). Renderer je **sdílená komponenta `app/_components/StandingsTable.tsx`** (vytknuto
+  z `TabulkyApp`: `StandingsTable`+`ZoneLegend`+…, prop `highlightTeamIds?: Set<number>`).
 - **Nové typy** (`lib/types.ts`): `CategoryKey`, `CategoryScore`, `PlayStyleDimension`, `LeagueGoalsAvg`.
 
 ## Záložka Tabulky (FREE, `/tabulky`)
@@ -529,7 +558,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   chyba → `{table: null}` + 200, aby UI ukázalo prázdný stav, ne error. Předsezóna (0 odehraných) =
   prázdný stav. Mock: deterministická tabulka z mock týmů → funguje bez DB/API.
 - **UI `TabulkyApp.tsx`** (client, mobile-first): horizontální pásek lig (`CLUB_LEAGUES`), poslední
-  zvolená liga v `localStorage`, `ZoneBar` + legenda dedupovaná **podle popisku** (jako v Hře).
+  zvolená liga v `localStorage`, legenda dedupovaná **podle popisku** (jako v Hře). Samotný renderer
+  tabulky je **sdílená komponenta `app/_components/StandingsTable.tsx`** (`StandingsTable`+`ZoneLegend`),
+  kterou používá i Porovnání (viz „Ligová tabulka rovnou v Porovnání") – jeden zdroj pravdy.
 
 ## Záložka Přestupy (category-first, zdroj = API-Football)
 - **Princip:** přestupy top-5 lig se stahují **dávkově na pozadí** do tabulky `Transfer`;
@@ -1000,7 +1031,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 
 ## DB
 Prisma 6 + Postgres (Neon). Tabulky `ApiCache` (TTL) + `MatchStatCache` (trvalá)
-+ účty (`User`/`Account`/`Session`/`VerificationToken`) + `SavedComparison` (oblíbené).
++ účty (`User`/`Account`/`Session`/`VerificationToken`) + `SavedComparison` (oblíbená porovnání)
++ `UserTip` (Tipovačka) + `GameSave` (Manažer) + `FavoriteLeague`/`FavoriteFixture`
+(oblíbené zápasy/ligy v Programu, PRO – viz „Záložka Zápasy").
 **Pozor:** Neon je sdílená pro lokál i Vercel → změna schématu (`prisma db push`)
 ovlivní i produkci; nasaď nový kód hned.
 **Verzování cache:** `MatchStatCache` má `schemaVersion`; po přidání metrik bumpni
