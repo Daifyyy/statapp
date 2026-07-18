@@ -200,6 +200,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     týmy**, které se samo přepočítá včetně predikce → **žádné ruční vybírání týmů**.
   - **Výsledky** = jak dopadly **naše nedávné predikce** (skóre + ✓/✗ zda 1X2 trefilo) – viz níže.
   Porovnání se proto přesunulo z `/` na **`/porovnani`** (`app/porovnani/page.tsx`).
+- **Hranici dne určuje KLIENT, ne server (statický ISR).** `app/page.tsx` je `force-static`
+  + `revalidate=600` → serverem upečený „dnes" může být **o den starý** (regenerace běží až na
+  požadavek + stale-while-revalidate; přes noc bez návštěvy zůstane včerejší snapshot a první
+  načtení ho servíruje, teprve druhé dostane čerstvý). Dřív navíc byly popisky dní **podle indexu**
+  (`days[0]` = vždy „Dnes") → po otevření svítil včerejšek. `ZapasyApp` proto **reconciluje** pražský
+  „dnes" na klientovi: počítá ho při mountu **i při návratu do popředí** (`visibilitychange`+`focus`
+  → pokrývá PWA reopen přes noc, kdy JS stav přežije a mount effect neběží), **odfiltruje minulé dny**
+  (`visibleDays`) a labely určuje **podle data** (ne indexu). Do prvního renderu (SSR/hydratace) padá
+  zpět na index → **žádný hydration mismatch**; statický/CDN benefit zůstává. Snapshot fetchuje dnes+6,
+  takže i včerejší snapshot pořád obsahuje dnešní zápasy. **Nevracet na index-based labely** – rozbije
+  to Program po půlnoci i po probuzení PWA.
 - **Seznam je jen navigace – nic se nepočítá živě tady.** Predikce vzniká až klikem přes
   existující deep-link do `CompareApp` (auto-`runCompare`) → **žádný nový výpočetní kód**,
   `compareTeams` ani gating (`toFreeResult`) se nemění (predikce zůstává PRO jako dnes). Stejný
