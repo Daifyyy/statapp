@@ -374,7 +374,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `/predikce` i track-record **jen ČTOU z DB** – nikdy se nepočítá živě per request
   (1 zápas ≈ 26–35 API volání → drahé). Studené naplnění dělej lokálně / `?league=ID`.
 - **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming`
-  (`ALL_PREDICTION_LEAGUES` = Top-5 klubových lig `PREDICTION_LEAGUES` + reprezentační
+  (`ALL_PREDICTION_LEAGUES` = Top-8 klubových lig `PREDICTION_LEAGUES` + reprezentační
   soutěže z `catalog.ts`: finálové turnaje `NATIONAL_TOURNAMENT_LEAGUE_IDS` (MS=1, EURO=4,
   Copa América=9, AFCON=6, Asian Cup=7, Gold Cup=22) stavěné **venue-neutrálně**, a soutěže
   s reálným domácí/venku `NATIONAL_HOME_AWAY_LEAGUE_IDS` (UEFA NL=5, CONCACAF NL=536)
@@ -394,6 +394,27 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`getNationalConfedMap`) a deep-link míří do NATIONAL Porovnání (stejně jako Zápasy);
   `MatchPick` proto nese `compareMode`+`home/awayCompareLeagueId`, klikatelnost řeší
   `buildCompareHref` (tým bez dohledané konfederace → `null` = neklikací).
+- **Sledované klubové ligy = Top 8 UEFA** (`PREDICTION_LEAGUES` = 39/140/135/78/61 +
+  Portugalsko 94 + Nizozemsko 88 + Belgie 144; rozšířeno z Top-5). **Přidání lig
+  nezpřesňuje jádro** – ratingy jsou ligově-lokální (normalizované na ligový průměr 1.0)
+  a `LeagueBaseline` je per-liga, takže žádná cross-league chyba k opravě není (na rozdíl
+  od reprezentací). Backtest to potvrdil: fitnuté konstanty se rozšířením nepohnuly
+  (ρ −0.04→−0.045, zostření λ optimum kleslo na s=1.05 se **zero** ziskem = „sharpen
+  nezapínat" ještě silněji, Platt kalibrace na hranici gridu = overfit). **Hodnota Top-8
+  je pokrytí + živoucí dataset (celoroční kalibrace/track-record), ne přesnost.**
+  **Per-liga log-loss (backtest 2024–25, 5 391 predikcí)** vyvrací intuici, že nové ligy
+  jsou horší: **Portugalsko je NEJlépe predikovaná liga z celé osmičky (0.9665)** i bez xG
+  (polarizovaná – Benfica/Porto/Sporting dominují), Nizozemsko je nad průměrem Top-5
+  (1.0088). **Jedině Belgie (Jupiler Pro League) táhne průměr nahoru** (log-loss 1.0511,
+  přesnost jen 45.4 %, ECE 0.036) – bez ní by 7ligový průměr byl ~1.0015, tj. **lepší** než
+  původní Top-5 (1.0063). Příčina: belgická **nadstavba s dělením bodů** (championship
+  play-off, top-6 se odpojí, body se půlí) pokřiví ligovou tabulku, ze které se staví
+  baseline i ratingy (stejný druh pasti jako `deriveLeagueAccess` u nadstaveb – „Relegation
+  Round/Group"). Belgie **není rozbitá** (pořád skill nad naivní konstantou ~1.077), jen
+  nejslabší. xG **není** rozdíl (PT bez xG poráží všechny xG ligy) → rozhoduje struktura
+  ligy. **TODO / hlídat na živých datech:** zůstává v seznamu; pokud bude i live takhle
+  slabá, kandidát na (a) vyřazení z `PREDICTION_LEAGUES`, nebo (b) speciální ošetření
+  nadstavby v `LeagueBaseline`/ratinzích (curated fallback jako u `LEAGUE_ACCESS`).
 - **EV / value tipy vůči kurzům** (`lib/picks/value.ts`, čisté + testy): predikční pipeline
   dotahuje **referenční kurzy sázkovky** (`fetchOdds` v `apiFootball.ts`, decimal odds 1X2 +
   Over 2.5 + BTTS od jedné preferované sázkovky) a ukládá je na `FixturePrediction`
