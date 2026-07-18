@@ -20,6 +20,27 @@ type View = "program" | "results";
 /** Stabilní prázdné pole (nemění referenci mezi rendery → nezpouští efekty nadarmo). */
 const NO_FIXTURES: UpcomingFixture[] = [];
 
+/**
+ * Dnešek v pražské zóně (YYYY-MM-DD) na klientovi. Stránka je statická (ISR) → serverem
+ * upečený „dnes" může být zastaralý (regenerace běží až na požadavek + stale-while-revalidate),
+ * takže hranici dne musí určit klient podle skutečného času.
+ */
+function pragueToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Prague",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+/** Následující kalendářní den z YYYY-MM-DD (čistá aritmetika, nezávislá na zóně). */
+function nextDay(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 /** Živý zápas svítí, dokud je jeho výkop v tomto okně před „teď" (plausibilita pollu). */
 const LIVE_WINDOW_MS = 2.5 * 60 * 60 * 1000;
 
@@ -186,7 +207,33 @@ export function ZapasyApp({
   const [dayIdx, setDayIdx] = useState(0);
   const [onlyFav, setOnlyFav] = useState(false);
   const [proCta, setProCta] = useState(false);
-  const active = days[dayIdx] ?? days[0];
+
+  // Skutečný „dnes" podle klienta (SSR snapshot může být o den starý). Přepočítá se i při
+  // návratu na záložku/do popředí (PWA reopen přes noc → JS stav přežije, mount effect neběží).
+  const [clientToday, setClientToday] = useState<string | null>(null);
+  useEffect(() => {
+    const sync = () => setClientToday(pragueToday());
+    sync();
+    const onVis = () => {
+      if (!document.hidden) sync();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
+    };
+  }, []);
+
+  // Odfiltruj minulé dny ze zastaralého snapshotu (yesterday-as-„Dnes" fix). Když by tím
+  // nezbylo nic (extrémně starý snapshot), radši ukaž původní data než prázdno.
+  const visibleDays = useMemo(() => {
+    if (!clientToday) return days;
+    const future = days.filter((d) => d.date >= clientToday);
+    return future.length > 0 ? future : days;
+  }, [days, clientToday]);
+
+  const active = visibleDays[dayIdx] ?? visibleDays[0];
   const isPro = user?.tier === "PRO";
 
   const { scores, loaded } = useLiveScores(
@@ -244,7 +291,12 @@ export function ZapasyApp({
 
       {view === "program" ? (
         <>
-          <DayTabs days={days} active={dayIdx} onSelect={setDayIdx} />
+          <DayTabs
+            days={visibleDays}
+            active={dayIdx}
+            today={clientToday}
+            onSelect={setDayIdx}
+          />
 
           {proCta && (
             <ProCtaBanner
@@ -437,10 +489,17 @@ function ViewTabs({
   );
 }
 
-// idx 0 → „Dnes", 1 → „Zítra", dál krátký den v týdnu + datum (So 28. 6.).
-function dayLabel(date: string, idx: number): string {
-  if (idx === 0) return "Dnes";
-  if (idx === 1) return "Zítra";
+// Je-li znám skutečný „dnes" (klient), labeluj podle data (odolné vůči zastaralému snapshotu);
+// dokud není (SSR/hydratace), padni zpět na index, aby seděl server i klient. Dál krátký den
+// v týdnu + datum (So 28. 6.).
+function dayLabel(date: string, idx: number, today: string | null): string {
+  if (today) {
+    if (date === today) return "Dnes";
+    if (date === nextDay(today)) return "Zítra";
+  } else {
+    if (idx === 0) return "Dnes";
+    if (idx === 1) return "Zítra";
+  }
   return new Date(`${date}T00:00:00`).toLocaleDateString("cs-CZ", {
     weekday: "short",
     day: "numeric",
@@ -456,10 +515,12 @@ function isWeekend(date: string): boolean {
 function DayTabs({
   days,
   active,
+  today,
   onSelect,
 }: {
   days: FixtureDay[];
   active: number;
+  today: string | null;
   onSelect: (i: number) => void;
 }) {
   // Horizontálně scrollovatelný pásek (mobile-first) – týden dní se nevejde do řady.
@@ -478,7 +539,7 @@ function DayTabs({
                 }`
           }`}
         >
-          {dayLabel(d.date, i)}
+          {dayLabel(d.date, i, today)}
           <span className="ml-1.5 text-xs opacity-70">({d.fixtures.length})</span>
         </button>
       ))}
