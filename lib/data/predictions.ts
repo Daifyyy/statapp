@@ -49,8 +49,12 @@ import {
  */
 export const MODEL_VERSION = 7;
 
-/** Sledované klubové ligy (uživatelská volba: Top 5 lig). */
-export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61];
+/**
+ * Sledované klubové ligy (uživatelská volba: Top 8 evropských lig dle koeficientu UEFA):
+ * Anglie (39), Španělsko (140), Itálie (135), Německo (78), Francie (61),
+ * Portugalsko (94), Nizozemsko (88), Belgie (144).
+ */
+export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61, 94, 88, 144];
 
 /**
  * Všechny sledované soutěže pro predikci: klubové ligy + reprezentační soutěže
