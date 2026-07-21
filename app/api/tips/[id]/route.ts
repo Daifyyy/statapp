@@ -11,7 +11,8 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
 
   const { id } = await params;
-  const ok = await deleteOpenTip(user.id, id);
+  const owner = user.email ?? `user:${user.id}`;
+  const ok = await deleteOpenTip(owner, id);
   if (!ok) return NextResponse.json({ error: "Nenalezeno" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

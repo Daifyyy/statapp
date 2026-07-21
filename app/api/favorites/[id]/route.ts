@@ -11,9 +11,9 @@ export async function DELETE(
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
 
   const { id } = await params;
-  // deleteMany s userId v podmínce → nelze smazat cizí záznam.
+  // deleteMany s e-mailem v podmínce → nelze smazat cizí záznam (vlastnictví přes e-mail).
   const res = await prisma.savedComparison.deleteMany({
-    where: { id, userId: user.id },
+    where: { id, email: user.email ?? `user:${user.id}` },
   });
   if (res.count === 0)
     return NextResponse.json({ error: "Nenalezeno" }, { status: 404 });

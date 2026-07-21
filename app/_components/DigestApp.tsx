@@ -70,7 +70,7 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
         user={user}
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/predikce", label: "Tipy", emoji: "🎯" },
+          { href: "/predikce", label: "Predikce", emoji: "🎯" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/hra", label: "Hra", emoji: "🎮" },

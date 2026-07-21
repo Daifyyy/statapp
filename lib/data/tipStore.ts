@@ -38,10 +38,13 @@ function toRow(t: UserTip): TipRow {
   };
 }
 
-/** Všechny tipy uživatele (nejnovější dle vložení první). */
-export async function getUserTips(userId: string): Promise<TipRow[]> {
+/**
+ * Všechny tipy uživatele (nejnovější dle vložení první). Vlastnictví běží přes **e-mail**
+ * (stabilní přes re-login i reset `User` řádku), ne přes `userId`.
+ */
+export async function getUserTips(email: string): Promise<TipRow[]> {
   const rows = await prisma.userTip.findMany({
-    where: { userId },
+    where: { email },
     orderBy: { placedAt: "desc" },
   });
   return rows.map(toRow);
@@ -70,10 +73,16 @@ export interface TipInput {
 
 /**
  * Vloží/přepíše tip uživatele na daný trh a zápas (upsert dle
- * `@@unique([userId, fixtureId, market])` → jeden tip na trh a zápas).
+ * `@@unique([email, fixtureId, market])` → jeden tip na trh a zápas). Vlastnictví je
+ * `email`; `userId` je jen volitelná reference na aktuální účet (obnoví se při re-tipu).
  */
-export async function upsertTip(userId: string, input: TipInput): Promise<TipRow> {
+export async function upsertTip(
+  email: string,
+  userId: string | null,
+  input: TipInput
+): Promise<TipRow> {
   const data = {
+    userId,
     leagueId: input.leagueId,
     leagueName: input.leagueName,
     kickoff: new Date(input.kickoff),
@@ -93,9 +102,9 @@ export async function upsertTip(userId: string, input: TipInput): Promise<TipRow
   };
   const row = await prisma.userTip.upsert({
     where: {
-      userId_fixtureId_market: { userId, fixtureId: input.fixtureId, market: input.market },
+      email_fixtureId_market: { email, fixtureId: input.fixtureId, market: input.market },
     },
-    create: { userId, fixtureId: input.fixtureId, market: input.market, ...data },
+    create: { email, fixtureId: input.fixtureId, market: input.market, ...data },
     // Přepíše jen predikční část; výsledek (status/goals/hit) necháváme být.
     update: data,
   });
@@ -103,14 +112,14 @@ export async function upsertTip(userId: string, input: TipInput): Promise<TipRow
 }
 
 /** Počet otevřených (nevyhodnocených) tipů uživatele – strop proti spamu. */
-export async function countOpenTips(userId: string): Promise<number> {
-  return prisma.userTip.count({ where: { userId, status: "NS" } });
+export async function countOpenTips(email: string): Promise<number> {
+  return prisma.userTip.count({ where: { email, status: "NS" } });
 }
 
 /** Smaže vlastní NEvyhodnocený tip. Vrací true, když se něco smazalo. */
-export async function deleteOpenTip(userId: string, id: string): Promise<boolean> {
+export async function deleteOpenTip(email: string, id: string): Promise<boolean> {
   const res = await prisma.userTip.deleteMany({
-    where: { id, userId, status: "NS" },
+    where: { id, email, status: "NS" },
   });
   return res.count > 0;
 }

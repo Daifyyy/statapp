@@ -28,7 +28,7 @@ export async function GET() {
     return NextResponse.json({ error: "Jen pro PRO" }, { status: 403 });
 
   const favorites = await prisma.savedComparison.findMany({
-    where: { userId: user.id },
+    where: { email: user.email ?? `user:${user.id}` },
     orderBy: { savedAt: "desc" },
   });
   return NextResponse.json({ favorites });
@@ -48,8 +48,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Neplatná data" }, { status: 400 });
   const d = parsed.data;
 
+  // Vlastnictví přes e-mail (stabilní přes re-login/reset User); `userId` jen reference.
+  const owner = user.email ?? `user:${user.id}`;
   const key = {
-    userId: user.id,
+    email: owner,
     homeTeamId: d.homeTeamId,
     awayTeamId: d.awayTeamId,
     homeLeagueId: d.homeLeagueId,
@@ -58,11 +60,11 @@ export async function POST(req: Request) {
 
   // Limit počtu: nové uložení zamítni nad strop (úprava existujícího projde).
   const existing = await prisma.savedComparison.findUnique({
-    where: { userId_homeTeamId_awayTeamId_homeLeagueId_awayLeagueId: key },
+    where: { email_homeTeamId_awayTeamId_homeLeagueId_awayLeagueId: key },
     select: { id: true },
   });
   if (!existing) {
-    const count = await prisma.savedComparison.count({ where: { userId: user.id } });
+    const count = await prisma.savedComparison.count({ where: { email: owner } });
     if (count >= MAX_FAVORITES) {
       return NextResponse.json(
         { error: `Dosažen limit ${MAX_FAVORITES} oblíbených. Nějaké smaž a zkus znovu.` },
@@ -72,6 +74,7 @@ export async function POST(req: Request) {
   }
   const data = {
     ...key,
+    userId: user.id,
     mode: d.mode,
     label: d.label ?? null,
     snapshot: d.snapshot as object,
@@ -79,10 +82,10 @@ export async function POST(req: Request) {
 
   const favorite = await prisma.savedComparison.upsert({
     where: {
-      userId_homeTeamId_awayTeamId_homeLeagueId_awayLeagueId: key,
+      email_homeTeamId_awayTeamId_homeLeagueId_awayLeagueId: key,
     },
     create: data,
-    update: { label: data.label, snapshot: data.snapshot, savedAt: new Date() },
+    update: { userId: user.id, label: data.label, snapshot: data.snapshot, savedAt: new Date() },
   });
   return NextResponse.json({ favorite });
 }

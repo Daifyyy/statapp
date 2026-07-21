@@ -114,7 +114,7 @@ type GameView = "season" | "history" | "profile" | "cup";
 
 const NAV = [
   { href: "/", label: "Zápasy", emoji: "📅" },
-  { href: "/predikce", label: "Tipy", emoji: "📈" },
+  { href: "/predikce", label: "Predikce", emoji: "🎯" },
   { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
   { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
   { href: "/tabulky", label: "Tabulky", emoji: "📊" },

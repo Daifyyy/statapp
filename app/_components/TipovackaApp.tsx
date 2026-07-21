@@ -14,7 +14,7 @@ type View = "tipovat" | "tipy" | "bilance";
 const NAV = [
   { href: "/", label: "Zápasy", emoji: "📅" },
   { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-  { href: "/predikce", label: "Tipy", emoji: "📈" },
+  { href: "/predikce", label: "Predikce", emoji: "🎯" },
   { href: "/tabulky", label: "Tabulky", emoji: "📊" },
   { href: "/hra", label: "Hra", emoji: "🎮" },
 ];
@@ -622,8 +622,14 @@ function SettledTipRow({ tip }: { tip: TipRow }) {
               </span>
             )}
           </>
+        ) : tip.national ? (
+          <span title="U reprezentačních zápasů se kurzy nesledují (v API často nejsou) – tip se počítá do úspěšnosti, ne do ROI.">
+            · kurzy u reprezentací se nesledují
+          </span>
         ) : (
-          <span>· kurz nebyl k dispozici</span>
+          <span title="Kurz se snapshotuje v okamžiku vložení tipu (nezávisle na výsledku). Sázkovka pro tento zápas tehdy kurz neměla – časté mimo top ligy nebo daleko před výkopem. Tip se počítá do úspěšnosti, ne do ROI.">
+            · kurz nebyl k dispozici
+          </span>
         )}
       </div>
       {tip.note && <p className="mt-1 text-[11px] italic text-muted">„{tip.note}“</p>}

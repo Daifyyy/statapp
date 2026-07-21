@@ -454,7 +454,7 @@ export function CompareApp({
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/predikce", label: "Tipy", emoji: "📈" },
+          { href: "/predikce", label: "Predikce", emoji: "🎯" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
           { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },

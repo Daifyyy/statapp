@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "probe": "node --env-file=.env --import tsx scripts/probe.ts",
+    "probe-odds": "node --env-file=.env --import tsx scripts/probeOdds.ts",
+    "backfill-email-keys": "node --env-file=.env --import tsx scripts/backfillEmailKeys.ts",
     "discover": "node --env-file=.env --import tsx scripts/discover.ts",
     "limits": "node --env-file=.env --import tsx scripts/limits.ts",
     "calibrate": "node --env-file=.env --import tsx scripts/calibrate.ts",

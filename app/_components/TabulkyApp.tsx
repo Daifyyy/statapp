@@ -91,7 +91,7 @@ export function TabulkyApp() {
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/predikce", label: "Tipy", emoji: "📈" },
+          { href: "/predikce", label: "Predikce", emoji: "🎯" },
           { href: "/hra", label: "Hra", emoji: "🎮" },
           { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
         ]}

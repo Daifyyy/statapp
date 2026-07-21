@@ -78,7 +78,9 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
   if (!allowRequest(`game:${user.id}`, 120, 60_000)) return tooMany();
 
-  const row = await prisma.gameSave.findUnique({ where: { userId: user.id } });
+  const row = await prisma.gameSave.findUnique({
+    where: { email: user.email ?? `user:${user.id}` },
+  });
   return NextResponse.json({ save: row?.state ?? null });
 }
 
@@ -106,10 +108,12 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Neplatná data hry" }, { status: 400 });
 
   const state = original as object;
+  // Vlastnictví přes e-mail (přežije re-login/reset User); `userId` jen reference.
+  const owner = user.email ?? `user:${user.id}`;
   await prisma.gameSave.upsert({
-    where: { userId: user.id },
-    create: { userId: user.id, state },
-    update: { state },
+    where: { email: owner },
+    create: { email: owner, userId: user.id, state },
+    update: { userId: user.id, state },
   });
   return NextResponse.json({ ok: true });
 }
@@ -118,6 +122,8 @@ export async function PUT(req: Request) {
 export async function DELETE() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
-  await prisma.gameSave.deleteMany({ where: { userId: user.id } });
+  await prisma.gameSave.deleteMany({
+    where: { email: user.email ?? `user:${user.id}` },
+  });
   return NextResponse.json({ ok: true });
 }

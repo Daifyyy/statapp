@@ -62,8 +62,12 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
   if (!allowRequest(`tips:${user.id}`, 60, 60_000)) return tooMany();
 
+  // Vlastnictví tipů běží přes e-mail (stabilní přes re-login/reset User). Fallback
+  // `user:<id>`, kdyby účet e-mail neměl (u Google se nestává).
+  const owner = user.email ?? `user:${user.id}`;
+
   try {
-    const tips = await getUserTips(user.id);
+    const tips = await getUserTips(owner);
     // Modelové 1X2 tipy jen pro vyhodnocené „win" tipy (srovnání ty vs model).
     const winFixtures = tips
       .filter((t) => t.market === "win" && t.homeGoals != null)
@@ -83,6 +87,8 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: "Nepřihlášeno" }, { status: 401 });
   if (!allowRequest(`tips:${user.id}`, 60, 60_000)) return tooMany();
 
+  const owner = user.email ?? `user:${user.id}`;
+
   const parsed = placeSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success)
     return NextResponse.json({ error: "Neplatná data tipu" }, { status: 400 });
@@ -92,7 +98,7 @@ export async function POST(req: Request) {
   if (new Date(d.kickoff).getTime() <= Date.now())
     return NextResponse.json({ error: "Zápas už začal" }, { status: 400 });
 
-  if ((await countOpenTips(user.id)) >= MAX_OPEN_TIPS)
+  if ((await countOpenTips(owner)) >= MAX_OPEN_TIPS)
     return NextResponse.json({ error: "Příliš mnoho otevřených tipů" }, { status: 409 });
 
   const line = d.market === "over25" ? (d.line ?? 2.5) : null;
@@ -138,7 +144,7 @@ export async function POST(req: Request) {
   };
 
   try {
-    const tip = await upsertTip(user.id, input);
+    const tip = await upsertTip(owner, user.id, input);
     return NextResponse.json({ ok: true, tip });
   } catch (e) {
     logError("api/tips POST", e);

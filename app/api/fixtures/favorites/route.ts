@@ -30,7 +30,7 @@ export async function GET() {
     return NextResponse.json({ locked: true, fixtures: [], leagues: [] });
   }
   try {
-    const favs = await getFavorites(user.id);
+    const favs = await getFavorites(user.email ?? `user:${user.id}`);
     return NextResponse.json(favs);
   } catch (e) {
     logError("api/fixtures/favorites GET", e);
@@ -53,10 +53,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Neplatná data" }, { status: 400 });
   }
   const { type, id, on } = parsed.data;
+  const owner = user.email ?? `user:${user.id}`;
 
   try {
-    if (type === "fixture") await toggleFavoriteFixture(user.id, id, on);
-    else await toggleFavoriteLeague(user.id, id, on);
+    if (type === "fixture") await toggleFavoriteFixture(owner, user.id, id, on);
+    else await toggleFavoriteLeague(owner, user.id, id, on);
     return NextResponse.json({ ok: true });
   } catch (e) {
     logError("api/fixtures/favorites POST", e);

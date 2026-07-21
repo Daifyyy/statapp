@@ -238,7 +238,10 @@ model Transfer {
 /// Oblíbené porovnání (PRO). Drží IDs pro re-run i JSON snapshot pro okamžité zobrazení.
 model SavedComparison {
   id              String   @id @default(cuid())
-  userId          String
+  // Stabilní vlastnický klíč = e-mail (přežije re-login/reset User řádku). `userId` je
+  // už jen volitelná reference. Viz UserTip.
+  email           String
+  userId          String?
   mode            String // "CLUB" | "NATIONAL"
   homeTeamId      Int
   homeLeagueId    Int
@@ -251,10 +254,10 @@ model SavedComparison {
   snapshotVersion Int      @default(1)
   savedAt         DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  @@unique([userId, homeTeamId, awayTeamId, homeLeagueId, awayLeagueId])
-  @@index([userId, savedAt])
+  @@unique([email, homeTeamId, awayTeamId, homeLeagueId, awayLeagueId])
+  @@index([email, savedAt])
 }
 
 /// Osobní tip uživatele (záložka Tipovačka = tréninkový deník intuice). Uživatel tipuje
@@ -264,7 +267,13 @@ model SavedComparison {
 /// dotáhne cron settle-tips (join na fixtureId). Jeden tip na trh a zápas.
 model UserTip {
   id         String   @id @default(cuid())
-  userId     String
+  // Stabilní vlastnický klíč = e-mail účtu (fallback `user:<id>`, kdyby chyběl). Přežije
+  // re-login i smazání/přegenerování `User` řádku (reset DB) → tipy se neztratí, jak se
+  // stalo dřív s kaskádou na userId. Identita tipů běží přes `email`, ne přes `userId`.
+  email      String
+  // `userId` je už jen volitelná reference na aktuální účet (SetNull při smazání User,
+  // aby řádek tipu přežil). NENÍ klíč vlastnictví.
+  userId     String?
   fixtureId  Int
   // snapshot zápasu pro zobrazení bez refetche
   leagueId   Int
@@ -296,10 +305,12 @@ model UserTip {
   settledAt  DateTime?
   placedAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SetNull (ne Cascade): smazání User řádku tip NEODSTRANÍ, jen odpojí `userId`.
+  // GDPR úklid „na přání" řeší account-delete route mazáním dle e-mailu.
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  @@unique([userId, fixtureId, market])
-  @@index([userId, placedAt])
+  @@unique([email, fixtureId, market])
+  @@index([email, placedAt])
   @@index([status, fixtureId])
 }
 
@@ -307,34 +318,42 @@ model UserTip {
 /// Jeden save na uživatele; celý SaveState (sezóna + historie kariéry) jako JSON.
 /// Herní modul je offline/samostatný – nesahá na predikční ani cache tabulky.
 model GameSave {
-  userId    String   @id
+  // Stabilní vlastnický klíč = e-mail (přežije re-login/reset User řádku) → rozehraná
+  // kariéra se neztratí. `userId` je už jen volitelná reference. Viz UserTip.
+  email     String   @id
+  // @unique kvůli one-to-one relaci User.gameSave (nullable → víc NULL je v Postgresu OK).
+  userId    String?  @unique
   /// Celý SaveState (lib/game/types.ts) – aktuální sezóna + kompaktní historie sezón.
   state     Json
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
 /// Oblíbená liga uživatele (PRO) – v Programu Zápasů se všechny její zápasy počítají jako
 /// oblíbené (primární sekce + filtr „Jen oblíbené"). Bez snapshot meta – filtr pracuje jen
 /// nad už načteným 7denním Programem, stačí id.
 model FavoriteLeague {
-  userId    String
+  // Stabilní vlastnický klíč = e-mail (přežije re-login/reset User řádku). Viz UserTip.
+  email     String
+  userId    String?
   leagueId  Int
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  @@id([userId, leagueId])
+  @@id([email, leagueId])
 }
 
 /// Oblíbený konkrétní zápas uživatele (PRO). Sjednocení s FavoriteLeague řídí „oblíbenost".
 model FavoriteFixture {
-  userId    String
+  // Stabilní vlastnický klíč = e-mail (přežije re-login/reset User řádku). Viz UserTip.
+  email     String
+  userId    String?
   fixtureId Int
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  @@id([userId, fixtureId])
+  @@id([email, fixtureId])
 }

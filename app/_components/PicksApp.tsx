@@ -149,7 +149,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         user={user}
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/digest", label: "Tipy týdne", emoji: "🔥" },
+          { href: "/digest", label: "Value tipy", emoji: "🔥" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
