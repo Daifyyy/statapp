@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getInjuries } from "@/lib/data/repository";
 import { getCurrentUser } from "@/lib/authUser";
+import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 
 /**
  * Zranění týmu (líně načítané UI mimo kritickou cestu porovnání). Data v API jsou
@@ -11,6 +12,9 @@ import { getCurrentUser } from "@/lib/authUser";
  * (Trial pokrývá predikci+insights; zranění jsou plně PRO – záměrné zjednodušení.)
  */
 export async function GET(req: Request) {
+  // Anti-spam: cold cache spouští upstream /injuries fetch (jako standings/scorers).
+  if (!allowRequest(`injuries:${clientKey(req)}`, 60, 60_000)) return tooMany();
+
   const sp = new URL(req.url).searchParams;
   const teamId = Number(sp.get("team"));
   const leagueId = Number(sp.get("league"));

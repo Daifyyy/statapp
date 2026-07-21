@@ -18,11 +18,27 @@ function periodEndOf(sub: Stripe.Subscription): Date | null {
   return ts ? new Date(ts * 1000) : null;
 }
 
-/** Promítne stav předplatného do User (tier + období). */
-async function syncSubscription(sub: Stripe.Subscription) {
+/** Nese předplatné náš PRO produkt? Když je `STRIPE_PRICE_ID` nastaven, musí sedět –
+ * jinak by jiný/levnější plán (až přibude druhý Price ID) odemkl totéž PRO. Bez env
+ * (nelze ověřit) se kontrola přeskočí. */
+function isOurProduct(sub: Stripe.Subscription): boolean {
+  const priceId = process.env.STRIPE_PRICE_ID;
+  if (!priceId) return true;
+  return sub.items?.data?.some((it) => it.price?.id === priceId) ?? false;
+}
+
+/**
+ * Promítne stav předplatného do User (tier + období). **Ordering-safe:** načte
+ * PŘEDPLATNÉ ZNOVU z Stripe (zdroj pravdy) místo důvěry payloadu eventu – webhooky
+ * chodí i mimo pořadí a vícekrát, takže `updated` doručený po `deleted` by jinak
+ * omylem obnovil PRO. Čerstvý retrieve vždy vrátí aktuální stav (i „canceled").
+ */
+async function syncSubscriptionById(subId: string) {
+  const sub = await getStripe().subscriptions.retrieve(subId);
   const customerId =
     typeof sub.customer === "string" ? sub.customer : sub.customer.id;
-  const active = sub.status === "active" || sub.status === "trialing";
+  const active =
+    (sub.status === "active" || sub.status === "trialing") && isOurProduct(sub);
 
   await prisma.user.updateMany({
     where: { stripeCustomerId: customerId },
@@ -54,19 +70,18 @@ export async function POST(req: Request) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         if (session.subscription) {
-          const sub = await getStripe().subscriptions.retrieve(
+          await syncSubscriptionById(
             typeof session.subscription === "string"
               ? session.subscription
               : session.subscription.id
           );
-          await syncSubscription(sub);
         }
         break;
       }
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted":
-        await syncSubscription(event.data.object as Stripe.Subscription);
+        await syncSubscriptionById((event.data.object as Stripe.Subscription).id);
         break;
       default:
         break; // ostatní eventy ignorujeme

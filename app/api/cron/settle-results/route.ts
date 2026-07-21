@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runSettleResults } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
+import { requireCronAuth } from "@/lib/cronAuth";
 
 // Dotažení skutečných výsledků u odehraných predikcí (denní cron). Levné
 // (batch /fixtures?ids=). Doplní goals/status → základ track-recordu a kalibrace.
@@ -14,13 +15,8 @@ export async function GET(req: Request) {
       { status: 400 }
     );
   }
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Neautorizováno" }, { status: 401 });
-    }
-  }
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
 
   try {
     const stats = await runSettleResults();

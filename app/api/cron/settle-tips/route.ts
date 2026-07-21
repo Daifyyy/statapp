@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runSettleTips } from "@/lib/data/tips";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
+import { requireCronAuth } from "@/lib/cronAuth";
 
 // Dotažení výsledků u osobních tipů (denní cron). Levné (batch /fixtures?ids=,
 // jeden zápas pokryje víc tipů). Doplní skóre/hit → základ úspěšnosti a ROI.
@@ -14,13 +15,8 @@ export async function GET(req: Request) {
       { status: 400 }
     );
   }
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Neautorizováno" }, { status: 401 });
-    }
-  }
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
 
   try {
     const stats = await runSettleTips();

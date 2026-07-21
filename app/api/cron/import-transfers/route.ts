@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { importTransfersFromDataset } from "@/lib/data/transfersDataset";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
+import { requireCronAuth } from "@/lib/cronAuth";
 
 // Import přestupů z Transfermarkt datasetu (ceny). Dataset je aktualizovaný týdně →
 // stačí běžet 1×/den. Stáhne ~pár MB, vybere aktuální okno + top-5 kluby, nahradí tabulku.
@@ -14,13 +15,8 @@ export async function GET(req: Request) {
       { status: 400 }
     );
   }
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Neautorizováno" }, { status: 401 });
-    }
-  }
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
   try {
     const stats = await importTransfersFromDataset();
     return NextResponse.json({ ok: true, ...stats });

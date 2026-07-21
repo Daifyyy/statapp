@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runPredictUpcoming, ALL_PREDICTION_LEAGUES } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
+import { requireCronAuth } from "@/lib/cronAuth";
 
 // Predikce nadcházejících zápasů (denní cron). Warm cache → levné; první studené
 // naplnění radši lokálně / přes ?league=ID. Idempotentní (upsert).
@@ -14,13 +15,8 @@ export async function GET(req: Request) {
       { status: 400 }
     );
   }
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: "Neautorizováno" }, { status: 401 });
-    }
-  }
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
 
   const leagueParam = new URL(req.url).searchParams.get("league");
   const leagueIds = leagueParam ? [Number(leagueParam)] : ALL_PREDICTION_LEAGUES;
