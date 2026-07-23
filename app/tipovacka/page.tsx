@@ -22,7 +22,16 @@ function pragueDate(d: Date): string {
   }).format(d);
 }
 
-export default async function TipovackaPage() {
+function num(v: string | string[] | undefined): number | undefined {
+  const n = Number(Array.isArray(v) ? v[0] : v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+export default async function TipovackaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const cu = await getCurrentUser();
   const user: SessionUser | null = cu
     ? { id: cu.id, name: cu.name, image: cu.image, tier: cu.tier, proTrialUsed: cu.proTrialUsed }
@@ -33,10 +42,12 @@ export default async function TipovackaPage() {
     pragueDate(new Date(now.getTime() + i * 24 * 60 * 60 * 1000))
   );
   const days = await getFixturesByDates(dates);
+  const sp = await searchParams;
+  const initialFixtureId = num(sp.fixture);
 
   return (
     <div className="flex-1">
-      <TipovackaApp days={days} user={user} />
+      <TipovackaApp days={days} user={user} initialFixtureId={initialFixtureId} />
     </div>
   );
 }

@@ -50,11 +50,18 @@ import {
 export const MODEL_VERSION = 7;
 
 /**
- * Sledované klubové ligy (uživatelská volba: Top 8 evropských lig dle koeficientu UEFA):
+ * Sledované klubové ligy pro predikci (uživatelská volba: Top 8 evropských lig dle
+ * koeficientu UEFA + Fortuna liga (345, ČR)):
  * Anglie (39), Španělsko (140), Itálie (135), Německo (78), Francie (61),
- * Portugalsko (94), Nizozemsko (88), Belgie (144).
+ * Portugalsko (94), Nizozemsko (88), Belgie (144), Česko (345).
+ *
+ * Vědomě NENÍ odvozeno ze všech `CLUB_LEAGUES` (18 lig) – zkoušelo se to (vyřešilo by
+ * to mismatch Program↔Výsledky pro všechny ligy najednou), ale zvýšení denní API kvóty
+ * a šumu nestálo za pokrytí okrajových lig (Eliteserien, Süper Lig…). Zbylých 9 lig
+ * v `FIXTURE_LIST_LEAGUE_IDS` (Program v Zápasech) tak i nadále nikdy nedostane predikci
+ * → ve Výsledcích se u nich navždy neobjeví (známé, přijaté omezení, ne bug).
  */
-export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61, 94, 88, 144];
+export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61, 94, 88, 144, 345];
 
 /**
  * Všechny sledované soutěže pro predikci: klubové ligy + reprezentační soutěže

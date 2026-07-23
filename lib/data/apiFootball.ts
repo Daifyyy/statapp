@@ -134,7 +134,12 @@ const fixtureItemSchema = z.object({
       .partial()
       .optional(),
   }),
-  league: z.object({ id: z.number(), season: z.number(), name: z.string() }),
+  league: z.object({
+    id: z.number(),
+    season: z.number(),
+    name: z.string(),
+    round: z.string().nullable().optional(),
+  }),
   teams: z.object({
     // name/logo vrací /fixtures u obou týmů – potřebné pro meta reprezentací
     // v predikci turnaje (tým z libovolné konfederace, mimo konfederační seznam).
@@ -219,7 +224,10 @@ const topScorerSchema = z.object({
       z.object({
         team: z.object({ id: z.number(), name: z.string(), logo: z.string() }),
         goals: z
-          .object({ total: z.number().nullable().optional() })
+          .object({
+            total: z.number().nullable().optional(),
+            assists: z.number().nullable().optional(),
+          })
           .partial()
           .optional(),
       })
@@ -352,6 +360,15 @@ export function fetchLastFixtures(team: number, last: number) {
 /** Nejbližších N nadcházejících zápasů ligy (status NS/TBD; goals jsou null). */
 export function fetchLeagueUpcomingFixtures(league: number, next: number) {
   return apiGet("/fixtures", { league, next }, z.array(fixtureItemSchema));
+}
+
+/**
+ * Posledních N ODEHRANÝCH zápasů celé ligy (napříč koly) – pro „poslední kolo" v Tabulkách.
+ * `last=N` počítá zápasy, ne celá kola (různý počet zápasů/kolo kvůli přesunům) → volající
+ * bere generózní N a dogroupuje podle `league.round`, viz `groupByRound` ve `standings.ts`.
+ */
+export function fetchLeagueRecentFixtures(league: number, season: number, last: number) {
+  return apiGet("/fixtures", { league, season, last }, z.array(fixtureItemSchema));
 }
 
 /** Zápasy dle ID (batch, max ~20 ID) – pro dotažení výsledků odehraných predikcí. */
@@ -521,6 +538,21 @@ export function fetchLeagueTopScorers(
 ): Promise<ApiTopScorer[]> {
   return apiGet(
     "/players/topscorers",
+    { league, season },
+    topScorersSchema
+  );
+}
+
+/**
+ * Žebříček nahrávek ligy (`/players/topassists?league&season`) – sesterský endpoint
+ * top střelců, stejný tvar odpovědi (`statistics[].goals.assists` místo `.total`).
+ */
+export function fetchLeagueTopAssists(
+  league: number,
+  season: number
+): Promise<ApiTopScorer[]> {
+  return apiGet(
+    "/players/topassists",
     { league, season },
     topScorersSchema
   );

@@ -36,6 +36,7 @@ function comparison(
   const summary: TeamSummary[] = venues.map((venue) => ({
     venue,
     form,
+    formOpponents: form.map(() => null),
     formSampleSize: form.length,
     cleanSheetPct,
     failedToScorePct: null,

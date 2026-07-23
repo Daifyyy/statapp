@@ -1,4 +1,5 @@
 import type { MatchResult, TeamSummary } from "@/lib/types";
+import { TeamLogo } from "./TeamLogo";
 
 /**
  * Blok nad metrikami: forma (posl. 5 jako W/D/L) a podíl čistého konta / zápasů
@@ -17,8 +18,8 @@ export function FormSummary({
     <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
       <div className="space-y-3">
         <Row label="Forma">
-          <FormBadges form={home?.form ?? []} align="left" />
-          <FormBadges form={away?.form ?? []} align="right" />
+          <FormBadges form={home?.form ?? []} opponents={home?.formOpponents ?? []} align="left" />
+          <FormBadges form={away?.form ?? []} opponents={away?.formOpponents ?? []} align="right" />
         </Row>
         <Pct
           label="Čisté konto"
@@ -65,26 +66,39 @@ const BADGE: Record<MatchResult, string> = {
   L: "bg-red-500 text-white",
 };
 
+type FormOpponent = { id: number; name: string; logoUrl: string | null } | null;
+
 function FormBadges({
   form,
+  opponents,
   align,
 }: {
   form: MatchResult[];
+  opponents: FormOpponent[];
   align: "left" | "right";
 }) {
   if (form.length === 0) {
     return <span className="text-sm text-muted">—</span>;
   }
   // Nejnovější první; pro hosty zarovnáme doprava (nejnovější u kraje).
-  const ordered = align === "right" ? [...form].reverse() : form;
+  const paired = form.map((r, i) => ({ r, opponent: opponents[i] ?? null }));
+  const ordered = align === "right" ? [...paired].reverse() : paired;
   return (
     <div className="flex gap-1">
-      {ordered.map((r, i) => (
+      {ordered.map(({ r, opponent }, i) => (
         <span
           key={i}
-          className={`flex h-6 w-6 items-center justify-center rounded text-xs font-bold ${BADGE[r]}`}
+          title={opponent?.name}
+          className="flex flex-col items-center gap-0.5"
         >
-          {r}
+          {opponent && (
+            <TeamLogo src={opponent.logoUrl ?? undefined} alt={opponent.name} size={12} />
+          )}
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded text-xs font-bold ${BADGE[r]}`}
+          >
+            {r}
+          </span>
         </span>
       ))}
     </div>

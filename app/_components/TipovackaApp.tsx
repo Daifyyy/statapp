@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signIn } from "next-auth/react";
 import type { FixtureDay, UpcomingFixture } from "@/lib/types";
 import type { TipMarket, TipRow, TipSelection } from "@/lib/tips/types";
@@ -60,9 +60,12 @@ const MARKETS: {
 export function TipovackaApp({
   days,
   user,
+  initialFixtureId,
 }: {
   days: FixtureDay[];
   user: SessionUser | null;
+  /** Deep-link ze Zápasů (`buildTipHref`) – rovnou otevře den/kartu s tímto zápasem. */
+  initialFixtureId?: number;
 }) {
   const [view, setView] = useState<View>("tipovat");
   const [tips, setTips] = useState<TipRow[]>([]);
@@ -127,7 +130,12 @@ export function TipovackaApp({
       />
 
       {view === "tipovat" && (
-        <TipovatView days={days} tipsByFixture={tipsByFixture} onPlaced={refresh} />
+        <TipovatView
+          days={days}
+          tipsByFixture={tipsByFixture}
+          onPlaced={refresh}
+          initialFixtureId={initialFixtureId}
+        />
       )}
       {view === "tipy" && (
         <TipyView tips={tips} loading={loading} onDeleted={refresh} />
@@ -201,17 +209,26 @@ function TipovatView({
   days,
   tipsByFixture,
   onPlaced,
+  initialFixtureId,
 }: {
   days: FixtureDay[];
   tipsByFixture: Map<number, Map<TipMarket, TipRow>>;
   onPlaced: () => Promise<void>;
+  initialFixtureId?: number;
 }) {
-  const [dayIdx, setDayIdx] = useState(0);
   // Na živý zápas nejde tipnout (POST /api/tips ho stejně odmítne) → vyřaď ho z nabídky.
   const tippableDays = useMemo(
     () => days.map((d) => ({ ...d, fixtures: d.fixtures.filter((f) => !f.live) })),
     [days]
   );
+  // Deep-link ze Zápasů: naskoč rovnou na den obsahující cílový zápas (fallback na dnešek).
+  const [dayIdx, setDayIdx] = useState(() => {
+    if (initialFixtureId == null) return 0;
+    const i = tippableDays.findIndex((d) =>
+      d.fixtures.some((f) => f.fixtureId === initialFixtureId)
+    );
+    return i >= 0 ? i : 0;
+  });
   const active = tippableDays[dayIdx] ?? tippableDays[0];
 
   return (
@@ -222,6 +239,7 @@ function TipovatView({
           fixtures={active.fixtures}
           tipsByFixture={tipsByFixture}
           onPlaced={onPlaced}
+          initialFixtureId={initialFixtureId}
         />
       ) : (
         <Empty>
@@ -284,12 +302,16 @@ function LeagueGroups({
   fixtures,
   tipsByFixture,
   onPlaced,
+  initialFixtureId,
 }: {
   fixtures: UpcomingFixture[];
   tipsByFixture: Map<number, Map<TipMarket, TipRow>>;
   onPlaced: () => Promise<void>;
+  initialFixtureId?: number;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(null);
+  // `expanded` je klíčované fixtureId (ne leagueId) → deep-link stačí předat rovnou,
+  // nezáleží na tom, do jaké ligové skupiny zápas patří.
+  const [expanded, setExpanded] = useState<number | null>(initialFixtureId ?? null);
   const groups = useMemo<LeagueGroup[]>(() => {
     const map = new Map<number, LeagueGroup>();
     for (const f of fixtures) {
@@ -318,6 +340,7 @@ function LeagueGroups({
                 fixture={f}
                 existing={tipsByFixture.get(f.fixtureId)}
                 open={expanded === f.fixtureId}
+                autoScroll={initialFixtureId === f.fixtureId}
                 onToggle={() =>
                   setExpanded((cur) => (cur === f.fixtureId ? null : f.fixtureId))
                 }
@@ -335,23 +358,32 @@ function TipFixtureCard({
   fixture,
   existing,
   open,
+  autoScroll,
   onToggle,
   onPlaced,
 }: {
   fixture: UpcomingFixture;
   existing: Map<TipMarket, TipRow> | undefined;
   open: boolean;
+  /** Deep-link cíl (`buildTipHref`) – jednorázově se přiscrolluje do viewportu po mountu. */
+  autoScroll?: boolean;
   onToggle: () => void;
   onPlaced: () => Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<TipMarket | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const cardRef = useRef<HTMLLIElement>(null);
   const time = new Date(fixture.kickoff).toLocaleTimeString("cs-CZ", {
     hour: "2-digit",
     minute: "2-digit",
   });
   const tipCount = existing?.size ?? 0;
+
+  useEffect(() => {
+    if (autoScroll) cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function place(market: TipMarket, selection: TipSelection) {
     setBusy(market);
@@ -391,7 +423,7 @@ function TipFixtureCard({
   }
 
   return (
-    <li className="rounded-xl border border-border bg-surface shadow-sm">
+    <li ref={cardRef} className="rounded-xl border border-border bg-surface shadow-sm">
       <button
         type="button"
         onClick={onToggle}

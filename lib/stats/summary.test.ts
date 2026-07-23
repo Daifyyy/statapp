@@ -46,6 +46,19 @@ describe("computeSummary – forma", () => {
     expect(s.form).toEqual(["W", "L"]);
     expect(s.formSampleSize).toBe(2);
   });
+
+  it("formOpponents je zarovnané s form (stejné pořadí/délka, správný soupeř na indexu)", () => {
+    const opp1 = { id: 100, name: "Rival A", logoUrl: "a.png" };
+    const opp2 = { id: 200, name: "Rival B", logoUrl: "b.png" };
+    const matches = [
+      match(1, 1, 3, 0, { opponent: opp1 }), // nejnovější
+      match(2, 2, 1, 1, { opponent: opp2 }),
+      match(3, 3, 0, 2), // bez opponent → null
+    ];
+    const s = computeSummary(matches, "TOTAL");
+    expect(s.formOpponents).toEqual([opp1, opp2, null]);
+    expect(s.formOpponents.length).toBe(s.form.length);
+  });
 });
 
 describe("computeSummary – CS % / FTS %", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fullTimeGoals, normalizeUpcomingFixtures } from "./fixtures";
+import { fullTimeGoals, normalizeUpcomingFixtures, pickRound } from "./fixtures";
 import type { ApiFixture } from "./apiFootball";
 
 /** Odehraný zápas: `goals` = koncové skóre, `score.fulltime` = stav po 90 min. */
@@ -132,6 +132,22 @@ describe("normalizeUpcomingFixtures", () => {
     expect(out[0].awayCompareLeagueId).toBe(39);
   });
 
+  it("použije kurátorovaný název ligy z katalogu, ne syrový název z API", () => {
+    const out = normalizeUpcomingFixtures(
+      [fx(1, 39, "NS", "2026-06-23T18:00:00+00:00", { leagueName: "English Premier League" })],
+      NOW
+    );
+    expect(out[0].leagueName).toBe("Premier League");
+  });
+
+  it("neznámá liga (mimo katalog) ponechá syrový název z API jako fallback", () => {
+    const out = normalizeUpcomingFixtures(
+      [fx(1, 1, "NS", "2026-06-23T18:00:00+00:00", { leagueName: "FIFA World Cup" })],
+      NOW
+    );
+    expect(out[0].leagueName).toBe("FIFA World Cup");
+  });
+
   it("reprezentační zápas má NATIONAL mód a konfederace null (dotahuje repo)", () => {
     const out = normalizeUpcomingFixtures(
       [fx(1, 1, "NS", "2026-06-23T18:00:00+00:00")],
@@ -174,6 +190,55 @@ describe("normalizeUpcomingFixtures", () => {
     ];
     const out = normalizeUpcomingFixtures(raw, NOW);
     expect(out.map((f) => f.fixtureId)).toEqual([1]);
+  });
+});
+
+/** Zápas s kolem a skóre – pro testy `pickRound`. */
+function roundFx(
+  id: number,
+  round: string,
+  status: string,
+  date: string,
+  goals: { home: number | null; away: number | null } = { home: null, away: null }
+): ApiFixture {
+  return {
+    fixture: { id, date, status: { short: status } },
+    league: { id: 39, season: 2025, name: "Liga", round },
+    teams: {
+      home: { id: id * 10 + 1, name: `Home${id}`, logo: "h.png" },
+      away: { id: id * 10 + 2, name: `Away${id}`, logo: "a.png" },
+    },
+    goals,
+  } as ApiFixture;
+}
+
+describe("pickRound", () => {
+  it("last: vybere skupinu s nejnovějším průměrným datem z odehraných zápasů", () => {
+    const raw = [
+      roundFx(1, "Regular Season - 1", "FT", "2026-06-01T18:00:00+00:00", { home: 1, away: 0 }),
+      roundFx(2, "Regular Season - 2", "FT", "2026-06-08T18:00:00+00:00", { home: 2, away: 2 }),
+      roundFx(3, "Regular Season - 2", "FT", "2026-06-08T20:00:00+00:00", { home: 0, away: 1 }),
+      roundFx(4, "Regular Season - 3", "NS", "2026-06-15T18:00:00+00:00"), // nadcházející → mimo "last"
+    ];
+    const out = pickRound(raw, "last");
+    expect(out.map((f) => f.fixtureId)).toEqual([2, 3]);
+    expect(out[0].homeGoals).toBe(2);
+    expect(out[0].awayGoals).toBe(2);
+  });
+
+  it("next: vybere skupinu s nejbližším průměrným datem z nadcházejících zápasů", () => {
+    const raw = [
+      roundFx(1, "Regular Season - 3", "NS", "2026-06-15T18:00:00+00:00"),
+      roundFx(2, "Regular Season - 4", "NS", "2026-06-22T18:00:00+00:00"),
+      roundFx(3, "Regular Season - 4", "NS", "2026-06-22T20:00:00+00:00"),
+    ];
+    const out = pickRound(raw, "next");
+    expect(out.map((f) => f.fixtureId)).toEqual([1]);
+  });
+
+  it("prázdný vstup vrátí prázdné pole", () => {
+    expect(pickRound([], "last")).toEqual([]);
+    expect(pickRound([], "next")).toEqual([]);
   });
 });
 

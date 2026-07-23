@@ -30,6 +30,7 @@ function teamPerVenue(
     summary: venues.map((venue) => ({
       venue,
       form: [],
+      formOpponents: [],
       formSampleSize: 0,
       cleanSheetPct: null,
       failedToScorePct: null,
@@ -92,7 +93,7 @@ describe("reprezentace – TOTAL, predikce nezávislá na pořadí", () => {
     return {
       team: { id: name.length, name, logoUrl: "", country: "" },
       values,
-      summary: venues.map((venue) => ({ venue, form: [], formSampleSize: 0, cleanSheetPct: null, failedToScorePct: null, sampleSize: venue === "TOTAL" ? 12 : 0 })),
+      summary: venues.map((venue) => ({ venue, form: [], formOpponents: [], formSampleSize: 0, cleanSheetPct: null, failedToScorePct: null, sampleSize: venue === "TOTAL" ? 12 : 0 })),
     };
   }
 

@@ -85,6 +85,7 @@ function matchStats(
           GOALS_FOR: f.homeGoals,
           GOALS_AGAINST: f.awayGoals,
         },
+        opponent: { id: f.awayId, name: f.awayName, logoUrl: f.awayLogo },
       },
     },
     {
@@ -98,6 +99,7 @@ function matchStats(
           GOALS_FOR: f.awayGoals,
           GOALS_AGAINST: f.homeGoals,
         },
+        opponent: { id: f.homeId, name: f.homeName, logoUrl: f.homeLogo },
       },
     },
   ];

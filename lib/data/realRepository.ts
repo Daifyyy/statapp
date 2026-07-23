@@ -3,6 +3,8 @@ import type {
   Injury,
   League,
   LeagueGoalsAvg,
+  LeagueRound,
+  LeagueScorer,
   LeagueTable,
   LiveScore,
   MatchStat,
@@ -15,7 +17,10 @@ import {
   fetchFixtureStatistics,
   fetchFixturesByDate,
   fetchLastFixtures,
+  fetchLeagueRecentFixtures,
   fetchLeagueTeams,
+  fetchLeagueTopAssists,
+  fetchLeagueUpcomingFixtures,
   fetchLiveFixtures,
   fetchTeamFixtures,
   fetchTeamInjuries,
@@ -29,7 +34,7 @@ import {
   type ApiFixtureStats,
   type ApiStandingRow,
 } from "./apiFootball";
-import { normalizeUpcomingFixtures } from "./fixtures";
+import { normalizeUpcomingFixtures, pickRound } from "./fixtures";
 import {
   cachedJson,
   cachedJsonMemo,
@@ -59,7 +64,7 @@ import {
   type TeamStrength,
 } from "@/lib/stats/ratings";
 import { fullTimeGoals } from "./fixtures";
-import { pickTeamScorers } from "./scorers";
+import { pickLeagueAssists, pickLeagueScorers, pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
 import {
@@ -518,6 +523,75 @@ export async function getTeamTopScorers(
 }
 
 /**
+ * Nejlepší střelci CELÉ ligy (záložka Tabulky). **Stejný cache klíč** jako
+ * `getTeamTopScorers` (`topscorers:<liga>:<sezóna>`) → 0 API navíc, když cache pro tu
+ * ligu už byla zahřátá odkudkoli (Porovnání i Tabulky sdílí).
+ */
+export async function getLeagueScorers(
+  leagueId: number,
+  limit = 10
+): Promise<LeagueScorer[]> {
+  if (isNationalLeague(leagueId)) return [];
+  try {
+    const raw = await cachedJson(
+      `topscorers:${leagueId}:${CURRENT_SEASON}`,
+      SCORERS_TTL,
+      () => fetchLeagueTopScorers(leagueId, CURRENT_SEASON)
+    );
+    return pickLeagueScorers(raw, limit);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Nejlepší nahrávači CELÉ ligy (záložka Tabulky). Na rozdíl od střelců jde o **nový**
+ * upstream endpoint (`/players/topassists`) → 1 volání/liga/TTL okno, ne zdarma.
+ */
+export async function getLeagueAssists(
+  leagueId: number,
+  limit = 10
+): Promise<LeagueScorer[]> {
+  if (isNationalLeague(leagueId)) return [];
+  try {
+    const raw = await cachedJson(
+      `topassists:${leagueId}:${CURRENT_SEASON}`,
+      SCORERS_TTL,
+      () => fetchLeagueTopAssists(leagueId, CURRENT_SEASON)
+    );
+    return pickLeagueAssists(raw, limit);
+  } catch {
+    return [];
+  }
+}
+
+/** Kolik zápasů zpět/dopředu stahovat, než se dogroupují na jedno kolo (viz `pickRound`). */
+const ROUND_FETCH_SIZE = 15;
+const ROUND_TTL = 60 * 30; // 30 min – výsledky/rozpis kola se mění častěji než tabulka
+
+/**
+ * Poslední odehrané + nejbližší nadcházející kolo vybrané ligy (záložka Tabulky).
+ * Dvě nezávislá TTL volání (kratší TTL než tabulka, viz `ROUND_TTL`); reprezentace
+ * kolo nemají → `null`.
+ */
+export async function getLeagueRound(leagueId: number): Promise<LeagueRound | null> {
+  if (isNationalLeague(leagueId)) return null;
+  try {
+    const [lastRaw, nextRaw] = await Promise.all([
+      cachedJson(`round:last:${leagueId}:${CURRENT_SEASON}`, ROUND_TTL, () =>
+        fetchLeagueRecentFixtures(leagueId, CURRENT_SEASON, ROUND_FETCH_SIZE)
+      ),
+      cachedJson(`round:next:${leagueId}:${CURRENT_SEASON}`, ROUND_TTL, () =>
+        fetchLeagueUpcomingFixtures(leagueId, ROUND_FETCH_SIZE)
+      ),
+    ]);
+    return { last: pickRound(lastRaw, "last"), next: pickRound(nextRaw, "next") };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Mapa `teamId → pozice` pro dané týmy (FREE kontext do seznamů Zápasy/Tipy). Reprezentace
  * přeskočí (nemají tabulku). Standings se tahá **per liga přes sdílenou cache** → jedno
  * (cachované) volání na distinktní klubovou ligu, ne per zápas. Výpadek ligy ji jen vynechá.
@@ -893,6 +967,7 @@ function buildMatchStat(
   const isHome = f.teams.home.id === teamId;
   const gf = isHome ? f.goals.home : f.goals.away;
   const ga = isHome ? f.goals.away : f.goals.home;
+  const opp = isHome ? f.teams.away : f.teams.home;
 
   const metrics: Partial<Record<Metric, number>> = {
     ...statsToMetrics(statsTeam),
@@ -911,6 +986,7 @@ function buildMatchStat(
     season: f.league.season,
     isBaseline: false, // dopočítá se přes tagBaseline()
     metrics,
+    opponent: { id: opp.id, name: opp.name, logoUrl: opp.logo },
   };
 }
 

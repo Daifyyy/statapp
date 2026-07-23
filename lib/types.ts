@@ -173,6 +173,8 @@ export interface MatchStat {
   /** Patří do baseline („minulá sezóna") okna – dopočítáno při sestavení. */
   isBaseline: boolean;
   metrics: Partial<Record<Metric, number>>; // xG může chybět
+  /** Soupeř v zápase (pro zobrazení loga/jména u formy). Chybí u starších cache řádků. */
+  opponent?: { id: number; name: string; logoUrl: string | null } | null;
 }
 
 export interface League {
@@ -260,6 +262,8 @@ export type MatchResult = "W" | "D" | "L";
 export interface TeamSummary {
   venue: Venue;
   form: MatchResult[]; // nejnovější první, max 5
+  /** Soupeř ke každé položce `form` (stejné pořadí/délka). `null` = neznámý (starší cache). */
+  formOpponents: ({ id: number; name: string; logoUrl: string | null } | null)[];
   formSampleSize: number; // kolik zápasů reálně tvoří formu (0–5)
   cleanSheetPct: number | null; // 0–100, null když je vzorek prázdný
   failedToScorePct: number | null; // 0–100, null když je vzorek prázdný
@@ -343,6 +347,36 @@ export interface LeagueTableRow {
 export interface LeagueTable {
   rows: LeagueTableRow[];
   leagueAvg: LeagueGoalsAvg | null;
+}
+
+/**
+ * Hráč ze špičky střelců/nahrávek CELÉ ligy (na rozdíl od `Scorer`, který je vybraný
+ * pro jeden tým) – záložka Tabulky. Nese i klub, protože řádky napříč týmy. `value`
+ * je metrika-neutrální (góly, nebo asistence – rozlišuje volající UI popiskem).
+ */
+export interface LeagueScorer {
+  playerId: number;
+  name: string;
+  value: number;
+  teamId: number | null;
+  teamName: string;
+  teamLogo: string;
+}
+
+/** Jeden zápas posledního/příštího kola v Tabulkách. `goals` jsou `null` u nadcházejících. */
+export interface RoundFixture {
+  fixtureId: number;
+  kickoff: string;
+  home: { id: number; name: string; logoUrl: string };
+  away: { id: number; name: string; logoUrl: string };
+  homeGoals: number | null;
+  awayGoals: number | null;
+}
+
+/** Poslední odehrané a příští kolo vybrané ligy (Tabulky). `null` = liga bez dat. */
+export interface LeagueRound {
+  last: RoundFixture[];
+  next: RoundFixture[];
 }
 
 /**

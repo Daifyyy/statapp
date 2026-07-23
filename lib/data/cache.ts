@@ -9,7 +9,7 @@ export type MatchContext = "league" | "euro" | "national";
  * řádky se přestanou číst, dotáhnou se znovu z API (zadarmo) a přepíšou s plnou
  * sadou. Bezpečné pro sdílený Neon (žádné plošné mazání). §A/4
  */
-export const CURRENT_CACHE_VERSION = 2;
+export const CURRENT_CACHE_VERSION = 3;
 
 /**
  * TTL cache raw odpovědí (ligy, týmy, seznamy zápasů). Read-through:
@@ -94,6 +94,10 @@ function rowToMatchStat(r: Row): MatchStat {
     season: r.season,
     isBaseline: false, // dopočítá se v realRepository dle baseline sezóny
     metrics,
+    opponent:
+      r.opponentId != null
+        ? { id: r.opponentId, name: r.opponentName ?? "", logoUrl: r.opponentLogo }
+        : null,
   };
 }
 
@@ -138,6 +142,9 @@ function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
     yellowCards: ms.metrics.YELLOW_CARDS ?? null,
     redCards: ms.metrics.RED_CARDS ?? null,
     saves: ms.metrics.SAVES ?? null,
+    opponentId: ms.opponent?.id ?? null,
+    opponentName: ms.opponent?.name ?? null,
+    opponentLogo: ms.opponent?.logoUrl ?? null,
     schemaVersion: CURRENT_CACHE_VERSION,
   };
 }

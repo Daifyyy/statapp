@@ -176,3 +176,35 @@ export function isNationalLeague(leagueId: number): boolean {
 export function getConfederation(leagueId: number): Confederation | undefined {
   return CONFEDERATIONS.find((c) => c.id === leagueId);
 }
+
+const ALL_LEAGUES_BY_ID = new Map<number, League>(
+  [...CLUB_LEAGUES, ...NATIONAL_LEAGUES].map((l) => [l.id, l])
+);
+
+// Kolikrát se dané jméno v katalogu opakuje (dnes: „Bundesliga" pro Německo i Rakousko).
+const NAME_COUNTS = new Map<string, number>();
+for (const l of [...CLUB_LEAGUES, ...NATIONAL_LEAGUES]) {
+  NAME_COUNTS.set(l.name, (NAME_COUNTS.get(l.name) ?? 0) + 1);
+}
+
+/**
+ * Zobrazovaný název ligy – přidá zemi v závorce, ALE JEN když je název v katalogu
+ * dvojznačný (dnes jen obě „Bundesligy"). Ostatní ligy zůstávají beze změny (kompaktnější
+ * seznamy), disambiguace se řeší jen tam, kde je skutečně potřeba.
+ */
+export function leagueDisplayName(league: Pick<League, "name" | "country">): string {
+  const count = NAME_COUNTS.get(league.name) ?? 1;
+  return count > 1 ? `${league.name} (${league.country})` : league.name;
+}
+
+/**
+ * Kurátorovaný název ligy (`CLUB_LEAGUES`/`NATIONAL_LEAGUES`, disambiguovaný přes
+ * `leagueDisplayName`), fallback na syrový název z API pro neznámé ID. Jeden zdroj pravdy
+ * pro název ligy napříč Zápasy/Tipovačkou (dřív braly `f.league.name` přímo z živé
+ * odpovědi API-Football) a Porovnáním/Tabulkami (braly `catalog.ts`) – ty se pro stejné
+ * `leagueId` mohly lišit.
+ */
+export function catalogLeagueName(leagueId: number, fallback: string): string {
+  const league = ALL_LEAGUES_BY_ID.get(leagueId);
+  return league ? leagueDisplayName(league) : fallback;
+}

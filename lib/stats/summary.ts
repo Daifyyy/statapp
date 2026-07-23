@@ -18,7 +18,9 @@ export function computeSummary(
     .filter((m) => matchesVenue(m, venue))
     .sort((a, b) => b.date.localeCompare(a.date)); // nejnovější první
 
-  const form = selected.slice(0, FORM_SIZE).map(resultOf);
+  const formMatches = selected.slice(0, FORM_SIZE);
+  const form = formMatches.map(resultOf);
+  const formOpponents = formMatches.map((m) => m.opponent ?? null);
 
   const sample = selected.slice(0, RATE_SIZE);
   const sampleSize = sample.length;
@@ -28,6 +30,7 @@ export function computeSummary(
   return {
     venue,
     form,
+    formOpponents,
     formSampleSize: form.length,
     cleanSheetPct: sampleSize ? Math.round((cleanSheets / sampleSize) * 100) : null,
     failedToScorePct: sampleSize

@@ -123,6 +123,9 @@ function buildMatch(
   set("PASSES_TOTAL", passesTotal, 0);
   set("PASSES_ACCURATE", (passesTotal * passAcc) / 100, 0);
 
+  // Syntetický soupeř (mock nemá cross-team roster) – deterministické id/jméno z fixtureId,
+  // bez loga (TeamLogo má graceful fallback na iniciály).
+  const opponentId = fixtureId * 31 + 17;
   return {
     fixtureId,
     date: opts.date.toISOString(),
@@ -132,6 +135,7 @@ function buildMatch(
     season: opts.season ?? 0,
     isBaseline: opts.isBaseline ?? false,
     metrics,
+    opponent: { id: opponentId, name: `Soupeř ${opponentId}`, logoUrl: null },
   };
 }
 

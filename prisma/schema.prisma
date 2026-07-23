@@ -54,6 +54,10 @@ model MatchStatCache {
   yellowCards      Float?
   redCards         Float?
   saves            Float?
+  /// Soupeř v zápase – pro zobrazení loga/jména u „posledních 5 zápasů" formy.
+  opponentId       Int?
+  opponentName     String?
+  opponentLogo     String?
   /// Verze sady metrik; starší řádky se ignorují a dotáhnou znovu (viz cache.ts).
   schemaVersion    Int      @default(1)
   cachedAt         DateTime @default(now())

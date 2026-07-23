@@ -13,6 +13,7 @@ import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
+import { buildTipHref } from "./tipHref";
 import { useCurrentUser } from "./useCurrentUser";
 
 type View = "program" | "results";
@@ -788,6 +789,16 @@ function FixtureRow({
           <div className={cardClass}>{inner}</div>
         )}
       </div>
+      {!fixture.live && (
+        <Link
+          href={buildTipHref(fixture)}
+          aria-label="Tipnout zápas"
+          title="Tipnout zápas"
+          className="shrink-0 text-base leading-none text-muted transition hover:text-foreground"
+        >
+          🎯
+        </Link>
+      )}
       <StarButton
         on={isFavorite}
         onClick={() => onToggleFavorite(!isFavorite)}

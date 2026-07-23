@@ -1,7 +1,8 @@
-import type { UpcomingFixture } from "@/lib/types";
+import type { RoundFixture, UpcomingFixture } from "@/lib/types";
 import { FINISHED_STATUSES, LIVE_STATUSES, type ApiFixture } from "./apiFootball";
 import {
   FIXTURE_LIST_LEAGUE_IDS,
+  catalogLeagueName,
   isNationalTournamentLeague,
   leagueLogoUrl,
 } from "./catalog";
@@ -60,7 +61,7 @@ export function normalizeUpcomingFixtures(
       return {
         fixtureId: f.fixture.id,
         leagueId: f.league.id,
-        leagueName: f.league.name,
+        leagueName: catalogLeagueName(f.league.id, f.league.name),
         leagueLogoUrl: leagueLogoUrl(f.league.id),
         kickoff: f.fixture.date,
         home: { id: f.teams.home.id, name: f.teams.home.name, logoUrl: f.teams.home.logo },
@@ -102,4 +103,57 @@ export function fullTimeGoals(
   const { home, away } = f.goals;
   if (home == null || away == null) return null;
   return { home, away };
+}
+
+/**
+ * Vybere „poslední kolo" (nejnovější skupina odehraných zápasů) nebo „příští kolo"
+ * (nejbližší skupina nadcházejících) z ligou vrácené sady zápasů – Tabulky. API nemá
+ * dotaz „celé kolo", jen `last=N`/`next=N` počet zápasů → group podle `league.round`
+ * a vezmi tu skupinu s nejnovějším/nejbližším průměrným datem výkopu (robustní i pro
+ * kola s odloženým zápasem nebo bez číselného pořadí v názvu kola).
+ */
+export function pickRound(
+  raw: ApiFixture[],
+  direction: "last" | "next"
+): RoundFixture[] {
+  const eligible =
+    direction === "last"
+      ? raw.filter((f) => FINISHED_STATUSES.has(f.fixture.status.short))
+      : raw;
+
+  const groups = new Map<string, ApiFixture[]>();
+  for (const f of eligible) {
+    const round = f.league.round ?? "";
+    const list = groups.get(round);
+    if (list) list.push(f);
+    else groups.set(round, [f]);
+  }
+
+  let bestRound: string | null = null;
+  let bestAvg = direction === "last" ? -Infinity : Infinity;
+  for (const [round, fixtures] of groups) {
+    const avg =
+      fixtures.reduce((s, f) => s + new Date(f.fixture.date).getTime(), 0) /
+      fixtures.length;
+    const better = direction === "last" ? avg > bestAvg : avg < bestAvg;
+    if (better) {
+      bestAvg = avg;
+      bestRound = round;
+    }
+  }
+  const chosen = bestRound != null ? (groups.get(bestRound) ?? []) : [];
+
+  return chosen
+    .map((f) => {
+      const ft = fullTimeGoals(f);
+      return {
+        fixtureId: f.fixture.id,
+        kickoff: f.fixture.date,
+        home: { id: f.teams.home.id, name: f.teams.home.name, logoUrl: f.teams.home.logo },
+        away: { id: f.teams.away.id, name: f.teams.away.name, logoUrl: f.teams.away.logo },
+        homeGoals: ft?.home ?? null,
+        awayGoals: ft?.away ?? null,
+      };
+    })
+    .sort((a, b) => a.kickoff.localeCompare(b.kickoff));
 }

@@ -14,6 +14,7 @@ import type {
   Venue,
 } from "@/lib/types";
 import { METRIC_LABELS, METRIC_HINTS, LOWER_IS_BETTER } from "@/lib/types";
+import { leagueDisplayName } from "@/lib/data/catalog";
 import { MetricRow } from "./MetricRow";
 import { MatchVerdict } from "./MatchVerdict";
 import { MatchPrediction } from "./MatchPrediction";
@@ -717,7 +718,11 @@ function ResultPanel({
             />
           )}
           {result.insightReport && (
-            <KeySignals signals={result.insightReport.keySignals} />
+            <KeySignals
+              signals={result.insightReport.keySignals}
+              homeTeam={{ name: result.home.team.name, logoUrl: result.home.team.logoUrl }}
+              awayTeam={{ name: result.away.team.name, logoUrl: result.away.team.logoUrl }}
+            />
           )}
           {(homeInjuries.length > 0 || awayInjuries.length > 0) && (
             <InjurySummary
@@ -907,7 +912,7 @@ function TeamSelect({
       >
         {leagues.map((l) => (
           <option key={l.id} value={l.id}>
-            {l.name}
+            {leagueDisplayName(l)}
           </option>
         ))}
       </select>

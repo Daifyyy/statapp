@@ -4,6 +4,8 @@ import type {
   Injury,
   League,
   LeagueGoalsAvg,
+  LeagueRound,
+  LeagueScorer,
   LeagueTable,
   LeagueTableRow,
   LiveScore,
@@ -386,6 +388,74 @@ export async function getTopScorers(
     name: `Střelec #${i + 1}`,
     goals: 15 - i * 4 - (teamId % 3),
   }));
+}
+
+function mockLeagueClubTeams(leagueId: number): Team[] {
+  return allMockTeams().filter(
+    (t) => t.leagueId === leagueId && t.entityType !== "NATIONAL"
+  );
+}
+
+/** Nejlepší střelci CELÉ ligy (Tabulky). Real = sdílená cache; mock = deterministický žebříček. */
+export async function getLeagueScorers(
+  leagueId: number,
+  limit = 10
+): Promise<LeagueScorer[]> {
+  if (useReal) return real.getLeagueScorers(leagueId, limit);
+  return mockLeagueClubTeams(leagueId)
+    .slice(0, limit)
+    .map((t, i) => ({
+      playerId: t.id * 1000,
+      name: `Střelec ${t.name}`,
+      value: 20 - i * 2,
+      teamId: t.id,
+      teamName: t.name,
+      teamLogo: t.logoUrl,
+    }));
+}
+
+/** Nejlepší nahrávači CELÉ ligy (Tabulky). Real = API+cache; mock = deterministický žebříček. */
+export async function getLeagueAssists(
+  leagueId: number,
+  limit = 10
+): Promise<LeagueScorer[]> {
+  if (useReal) return real.getLeagueAssists(leagueId, limit);
+  return mockLeagueClubTeams(leagueId)
+    .slice(0, limit)
+    .map((t, i) => ({
+      playerId: t.id * 1000 + 1,
+      name: `Nahrávač ${t.name}`,
+      value: 15 - i * 2,
+      teamId: t.id,
+      teamName: t.name,
+      teamLogo: t.logoUrl,
+    }));
+}
+
+/** Poslední + příští kolo vybrané ligy (Tabulky). Real = API+cache; mock = pár fiktivních dvojic. */
+export async function getLeagueRound(leagueId: number): Promise<LeagueRound | null> {
+  if (useReal) return real.getLeagueRound(leagueId);
+  const teams = mockLeagueClubTeams(leagueId);
+  if (teams.length < 4) return null;
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const pair = (
+    a: Team,
+    b: Team,
+    offsetDays: number,
+    played: boolean
+  ) => ({
+    fixtureId: a.id * 100000 + b.id,
+    kickoff: new Date(now + offsetDays * day).toISOString(),
+    home: { id: a.id, name: a.name, logoUrl: a.logoUrl },
+    away: { id: b.id, name: b.name, logoUrl: b.logoUrl },
+    homeGoals: played ? 2 : null,
+    awayGoals: played ? 1 : null,
+  });
+  return {
+    last: [pair(teams[0], teams[1], -7, true), pair(teams[2], teams[3], -7, true)],
+    next: [pair(teams[1], teams[0], 7, false), pair(teams[3], teams[2], 7, false)],
+  };
 }
 
 const MOCK_INJURY_REASONS = [
