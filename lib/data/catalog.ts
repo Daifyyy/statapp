@@ -137,11 +137,28 @@ export function isNationalTournamentLeague(leagueId: number): boolean {
 }
 
 /**
- * Ligy zobrazované v záložce „Zápasy" (denní seznam): kurátorované klubové ligy
- * + reprezentační soutěže. Jeden zdroj pravdy pro filtr `/fixtures?date=`.
+ * Klubové ligy zobrazované v „Zápasy" (Program/Výsledky) a v Tipovačce – **užší**
+ * podmnožina `CLUB_LEAGUES` (Top 8 UEFA + Fortuna liga, ČR), ne všech 18. Predikce
+ * (`PREDICTION_LEAGUES` v `predictions.ts`) běží nad VŠEMI 18 ligami – tenhle seznam
+ * je jen o tom, co appka NABÍZÍ k prokliku/tipování v denním seznamu, aby Program
+ * neslibovat klikací zápas z ligy, kterou uživatel v UI nechce vidět denně. Vědomě
+ * ODDĚLENO od `PREDICTION_LEAGUES` (dřív byly jeden zdroj pravdy → buď appka nabízela
+ * moc lig denně, nebo model počítal málo lig; potřeby jsou různé).
+ */
+export const PROGRAM_CLUB_LEAGUE_IDS = [39, 140, 135, 78, 61, 94, 88, 144, 345];
+
+/** Je klubová liga v užším seznamu pro Zápasy/Tipovačku (ne ve všech 18 `CLUB_LEAGUES`)? */
+export function isProgramClubLeague(leagueId: number): boolean {
+  return PROGRAM_CLUB_LEAGUE_IDS.includes(leagueId);
+}
+
+/**
+ * Ligy zobrazované v záložce „Zápasy" (denní seznam) a Tipovačce: užší klubový seznam
+ * (`PROGRAM_CLUB_LEAGUE_IDS`) + reprezentační soutěže. Jeden zdroj pravdy pro filtr
+ * `/fixtures?date=`.
  */
 export const FIXTURE_LIST_LEAGUE_IDS = [
-  ...CLUB_LEAGUES.map((l) => l.id),
+  ...PROGRAM_CLUB_LEAGUE_IDS,
   ...ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
 ];
 

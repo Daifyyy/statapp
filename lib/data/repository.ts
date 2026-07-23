@@ -33,6 +33,7 @@ import {
 } from "./predictionStore";
 import { summarizeSettled } from "@/lib/picks/results";
 import { getLeagueTransfers, getClubBalances } from "./transferStore";
+import { isProgramClubLeague } from "./catalog";
 import * as real from "./realRepository";
 
 /**
@@ -184,12 +185,20 @@ export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
  * Nedávno dohrané zápasy s vyhodnocenou predikcí pro záložku „Výsledky".
  * Real = posledních pár dní z DB + dohledání konfederací pro reprezentační deep-link;
  * mock = generátor. FREE (jen historie, žádný konkrétní budoucí tip).
+ *
+ * **Filtruje klubové ligy na `isProgramClubLeague`** (Top 8 + ČR) – `PREDICTION_LEAGUES`
+ * (odkud řádky pocházejí) běží nad všemi 18 `CLUB_LEAGUES`, ale Výsledky mají zrcadlit
+ * jen to, co appka nabízí v Programu (jinak by tam prosakovaly ligy, které Program
+ * vůbec neukazuje – nekonzistentní řádek bez odpovídajícího zápasu v Programu).
+ * Reprezentace filtr neřeší (jiný seznam, `ALL_NATIONAL_PREDICTION_LEAGUE_IDS`).
  */
 export async function getRecentResults(): Promise<SettledMatch[]> {
   const rows = useReal
     ? await getRecentSettledPredictions()
     : mockSettledPredictions();
-  const matches = summarizeSettled(rows);
+  const matches = summarizeSettled(rows).filter(
+    (m) => m.compareMode === "NATIONAL" || isProgramClubLeague(m.leagueId)
+  );
 
   // Reprezentačním řádkům dohledej konfederaci každého týmu (deep-link do NATIONAL).
   if (useReal && matches.some((m) => m.compareMode === "NATIONAL")) {

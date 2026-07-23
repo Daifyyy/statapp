@@ -10,6 +10,7 @@ import {
 } from "./realRepository";
 import {
   ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
+  CLUB_LEAGUES,
   isNationalTournamentLeague,
   isNationalHomeAwayLeague,
   isNeutralNationalLeague,
@@ -50,18 +51,16 @@ import {
 export const MODEL_VERSION = 7;
 
 /**
- * Sledované klubové ligy pro predikci (uživatelská volba: Top 8 evropských lig dle
- * koeficientu UEFA + Fortuna liga (345, ČR)):
- * Anglie (39), Španělsko (140), Itálie (135), Německo (78), Francie (61),
- * Portugalsko (94), Nizozemsko (88), Belgie (144), Česko (345).
- *
- * Vědomě NENÍ odvozeno ze všech `CLUB_LEAGUES` (18 lig) – zkoušelo se to (vyřešilo by
- * to mismatch Program↔Výsledky pro všechny ligy najednou), ale zvýšení denní API kvóty
- * a šumu nestálo za pokrytí okrajových lig (Eliteserien, Süper Lig…). Zbylých 9 lig
- * v `FIXTURE_LIST_LEAGUE_IDS` (Program v Zápasech) tak i nadále nikdy nedostane predikci
- * → ve Výsledcích se u nich navždy neobjeví (známé, přijaté omezení, ne bug).
+ * Sledované klubové ligy pro predikci = VŠECH `CLUB_LEAGUES` (18 lig, `catalog.ts`).
+ * Predikční pipeline (tahle) a to, co appka denně NABÍZÍ v „Zápasy"/Tipovačce
+ * (`PROGRAM_CLUB_LEAGUE_IDS`, užší Top 8 + ČR), jsou **vědomě oddělené seznamy**:
+ * model počítá predikce nad co nejširší množinou (víc dat = víc hodnoty pro záložku
+ * Predikce/Tipy), ale denní seznam zápasů zůstává komorní jen na ligy, které uživatel
+ * chce vidět každý den. Záložka Výsledky (v Zápasech) proto navíc filtruje settlnuté
+ * predikce zpět na `isProgramClubLeague` – jinak by tam vlivem širšího `PREDICTION_
+ * LEAGUES` prosakovaly i ligy, které Program vůbec nenabízí (viz `repository.ts`).
  */
-export const PREDICTION_LEAGUES = [39, 140, 135, 78, 61, 94, 88, 144, 345];
+export const PREDICTION_LEAGUES = CLUB_LEAGUES.map((l) => l.id);
 
 /**
  * Všechny sledované soutěže pro predikci: klubové ligy + reprezentační soutěže
