@@ -1,4 +1,4 @@
-import type { BookOdds, CornerLineOdds } from "@/lib/data/apiFootball";
+import type { BookOdds, LineOdds } from "@/lib/data/apiFootball";
 import { devig } from "./market";
 
 /**
@@ -45,7 +45,9 @@ export function parseBooks(value: unknown): BookOdds[] {
     const b = raw as Record<string, unknown>;
     if (typeof b.name !== "string") continue;
     const num = (k: string) => (typeof b[k] === "number" && b[k] > 1 ? (b[k] as number) : null);
-    const corners = parseCornerLines(b.corners);
+    const corners = parseLines(b.corners);
+    const totalHome = parseLines(b.totalHome);
+    const totalAway = parseLines(b.totalAway);
     out.push({
       id: typeof b.id === "number" ? b.id : 0,
       name: b.name,
@@ -57,15 +59,17 @@ export function parseBooks(value: unknown): BookOdds[] {
       btts: num("btts"),
       bttsNo: num("bttsNo"),
       ...(corners.length ? { corners } : {}),
+      ...(totalHome.length ? { totalHome } : {}),
+      ...(totalAway.length ? { totalAway } : {}),
     });
   }
   return out;
 }
 
-/** Rohové linky z JSON (stejná obranná logika jako `parseBooks`). */
-function parseCornerLines(value: unknown): CornerLineOdds[] {
+/** Linky trhu z JSON (stejná obranná logika jako `parseBooks`). */
+function parseLines(value: unknown): LineOdds[] {
   if (!Array.isArray(value)) return [];
-  const out: CornerLineOdds[] = [];
+  const out: LineOdds[] = [];
   for (const raw of value) {
     if (typeof raw !== "object" || raw === null) continue;
     const c = raw as Record<string, unknown>;
@@ -144,18 +148,29 @@ export function sharpFair(
   return { ...fair, bookmaker: best.book.name, overround: best.over };
 }
 
-// ── ROHY ────────────────────────────────────────────────────────────────────────
-// Rohový trh má oproti gólovým jednu komplikaci navíc: **každá kniha může nabízet
-// jinou linii** (9.5 / 10.5 / 11.5, občas i 10.25). Kurz na 10.5 a kurz na 11.5 jsou
-// dvě různé sázky, takže „nejlepší cena" se smí hledat jen UVNITŘ jedné linie.
-// Kdyby se porovnaly napříč linkami, vypadalo by to jako obrovská hrana a byl by to
-// jen artefakt – přesně ta chyba, kterou u rohů uděláš nejsnáz.
+// ── TRHY S LINKAMI (rohy, týmové totaly) ────────────────────────────────────────
+// Tyhle trhy mají oproti 1X2 jednu komplikaci navíc: **každá kniha může nabízet jinou
+// linii** (rohy 9.5 / 10.5 / 11.5, týmový total 0.5 / 1.5 / 2.5). Kurz na 10.5 a kurz
+// na 11.5 jsou dvě různé sázky, takže „nejlepší cena" se smí hledat jen UVNITŘ jedné
+// linie. Kdyby se porovnaly napříč linkami, vypadalo by to jako obrovská hrana a byl by
+// to jen artefakt – přesně ta chyba, kterou na těchhle trzích uděláš nejsnáz.
+//
+// Rohy a týmové totaly sdílejí VŠECHNU logiku, liší se jen tím, ze kterého pole
+// `BookOdds` čtou → jeden parametr `market`, ne dvě sady funkcí.
+
+/** Trh s linkami. `totalHome`/`totalAway` = kolik gólů dá jeden tým. */
+export type LineMarket = "corners" | "totalHome" | "totalAway";
+
+const linesOf = (b: BookOdds, market: LineMarket): LineOdds[] => b[market] ?? [];
 
 /** Které linie jsou v nabídce a kolik knih je kotuje (sestupně dle pokrytí). */
-export function cornerLines(books: BookOdds[]): { line: number; books: number }[] {
+export function marketLines(
+  books: BookOdds[],
+  market: LineMarket
+): { line: number; books: number }[] {
   const count = new Map<number, number>();
   for (const b of books) {
-    for (const c of b.corners ?? []) {
+    for (const c of linesOf(b, market)) {
       if (c.over == null && c.under == null) continue;
       count.set(c.line, (count.get(c.line) ?? 0) + 1);
     }
@@ -166,24 +181,24 @@ export function cornerLines(books: BookOdds[]): { line: number; books: number }[
 }
 
 /** Nejčastěji kotovaná linie = ta, kterou má smysl vyhodnocovat. `null` bez dat. */
-export function mainCornerLine(books: BookOdds[]): number | null {
-  return cornerLines(books)[0]?.line ?? null;
+export function mainLine(books: BookOdds[], market: LineMarket): number | null {
+  return marketLines(books, market)[0]?.line ?? null;
 }
 
 /**
- * Nejlepší cena rohů **na konkrétní lince**. Linie je povinný parametr schválně –
- * nejde ji uhodnout a míchat linky by dalo nesmysl (viz komentář výše).
+ * Nejlepší cena **na konkrétní lince**. Linie je povinný parametr schválně – nejde ji
+ * uhodnout a míchat linky by dalo nesmysl (viz komentář výše).
  */
-export function bestCornerPrice(
+export function bestLinePrice(
   books: BookOdds[],
+  market: LineMarket,
   line: number,
   side: "over" | "under"
 ): BestPrice | null {
   let best: BestPrice | null = null;
   let count = 0;
   for (const b of books) {
-    const c = b.corners?.find((x) => x.line === line);
-    const o = c?.[side];
+    const o = linesOf(b, market).find((x) => x.line === line)?.[side];
     if (o == null) continue;
     count++;
     if (!best || o > best.odds) best = { odds: o, bookmaker: b.name, books: 0 };
@@ -192,16 +207,17 @@ export function bestCornerPrice(
 }
 
 /**
- * Sharp férová pravděpodobnost rohů na dané lince (kniha s nejnižší marží, obě strany).
- * Tohle je měřítko pro CLV a pro porovnání s modelem (`overProbNegBin`), ne cena k sázení.
+ * Sharp férová pravděpodobnost na dané lince (kniha s nejnižší marží, obě strany).
+ * Měřítko pro CLV a pro porovnání s modelem, **ne cena k sázení** (na to `bestLinePrice`).
  */
-export function sharpCornerFair(
+export function sharpLineFair(
   books: BookOdds[],
+  market: LineMarket,
   line: number
 ): { over: number; under: number; bookmaker: string; overround: number } | null {
-  let best: { book: BookOdds; c: CornerLineOdds; over: number } | null = null;
+  let best: { book: BookOdds; c: LineOdds; over: number } | null = null;
   for (const b of books) {
-    const c = b.corners?.find((x) => x.line === line);
+    const c = linesOf(b, market).find((x) => x.line === line);
     if (!c || c.over == null || c.under == null) continue;
     const over = 1 / c.over + 1 / c.under - 1;
     if (!best || over < best.over) best = { book: b, c, over };
@@ -215,6 +231,14 @@ export function sharpCornerFair(
     overround: best.over,
   };
 }
+
+// Pojmenované zkratky pro rohy (čitelnost na volajících místech; žádná vlastní logika).
+export const cornerLines = (books: BookOdds[]) => marketLines(books, "corners");
+export const mainCornerLine = (books: BookOdds[]) => mainLine(books, "corners");
+export const bestCornerPrice = (books: BookOdds[], line: number, side: "over" | "under") =>
+  bestLinePrice(books, "corners", line, side);
+export const sharpCornerFair = (books: BookOdds[], line: number) =>
+  sharpLineFair(books, "corners", line);
 
 /**
  * Sharp férová pravděpodobnost **totalu 2.5** (obě strany → jde odmaržovat). Stejná

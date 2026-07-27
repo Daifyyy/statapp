@@ -58,22 +58,28 @@ async function main() {
       // 10.5 vs 11.5) a porovnávat kurzy napříč linkami je hrubá chyba – proto se
       // vypisuje pokrytí každé z nich zvlášť.
       const books = mo.books ?? [];
-      const lines = new Map<number, number>();
-      for (const b of books) {
-        for (const c of b.corners ?? []) {
-          if (c.over != null || c.under != null) {
-            lines.set(c.line, (lines.get(c.line) ?? 0) + 1);
+      console.log(`\n  Sázkovek v odpovědi: ${books.length}`);
+      for (const [label, key] of [
+        ["Rohy", "corners"],
+        ["Total domácích", "totalHome"],
+        ["Total hostů", "totalAway"],
+      ] as const) {
+        const lines = new Map<number, number>();
+        for (const b of books) {
+          for (const c of b[key] ?? []) {
+            if (c.over != null || c.under != null) {
+              lines.set(c.line, (lines.get(c.line) ?? 0) + 1);
+            }
           }
         }
-      }
-      console.log(`\n  Sázkovek v odpovědi: ${books.length}`);
-      if (lines.size === 0) {
-        console.log("  Rohy: ŽÁDNÉ – nabídku Over/Under rohů nemá ani jedna kniha.");
-      } else {
-        console.log("  Rohy (linie → kolik knih ji kotuje):");
+        if (lines.size === 0) {
+          console.log(`  ${label}: ŽÁDNÉ – nenabízí ani jedna kniha.`);
+          continue;
+        }
+        console.log(`  ${label} (linie → kolik knih ji kotuje):`);
         for (const [line, n] of [...lines.entries()].sort((a, b) => b[1] - a[1])) {
           const best = books
-            .flatMap((b) => (b.corners ?? []).filter((c) => c.line === line).map((c) => c.over))
+            .flatMap((b) => (b[key] ?? []).filter((c) => c.line === line).map((c) => c.over))
             .filter((o): o is number => o != null);
           console.log(
             `    ${line.toFixed(2).padStart(6)}  ${String(n).padStart(2)} knih` +
@@ -90,7 +96,12 @@ async function main() {
         if (first) {
           console.log(`\n  Trhy u „${first.name}“ (id → název):`);
           for (const bet of first.bets) {
-            const mark = bet.name && /corner/i.test(bet.name) ? "  ← ROHY" : "";
+            const n = bet.name ?? "";
+            const mark = /corner/i.test(n)
+              ? "  ← ROHY"
+              : /total|goals/i.test(n) && /home|away/i.test(n) && !/card|booking/i.test(n)
+                ? "  ← TÝMOVÝ TOTAL"
+                : "";
             console.log(`    ${String(bet.id).padStart(4)}  ${bet.name ?? "(bez názvu)"}${mark}`);
           }
         }

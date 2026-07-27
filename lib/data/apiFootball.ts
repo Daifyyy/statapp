@@ -476,15 +476,26 @@ export interface BookOdds {
    * hrubá chyba. Ukládá se, co která kniha nabízí, a párování po lince řeší až čtení
    * (`lib/picks/books.ts`).
    */
-  corners?: CornerLineOdds[];
+  corners?: LineOdds[];
+  /**
+   * **Týmové totaly** („Total - Home" / „Total - Away") – kolik gólů dá jeden tým.
+   * Nejlepší trh, který model má mimo 1X2 (viz `lib/picks/teamTotals.ts`): skill nad
+   * konstantou +0.013 až +0.027 log-lossu, nejlíp na lince **1.5**. Tentýž tvar jako
+   * rohy, protože je to tentýž typ trhu – linky se mezi knihami liší.
+   */
+  totalHome?: LineOdds[];
+  totalAway?: LineOdds[];
 }
 
-/** Kurz Over/Under rohů na JEDNÉ konkrétní lince. */
-export interface CornerLineOdds {
+/** Kurz Over/Under na JEDNÉ konkrétní lince (rohy, týmové totaly…). */
+export interface LineOdds {
   line: number;
   over: number | null;
   under: number | null;
 }
+
+/** @deprecated Zůstává jen kvůli starším importům – je to `LineOdds`. */
+export type CornerLineOdds = LineOdds;
 
 /** Referenční kurzy jednoho zápasu (decimal odds; null = trh u sázkovky chybí). */
 export interface MatchOdds {
@@ -560,16 +571,22 @@ export async function fetchOdds(
     under25: ref.under25,
     bttsNo: ref.bttsNo,
     books: allBooks.filter(
-      (b) => b.home != null || b.over25 != null || b.btts != null || b.corners?.length
+      (b) =>
+        b.home != null ||
+        b.over25 != null ||
+        b.btts != null ||
+        b.corners?.length ||
+        b.totalHome?.length ||
+        b.totalAway?.length
     ),
   };
-  // Bez jediného použitelného kurzu nemá smysl řádek ukládat. Rohy se počítají taky –
-  // jinak by se zahodila odpověď, kde je jediný trh, který nás nově zajímá.
+  // Bez jediného použitelného kurzu nemá smysl řádek ukládat. Rohy a týmové totaly se
+  // počítají taky – jinak by se zahodila odpověď, kde je jediný trh, který nás zajímá.
   if (
     out.home == null &&
     out.over25 == null &&
     out.btts == null &&
-    !out.books?.some((b) => b.corners?.length)
+    !out.books?.some((b) => b.corners?.length || b.totalHome?.length || b.totalAway?.length)
   ) {
     return null;
   }
@@ -587,6 +604,24 @@ function isCornerBet(bet: { id: number; name?: string }): boolean {
   return bet.name != null && /corner/i.test(bet.name);
 }
 
+/**
+ * Je to **týmový total** („Total - Home" / „Total - Away")? Vrací stranu, nebo `null`.
+ *
+ * Matchery se **musí vzájemně vylučovat**: nabídka obsahuje i „Total Corners",
+ * „Total Cards" apod., a ty popisují jinou veličinu než góly. Proto se ostatní
+ * veličiny odfiltrují jmenovitě dřív, než se hledá strana. Kdyby to spadlo do jednoho
+ * pytle, model by porovnával svoji gólovou λ s kurzem na rohy – a nic by nekřičelo.
+ */
+function teamTotalSide(bet: { name?: string }): "home" | "away" | null {
+  const n = bet.name;
+  if (!n) return null;
+  if (/corner|card|booking|offside|foul|shot|throw/i.test(n)) return null;
+  if (!/total|goals/i.test(n)) return null;
+  if (/home/i.test(n)) return "home";
+  if (/away/i.test(n)) return "away";
+  return null; // „Goals Over/Under" = total zápasu, ne týmový
+}
+
 /** „Over 10.5" / „Under 9.5" → linie a strana. `null` u čehokoli jiného. */
 function parseOverUnderLabel(
   value: string
@@ -599,13 +634,14 @@ function parseOverUnderLabel(
     : null;
 }
 
-/** Rohové Over/Under kurzy jedné knihy, seskupené po linkách. */
-function cornerOddsOf(
-  bets: { id: number; name?: string; values: { value: string; odd: string }[] }[]
-): CornerLineOdds[] {
-  const byLine = new Map<number, CornerLineOdds>();
+/** Over/Under kurzy vybraných trhů jedné knihy, seskupené po linkách. */
+function lineOddsOf(
+  bets: { id: number; name?: string; values: { value: string; odd: string }[] }[],
+  pick: (bet: { id: number; name?: string }) => boolean
+): LineOdds[] {
+  const byLine = new Map<number, LineOdds>();
   for (const bet of bets) {
-    if (!isCornerBet(bet)) continue;
+    if (!pick(bet)) continue;
     for (const v of bet.values) {
       const parsed = parseOverUnderLabel(v.value);
       if (!parsed) continue;
@@ -634,7 +670,9 @@ function bookOddsOf(book: {
   const mw = betValues(1);
   const goals = betValues(5);
   const btts = betValues(8);
-  const corners = cornerOddsOf(book.bets);
+  const corners = lineOddsOf(book.bets, isCornerBet);
+  const totalHome = lineOddsOf(book.bets, (b) => teamTotalSide(b) === "home");
+  const totalAway = lineOddsOf(book.bets, (b) => teamTotalSide(b) === "away");
   return {
     id: book.id,
     name: book.name,
@@ -646,6 +684,8 @@ function bookOddsOf(book: {
     btts: oddOf(btts, "Yes"),
     bttsNo: oddOf(btts, "No"),
     ...(corners.length ? { corners } : {}),
+    ...(totalHome.length ? { totalHome } : {}),
+    ...(totalAway.length ? { totalAway } : {}),
   };
 }
 

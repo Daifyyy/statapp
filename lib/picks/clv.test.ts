@@ -184,6 +184,41 @@ describe("sharp konsenzus a rohy", () => {
   it("rohy nemají referenční fallback – bez knih prostě nejsou", () => {
     expect(rowClv(row(), "cornersOver")).toBeNull();
   });
+
+  it("týmové totaly: vlastní trh, vlastní linie, nemíchají se s rohy", () => {
+    const r = row({
+      oddsBooks: [
+        {
+          name: "S",
+          totalHome: [{ line: 1.5, over: 2.0, under: 1.85 }],
+          corners: [{ line: 10.5, over: 1.5, under: 2.6 }],
+        },
+      ],
+      oddsCloseBooks: [
+        {
+          name: "S",
+          totalHome: [{ line: 1.5, over: 1.8, under: 2.05 }],
+          corners: [{ line: 10.5, over: 2.9, under: 1.42 }],
+        },
+      ],
+    });
+    const t = rowClv(r, "totalHomeOver")!;
+    expect(t.line).toBe(1.5);
+    // Domácí přes 1.5 zlevnilo (2.0 → 1.8) → kladné CLV.
+    expect(t.clv).toBeGreaterThan(0);
+    // Rohy se hnuly OPAČNĚ – kdyby se trhy pletly, vyšlo by tu záporné číslo.
+    expect(rowClv(r, "cornersOver")!.clv).toBeLessThan(0);
+  });
+
+  it("týmové totaly: strana hostů čte své pole", () => {
+    const r = row({
+      oddsBooks: [{ name: "S", totalAway: [{ line: 1.5, over: 2.6, under: 1.48 }] }],
+      oddsCloseBooks: [{ name: "S", totalAway: [{ line: 1.5, over: 2.4, under: 1.56 }] }],
+    });
+    expect(rowClv(r, "totalAwayOver")!.clv).toBeGreaterThan(0);
+    // Domácí total ta kniha nenabízí → není z čeho počítat.
+    expect(rowClv(r, "totalHomeOver")).toBeNull();
+  });
 });
 
 describe("summarizeClv", () => {

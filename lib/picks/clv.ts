@@ -1,6 +1,13 @@
 import type { PickMarket, PredictionRow } from "@/lib/types";
 import { devig } from "./market";
-import { mainCornerLine, parseBooks, sharpCornerFair, sharpFair, sharpFairTotal } from "./books";
+import {
+  mainLine,
+  parseBooks,
+  sharpFair,
+  sharpFairTotal,
+  sharpLineFair,
+  type LineMarket,
+} from "./books";
 
 /**
  * CLV (closing line value) = o kolik se linie pohnula od našeho snímku k zavření.
@@ -25,7 +32,38 @@ export type ClvSide =
   | "over25"
   | "under25"
   | "cornersOver"
-  | "cornersUnder";
+  | "cornersUnder"
+  | "totalHomeOver"
+  | "totalHomeUnder"
+  | "totalAwayOver"
+  | "totalAwayUnder";
+
+/** Strany trhů s linkami (rohy, týmové totaly). */
+type LineClvSide =
+  | "cornersOver"
+  | "cornersUnder"
+  | "totalHomeOver"
+  | "totalHomeUnder"
+  | "totalAwayOver"
+  | "totalAwayUnder";
+
+/**
+ * Strana trhu s linkami → který trh a která strana. Tyhle trhy nemají referenční
+ * sloupce (kurzy žijí jen v JSON snímku knih), takže bez knih CLV prostě není.
+ */
+const LINE_SIDES: Record<LineClvSide, { market: LineMarket; side: "over" | "under" }> = {
+  cornersOver: { market: "corners", side: "over" },
+  cornersUnder: { market: "corners", side: "under" },
+  totalHomeOver: { market: "totalHome", side: "over" },
+  totalHomeUnder: { market: "totalHome", side: "under" },
+  totalAwayOver: { market: "totalAway", side: "over" },
+  totalAwayUnder: { market: "totalAway", side: "under" },
+};
+
+/** Type guard – zároveň zúží `side` pro větve, které pracují s 1X2 / totalem zápasu. */
+function isLineSide(side: ClvSide): side is LineClvSide {
+  return side in LINE_SIDES;
+}
 
 /** Trh + strana pravidla → strana pro CLV (`null` = trh, kde CLV nesledujeme). */
 export function clvSideOf(
@@ -49,14 +87,15 @@ export function clvSideOf(
  * **Rohy jdou JEN touhle cestou** – pro ně žádné referenční sloupce neexistují,
  * kurzy žijí výhradně v JSON snímku, a to včetně toho, na jaké lince jsou.
  */
-function sharpProbOf(booksJson: unknown, side: ClvSide, cornerLine: number | null): number | null {
+function sharpProbOf(booksJson: unknown, side: ClvSide, line: number | null): number | null {
   const books = parseBooks(booksJson);
   if (books.length === 0) return null;
-  if (side === "cornersOver" || side === "cornersUnder") {
-    if (cornerLine == null) return null;
-    const f = sharpCornerFair(books, cornerLine);
+  if (isLineSide(side)) {
+    if (line == null) return null;
+    const { market, side: ou } = LINE_SIDES[side];
+    const f = sharpLineFair(books, market, line);
     if (!f) return null;
-    return side === "cornersOver" ? f.over : f.under;
+    return ou === "over" ? f.over : f.under;
   }
   if (side === "over25" || side === "under25") {
     const f = sharpFairTotal(books);
@@ -78,7 +117,7 @@ function fairOf(
     under25: number | null;
   }
 ): number | null {
-  if (side === "cornersOver" || side === "cornersUnder") return null; // jen ze sharp knih
+  if (isLineSide(side)) return null; // trhy s linkami mají kurzy jen v knihách
   if (side === "over25" || side === "under25") {
     if (odds.over25 == null || odds.under25 == null) return null;
     if (odds.over25 <= 1 || odds.under25 <= 1) return null;
@@ -116,13 +155,12 @@ export interface ClvResult {
  * referenčním „close" by měřilo rozdíl mezi sázkovkami, ne pohyb trhu.
  */
 export function rowClv(row: PredictionRow, side: ClvSide): ClvResult | null {
-  // Rohy: linie se určí z OTEVÍRACÍHO snímku a stejná se pak hledá v zavíracím.
-  // Kdyby se u každého snímku vzala „jeho" nejčastější linie, mohly by to být dvě
-  // různé sázky a rozdíl by neměl význam.
-  const line =
-    side === "cornersOver" || side === "cornersUnder"
-      ? mainCornerLine(parseBooks(row.oddsBooks))
-      : null;
+  // Trhy s linkami (rohy, týmové totaly): linie se určí z OTEVÍRACÍHO snímku a stejná
+  // se pak hledá v zavíracím. Kdyby se u každého snímku vzala „jeho" nejčastější linie,
+  // mohly by to být dvě různé sázky a rozdíl by neměl význam.
+  const line = isLineSide(side)
+    ? mainLine(parseBooks(row.oddsBooks), LINE_SIDES[side].market)
+    : null;
 
   const sharpOpen = sharpProbOf(row.oddsBooks, side, line);
   const sharpClose = sharpProbOf(row.oddsCloseBooks, side, line);

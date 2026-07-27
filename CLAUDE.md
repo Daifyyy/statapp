@@ -602,9 +602,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   je pomalejší a zašuměnější než sharp linie. **Oba snímky musí být ze stejného zdroje** —
   sharp „open" proti referenčnímu „close" by měřilo rozdíl mezi sázkovkami, ne pohyb trhu
   (kryto testem).
-  **ROHY v CLV** (`cornersOver`/`cornersUnder`): kurzy na rohy žijí **výhradně v JSON
-  snímku knih**, žádné vlastní sloupce nemají — a je to tak schválně, protože **každá kniha
-  nabízí jinou linii** (9.5 / 10.5 / 11.5, občas 10.25). Skalární sloupec by linii zahodil.
+  **TRHY S LINKAMI v CLV** — rohy (`cornersOver`/`cornersUnder`) i **týmové totaly**
+  (`totalHomeOver`/`totalHomeUnder`/`totalAwayOver`/`totalAwayUnder`). Sdílejí veškerou
+  logiku (`LineMarket` + `marketLines`/`mainLine`/`bestLinePrice`/`sharpLineFair`;
+  `cornerLines`&spol. jsou jen pojmenované zkratky), protože je to tentýž typ trhu.
+  Kurzy žijí **výhradně v JSON snímku knih**, žádné vlastní sloupce nemají — a je to tak
+  schválně, protože **každá kniha nabízí jinou linii** (rohy 9.5/10.5/11.5, týmový total
+  0.5/1.5/2.5). Skalární sloupec by linii zahodil.
   Čtení proto páruje **po lince** (`bestCornerPrice`/`sharpCornerFair` berou linii povinným
   parametrem, `mainCornerLine` = nejšířeji kotovaná): linie se určí z **otevíracího** snímku
   a tatáž se hledá v zavíracím; když tam není, CLV se **nespočítá** (nedosadí se jiná).
@@ -638,8 +642,15 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     protože je to **konstrukčně** tentýž objekt jako 1X2 → trhy se nemůžou rozejít, a kdyby
     mřížka dostala korekci, která marginály nezachovává (bivariační Poisson), opraví se to
     samo. `LAMBDA_SHARPEN` marginály mění vždy (posouvá λ) → aplikuje se.
-  - **Neříká to nic o ziskovosti.** Historické kurzy na týmové totaly nemáme (football-data
-    je nedává), takže krok 2 je stejný jako u rohů: **snímat živé kurzy a měřit CLV**.
+  - **Kurzy se od 27. 7. 2026 SNÍMAJÍ** („Total - Home"/„Total - Away" → `BookOdds.totalHome`
+    /`totalAway`, 0 volání navíc — jsou v téže odpovědi). CLV strany `totalHomeOver`
+    /`totalHomeUnder`/`totalAwayOver`/`totalAwayUnder`. Historické kurzy **nemáme**
+    (football-data je nedává), takže ziskovost se dá měřit až dopředu, přes CLV.
+  - **Matchery trhů se musí VZÁJEMNĚ VYLUČOVAT.** Nabídka obsahuje i „Total Corners"
+    a „Total Cards"; kdyby spadly do týmových totalů, model by porovnával gólovou λ
+    s kurzem na rohy **a nic by nekřičelo**. `teamTotalSide` proto ostatní veličiny
+    (corner/card/booking/offside/foul/shot/throw) odfiltruje **jmenovitě dřív**, než hledá
+    stranu, a „Goals Over/Under" bez home/away vrací `null` (to je total zápasu).
 - **MODEL ROHŮ** (`lib/picks/corners.ts`, čisté + testy; `npm run backtest -- --corners`)
   — **jediný trh, kde model má doložený skill A je kalibrovaný.** Zatím jen změřený,
   **v produkci se nepoužívá** (`compareTeams` se nemění, nic se neukládá, 0 API volání).

@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { BookOdds } from "@/lib/data/apiFootball";
 import {
   bestCornerPrice,
+  bestLinePrice,
   bestOverround,
   bestPrice,
   cornerLines,
   mainCornerLine,
+  mainLine,
+  marketLines,
   overroundOf,
   parseBooks,
   sharpCornerFair,
   sharpFair,
   sharpFairTotal,
+  sharpLineFair,
 } from "./books";
 
 /** Kniha s vyplněnými poli (nevyplněná = null). */
@@ -206,6 +210,59 @@ describe("rohy (různé linie napříč knihami)", () => {
     const parsed = parseBooks(JSON.parse(JSON.stringify(CORNER_BOOKS)));
     expect(mainCornerLine(parsed)).toBe(10.5);
     expect(bestCornerPrice(parsed, 11.5, "over")!.odds).toBe(2.65);
+  });
+});
+
+describe("týmové totaly", () => {
+  const TOTAL_BOOKS: BookOdds[] = [
+    book("Pinnacle", {
+      totalHome: [
+        { line: 1.5, over: 1.95, under: 1.9 },
+        { line: 2.5, over: 3.6, under: 1.3 },
+      ],
+      totalAway: [{ line: 1.5, over: 2.5, under: 1.55 }],
+      // Rohy má taky – nesmí se to smíchat.
+      corners: [{ line: 10.5, over: 2.02, under: 1.85 }],
+    }),
+    book("Akční", {
+      totalHome: [{ line: 1.5, over: 2.08, under: 1.78 }],
+    }),
+  ];
+
+  it("čte linie z vlastního pole trhu, nemíchá strany ani trhy", () => {
+    expect(mainLine(TOTAL_BOOKS, "totalHome")).toBe(1.5);
+    expect(mainLine(TOTAL_BOOKS, "totalAway")).toBe(1.5);
+    expect(mainLine(TOTAL_BOOKS, "corners")).toBe(10.5);
+    // Hosté mají jen jednu knihu, domácí dvě – kdyby se to sečetlo, byla by tu 2.
+    expect(marketLines(TOTAL_BOOKS, "totalAway")[0].books).toBe(1);
+    expect(marketLines(TOTAL_BOOKS, "totalHome")[0].books).toBe(2);
+  });
+
+  it("nejlepší cena se hledá uvnitř trhu I linie", () => {
+    const b = bestLinePrice(TOTAL_BOOKS, "totalHome", 1.5, "over")!;
+    expect(b.odds).toBe(2.08);
+    expect(b.bookmaker).toBe("Akční");
+    // Kurz 3.6 je na lince 2.5 a 2.02 je na rozích – ani jeden se sem nesmí dostat.
+    expect(b.odds).toBeLessThan(3.6);
+  });
+
+  it("sharp férová cena bere knihu s nejnižší marží daného trhu", () => {
+    const f = sharpLineFair(TOTAL_BOOKS, "totalHome", 1.5)!;
+    expect(f.over + f.under).toBeCloseTo(1, 9);
+    // Pinnacle 1/1.95+1/1.9 = 1.039; Akční 1/2.08+1/1.78 = 1.043 → Pinnacle.
+    expect(f.bookmaker).toBe("Pinnacle");
+  });
+
+  it("trh, který kniha nenabízí, vrací null (ne prázdné číslo)", () => {
+    expect(bestLinePrice(TOTAL_BOOKS, "totalAway", 2.5, "over")).toBeNull();
+    expect(sharpLineFair(TOTAL_BOOKS, "totalAway", 2.5)).toBeNull();
+  });
+
+  it("přežije kolečko přes JSON", () => {
+    const parsed = parseBooks(JSON.parse(JSON.stringify(TOTAL_BOOKS)));
+    expect(bestLinePrice(parsed, "totalHome", 1.5, "over")!.odds).toBe(2.08);
+    expect(mainLine(parsed, "totalAway")).toBe(1.5);
+    expect(mainLine(parsed, "corners")).toBe(10.5);
   });
 });
 
