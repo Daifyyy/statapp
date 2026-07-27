@@ -1332,78 +1332,116 @@ znaku (https, bez koncového `/`).
 **Pozn. (lokál):** Google token exchange = odchozí TLS → `npm run dev` spouštěj s
 `NODE_OPTIONS=--use-system-ca` (jako probe/prisma). Bez auth env app běží jako anonym (FREE).
 
-## STAV K 26. 7. 2026 — kde jsme skončili a čím pokračovat
+## STAV K 27. 7. 2026 — kde jsme skončili a čím pokračovat
 
-Dvě sezení: (A) předsezónní údržba před startem lig 7. 8., (B) odpověď na otázku
-„dokážeme z našich dat postavit profitabilní sázecí model?". **Vše níže je v pracovním
-stromu, ale NENÍ commitnuté ani nasazené.** Schéma (`prisma db push`) už v Neonu je –
-sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **kód nasaď brzy**.
+**Všechno je commitnuté, nasazené a ověřené.** Pracovní strom je čistý, `main` je
+odpushovaná, schéma v Neonu sedí, crony běží a endpointy jsou zamčené. Nic nevisí.
 
-### Hotovo v tomto kole
-- **Sezónní údržba:** rotace + časový rozpočet predikčního cronu (dřív umíral v 60s
-  timeoutu a poslední ligy nedostaly predikci nikdy), `MIN_READABLE_CACHE_VERSION`
-  (bump verze zneviditelnil 9 000 zápasů), fallback formy pro nováčky z 2. ligy,
-  filtr lig do dotazu ve Výsledcích, `cachedJson` neukládá `null` a prázdno cachuje krátce,
-  readiness přestal počítat jeden zápas třikrát, baseline padá na loňskou tabulku,
-  guard na předsezónní tabulky, status filtr v `pickRound`, vlastní rate-limit buckety
-  v Tabulkách, `ROUND_TTL` 30 min → 6 h. Detaily u jednotlivých sekcí výše.
+**Jediné, co teď blokuje pokrok, je START LIG 7. 8.** Model je změřený tak daleko, jak
+to bez čerstvých dat jde; další krok potřebuje živé kurzy, ne další přeskládání téhož.
+
+### Odpověď na hlavní otázku (drž ji v hlavě)
+„Dá se z našich dat postavit profitabilní sázecí model?" → **na gólových trzích ne**
+(1X2 log-loss 1.0239 vs. trh 0.9760, ROI −5 až −11 %, a **přísnější práh hrany to
+zhoršuje**). Model má **skill, ale ne hranu**; mezi tím stojí marže. Nezkoušet to znovu
+bez nového vstupu — viz „Co nezkoušet znovu" níže.
+Otevřená zůstává jediná větev: **trhy, kde model něco umí a kde jsme ještě neviděli cenu**
+(týmové totaly, rohy). Verdikt o nich přijde z **CLV**, ne z výsledků.
+
+### Kde má model skill (pořadí = kam se dívat první)
+| trh | skill nad konstantou | kurzy | ověřeno proti ceně |
+|---|---|---|---|
+| 1X2 | +0.053 | ✅ | **ANO — prohráváme** |
+| **Týmové totaly** | **+0.013…+0.027** (nejlíp linie 1.5) | ✅ od 27. 7. | ne |
+| Over 2.5 | +0.009 | ✅ | částečně (ROI −1.8 %, CI přes nulu) |
+| Rohy | +0.003…+0.008 | ✅ od 27. 7. | ne |
+| BTTS | **žádný** | záměrně ne | — |
+
+### Hotovo 26.–27. 7. (vše nasazené)
+- **Sezónní údržba:** rotace + rozpočet predikčního cronu, `MIN_READABLE_CACHE_VERSION`,
+  fallback formy pro nováčky, filtr lig do dotazu ve Výsledcích, `cachedJson` neukládá
+  `null`, readiness přestal počítat zápas třikrát, baseline padá na loňskou tabulku.
 - **Oprava, která odblokovala kurzy:** zod schéma `/odds` padalo na numerickém `value`
-  u exotických trhů → v produkci **nebyl uložený ani jeden kurz**. Viz „EV / value tipy".
-- **Změřená odpověď na otázku o profitabilitě:** ne. `npm run import-odds` +
-  sekce „vs. TRH" v `npm run backtest`. Čísla a interpretace jsou v sekci o měřítkách výše.
-- **Poctivější UI:** `edgeFair` vedle `edge`, protistrany Over/BTTS v DB, „value tipy"
-  přeznačené na „kde se lišíme od trhu", `MarketPanel` říká i ROI z backtestu.
-- **CLV:** dva snímky kurzu + `lib/picks/clv.ts` + `ClvPanel`.
+  → v produkci **nebyl uložený ani jeden kurz**. Viz „EV / value tipy".
+- **Změřená odpověď o profitabilitě** (`npm run import-odds` + sekce „vs. TRH").
+- **Poctivější UI:** `edgeFair`, „kde se lišíme od trhu" místo „value tipy", `MarketPanel`.
+- **CLV** (`lib/picks/clv.ts` + `ClvPanel`), nově proti **sharp konsenzu**.
+- **Všech ~13 sázkovek** (`oddsBooks`) → line-shopping, `ValueEstimate.best`, odznak v `PickRow`.
+- **MODEL ROHŮ** (`lib/picks/corners.ts`): kalibrovaný, poráží konstantu, **negativně
+  binomické** rozdělení (overdisperze 1.137).
+- **TÝMOVÉ TOTALY** (`lib/picks/teamTotals.ts`): nejlepší trh mimo 1X2, **nula nového modelu**.
+- **Kurzy na rohy i týmové totaly** se snímají (0 volání navíc).
+- **Crony přesunuty do GitHub Actions** + narovnání na limity Vercel Hobby (viz níže).
 
-### Otevřené body (v pořadí, jak dávají smysl)
+### ⚠ Vercel Hobby — dvě věci, které tiše kazily provoz (opraveno 27. 7.)
+1. **`maxDuration` je stropovaná na 60 s a vyšší hodnota se ignoruje.** `predict-upcoming`
+   měla 300 a rozpočet 4 min → vnitřní rozpočet **nikdy nedoběhl** a běh vždy zabil
+   timeout. Zvýšení `maxDuration` (26. 7.) problém neopravilo, jen **skrylo**.
+2. **Hobby dovolí 2 crony a jen denně**, my měli šest → část neběžela vůbec.
+→ Rozvrh je nově v `.github/workflows/cron.yml`, `maxDuration = 60`, rozpočet 50 s.
+**Nezvyšovat zpátky bez Pro plánu.** Detaily v sekci „Plánované úlohy".
 
-1. **HOTOVO: `CRON_SECRET` je nastavený a endpointy jsou zamčené.** Ověřeno 27. 7. 2026 –
-   `/api/warm` i všechny `/api/cron/*` vrací zvenčí **401**. To je zároveň důkaz, že
-   proměnná na Vercelu opravdu je: `requireCronAuth` je **fail-open**, takže bez ní by
-   vracely 200. Rozvrh běží přes GitHub Actions (viz „Plánované úlohy"), ověřeno zeleným
-   během s odpovědí `{"ok":true,"due":0,…}`.
-   **Zbývá časově vázaná kontrola:** po startu lig (7. 8.) ověřit, že v `FixturePrediction`
-   přibývá `oddsHome`, `oddsCloseAt` a `oddsBooks` (kurzy se tahají až 72 h / 12 h před
-   výkopem, dřív tam nic nebude), a že **zavírací snímek chodí i u večerních zápasů** –
-   to byla ta oprava s vlastním cronem každé 3 h.
-2. **HOTOVO: ukládají se všechny sázkovky** (`oddsBooks`/`oddsCloseBooks` + `lib/picks/books.ts`
-   — viz „EV / value tipy" výše). Zbývá k tomu jen jedna věc: **data začnou přibývat až
-   od zápasů, které projdou cronem po nasazení** — starší řádky knihy nemají a dopočítat
-   je nejde (historické kurzy API nevrací). Než se naplní, `ValueEstimate.best` je `null`
-   a UI se chová jako dřív.
-3. **Rohy — KROK 1 HOTOV (model je kalibrovaný a má skill), krok 2 čeká na živé kurzy.**
-   Celé měření je v sekci „MODEL ROHŮ" výše: `lib/picks/corners.ts`, `npm run backtest --
-   --corners` (+ `--corners-grid`, `--corners-tune=k,t`). Shrnutí: λ trefuje úroveň
-   (9.785 vs 9.771), po útlumu součtu (`totalSpread = 0.3`) je ECE 0.014–0.021 a model
-   **poráží konstantu na všech liniích** i na hold-out sezóně. Skill je ale malý
-   (0.0025 log-lossu je týmová informace, zbytek je znalost ligy) a **marže na rozích je
-   5–9 %**, tedy násobek 1X2.
-   **Co dál, v tomhle pořadí:** (a) snímat živé kurzy na rohy z `/odds` (chodí v téže
-   odpovědi, kterou už stahujeme = 0 volání navíc) — trh `Corners Over Under`, 9 z 13 knih
-   včetně Pinnacle, pozor na **různé linie** (10.25 vs 10.5) mezi knihami; (b) měřit
-   **CLV**, ne ROI — na verdikt z výsledků by při téhle velikosti signálu byly potřeba
-   tisíce sázek; (c) teprve při kladném CLV řešit sázení.
-   **HOTOVO i tvar rozdělení:** negativně binomické místo Poissonu (`varianceRatio = 1.2`)
-   — overdisperze byla skutečná (podmíněný Pearson 1.137) a NB opravilo hlavně chvosty
-   (ECE na linii 12.5 z 0.0215 na 0.0046). Další ladění λ už smysl nemá; příští informace
-   musí přijít **zvenčí** (živé kurzy na rohy), ne z dalšího přeskládání týchž dat.
-4. **HOTOVO A ZMĚŘENO: týmové totaly jsou NEJLEPŠÍ trh, který máme mimo 1X2.**
-   Viz „TÝMOVÉ TOTALY" výše. Skill nad konstantou **+0.013 až +0.027** log-lossu na všech
-   šesti kombinacích (domácí/hosté × 0.5/1.5/2.5) = **3–4× víc než rohy**, ECE 0.010–0.020
-   bez jediného laděného parametru. Zbývá totéž co u rohů: **živé kurzy + CLV**, ne sázet.
+### ⚠ NEOVĚŘENO proti živému API (udělej to hned, jak bude první zápas s kurzy)
+Parsování **rohů i týmových totalů** vzniklo v mezisezóně, kdy `/odds` nevrací nic.
+Je psané obranně (hledá trh podle **názvu**, ne podle uhodnutého id; nesmysl → prázdno
+místo pádu), ale **žádný test ho nedrží proti realitě**:
+```
+npm run probe-odds -- <fixtureId> --markets
+```
+Vypíše linie všech tří trhů zvlášť a v seznamu označí `← ROHY` / `← TÝMOVÝ TOTAL`.
+
+### Co zbývá — A) po startu lig 7. 8. (jen ověřit, nic nestavět)
+1. **Parsování rohů a týmových totalů** proti živému API — `npm run probe-odds --
+   <fixtureId> --markets`. Viz varování výše. **Tohle udělej první**, celý sběr na tom stojí.
+2. **Kurzy padají do DB:** v `FixturePrediction` přibývá `oddsHome`, `oddsCloseAt`,
+   `oddsBooks`/`oddsCloseBooks`. Zvlášť ověř, že **zavírací snímek chodí i u večerních
+   zápasů** (to byla oprava s cronem každé 3 h; dřív ho dostaly jen zápasy 04:30–16:30 UTC).
+3. **CLV panel** na `/predikce` naskočí kolem 10. 8., použitelný vzorek spíš **září/říjen**.
+   `ClvSummary.sharpShare` řekne, kolik tipů se měří proti sharp konsenzu.
+
+### B) Sázecí model — otevřené
+4. **Verdikt o týmových totalech a rozích z CLV.** Jediná živá otázka. Pořadí podle skillu:
+   **nejdřív týmové totaly** (3–4× lepší než rohy, linie 1.5), pak rohy. **CLV, ne ROI** —
+   na verdikt z výsledků by při téhle velikosti signálu byly potřeba tisíce sázek.
 5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior
    a naší predikcí ji posouvat jen tam, kde máme konkrétní informaci. Jediná varianta,
-   která nevyžaduje být lepší než Pinnacle. Až po bodech 2–3.
-6. **Brána (drž ji):** do stakingu, bankrollu ani Kelly kritéria **neinvestovat**, dokud
-   aspoň jeden trh nemá kladné CLV nebo ROI, jehož interval spolehlivosti nezahrnuje nulu.
-   Dnes takový trh **není**.
+   která nevyžaduje být lepší než Pinnacle. Až po bodu 4.
+6. **BRÁNA (drž ji):** do stakingu, bankrollu ani Kelly **neinvestovat**, dokud aspoň
+   jeden trh nemá kladné CLV nebo ROI s intervalem spolehlivosti mimo nulu. Dnes takový
+   trh **není**. Kelly je násobič hrany — na záporné hraně jen zrychluje ztrátu.
+
+### C) Nezávislé na sezóně (dá se dělat kdykoli)
+7. **Stripe dodělat** — kód hotový, blokují ruční kroky (Price ID, `.env`, lokální test,
+   go-live) a **obchodní podmínky + DPH/OSS**, které musí být hotové PŘED prvním
+   zaplacením. Detaily v sekci „Platby (Stripe)".
+8. **Go-to-market** — Search Console + sitemap → vlastní doména (pozor: mění `AUTH_URL`
+   **i** Google OAuth redirect URI) → příspěvky do komunit s konkrétním zápasem.
+   Detaily v sekci „Go-to-market".
+9. **iOS Safari zoom** — viz „Známé problémy".
 
 ### Co nezkoušet znovu (změřeno, zamítnuto)
 - Porazit zavírací linii na 1X2 / Over 2.5 / BTTS gólovými průměry, xG a střelami.
 - Zpřísňovat práh hrany, aby se ROI zlepšilo – **zhoršuje ho** (−7.7 % → −8.9 %).
+  Je to podpis modelu bez hrany: kde vidí největší výhodu, tam se nejvíc mýlí.
 - Platt kalibrace (`CALIB_A/B`) – fit skončil na hranici gridu se ziskem 0.0007.
 - Zostření λ (`LAMBDA_SHARPEN`) – optimum s = 1.00.
 - Historické kurzy z API-Football – **nevrací je** (ověřeno třemi tvary dotazu).
+- Bivariační Poisson (společný šok λ₃) na BTTS – šum, a 1X2 se zhorší.
+- **Další ladění λ u rohů** – vyčerpáno (grid jde až do degenerace „predikuj ligový
+  průměr", optimum je vnitřní). Příští informace musí přijít zvenčí.
+- **Zvyšovat `maxDuration` nad 60 s** bez Vercel Pro – tiše se ignoruje (viz výše).
+
+### Zásady, které se osvědčily (platí i pro nový kód)
+- **Best-effort cesta musí mít vlastní ověření.** Fetch kurzů v `catch` selhával rok
+  neviditelně. Proto `runSnapshotOdds` vrací `errors` a workflow používá `--fail-with-body`.
+- **Měř, než vyřadíš nebo přidáš.** Pořadí lig podle skillu odporuje intuici (ČR a Řecko
+  patří ke špičce, Championship je u dna); Belgie „nejhorší liga" byl závěr z úzkého vzorku.
+- **Fituj na tisících zápasů z backtestu, ne na desítkách z DB** – a grid veď až do
+  degenerace, ať poznáš „optimum na hranici" (= přefit) od skutečného vnitřního optima.
+- **Hold-out je povinný**, i když se zdá, že není co přefitovat.
+- **Trhy s linkami se párují PO LINCE.** Kurz na 10.5 a na 11.5 jsou dvě různé sázky;
+  smíchat je vypadá jako obrovská hrana a je to artefakt.
+- **Nejlepší cena ≠ odhad pravděpodobnosti.** `bestPrice` na sázení, `sharpFair` na měření.
 
 ## Známé problémy / TODO
 - **iOS Safari zoom na mobilu:** po kliknutí na „Vyber tým" se stránka stále přibližuje,
