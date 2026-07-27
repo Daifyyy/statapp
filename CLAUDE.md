@@ -32,6 +32,9 @@ npm run backtest     # offline backtest na historii klubových lig (point-in-tim
 npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
 npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
 npm run backtest -- --no-odds       # bez sekce „vs. TRH" (jen kvalita modelu)
+npm run backtest -- --corners       # MODEL ROHŮ: úroveň λ, overdisperze, kalibrace po liniích
+                     # --corners-grid = fit shrinkage × útlum součtu; --corners-tune=6,0.3
+                     # Data zdarma z import-odds (HC/AC); rohy jedou MIMO produkční predikci.
 npm run import-odds  # ZAVÍRACÍ KURZY z football-data.co.uk → .cache/backtest (0 volání API).
                      # Bez nich backtest neumí měřit hranu proti trhu ani ROI.
                      # --leagues=39,140 --seasons=2024,2025
@@ -570,6 +573,37 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   a **95% CI bootstrapem**. CI tam není pro parádu — rozdělení výnosů je šikmé (většina sázek −1,
   občas +několik), takže pár set sázek dá ROI ±10 % čirým šumem. **Bez intervalu netvrď, že
   strategie vydělává.**
+- **MODEL ROHŮ** (`lib/picks/corners.ts`, čisté + testy; `npm run backtest -- --corners`)
+  — **jediný trh, kde model má doložený skill A je kalibrovaný.** Zatím jen změřený,
+  **v produkci se nepoužívá** (`compareTeams` se nemění, nic se neukládá, 0 API volání).
+  - **Konstrukce je TÁŽ jako u gólů**, jen nad jinou metrikou: `λ = ref × (rohy týmu / ref)
+    × (rohy inkasované soupeřem / ref)`. Sdílí **`strengthRatio`** (proto je vyexportovaná
+    z `predict.ts`), okna i `PREDICTION_WINDOW_WEIGHTS` → není to druhá implementace, která
+    se může tiše rozejít. Nová metrika **`CORNERS_AGAINST`** (mimo `ALL_METRICS`, přesně jako
+    `XG_AGAINST` → neukládá se, není v UI, žádný bump cache).
+  - **Data zdarma a offline:** skutečné rohy vozí už `npm run import-odds` (football-data,
+    sloupce `HC`/`AC`) → **12 097 zápasů (86.6 %)**; chybí jen „extra" ligy (Norsko, Dánsko,
+    Rakousko), jejichž zdroj rohy nemá. Proto se dá kalibrace ověřit **dřív než se řeší kurzy**.
+  - **Úroveň λ sedí skoro dokonale**: ⌀ λ 9.785 vs. ⌀ skutečnost 9.771 (domácí 5.405/5.387,
+    hosté 4.380/4.384). Multiplikativní konstrukce funguje i mimo góly.
+  - **Rozhodl útlum součtu λ** (`totalSpread = 0.3`, `dampenCornerTotal`). Bez něj byl model
+    **horší než konstanta na všech liniích** (ECE 0.05–0.06; predikce 17 % → realita 30 %,
+    73 % → 59 %). Po útlumu ECE **0.014–0.021** a konstantu poráží všude. Útlum je **agresivnější
+    než u gólů** (0.3 vs 0.5) — součet λ rohů měl ještě větší přebytek rozptylu.
+  - **Ověřeno hold-outem** (grid na 2024, měření na 2025 = fit ji neviděl): +0.0076 (linie 8.5),
+    +0.0066 (9.5), +0.0074 (10.5), +0.0059 (11.5), +0.0032 (12.5) log-lossu nad konstantou.
+    Optimum gridu je **vnitřní**, ne na hranici → fit, ne přefitování (na rozdíl od Platt kalibrace).
+  - **Kolik toho signálu je týmového:** grid jde schválně až do degenerace `t = 0` (= „predikuj
+    vždy ligový průměr"), a ta dá **0.6665** vs. **0.6640** v optimu vs. **0.6705** globální
+    konstanta. Čili z 0.0065 nad konstantou dělá **0.0040 samotná znalost ligy** a jen **0.0025**
+    informace o týmech. Signál existuje, ale je malý — velikostí srovnatelný s Over 2.5 u gólů.
+  - **Známé omezení: rohy jsou overdisperzní** (Var/⌀ = **1.17**, nezávisle na sezóně).
+    Poisson tvrdí 1.0, takže **podstřeluje chvosty** — a nejhorší ECE má právě krajní linie 12.5.
+    První kandidát na zlepšení je negativně-binomické rozdělení místo Poissonu, ne další ladění λ.
+  - **Co tohle NEŘÍKÁ: že se na rozích vydělá.** Měří se kvalita modelu, ne cena — historické
+    kurzy na rohy zdroj nemá (chodí jen živě z API, marže **5–9 %** = násobek 1X2). Skill
+    0.0025–0.0074 log-lossu je proti takové marži hodně málo. Další krok je snímat živé kurzy
+    na rohy a měřit **CLV**, ne rovnou sázet.
 - **Offline backtest** (`lib/picks/backtest.ts` + `npm run backtest`, čisté + testy): přehraje
   historii klubových lig **stejným jádrem** (`compareTeams`) a vydá `PredictionRow[]` → jde rovnou
   do `computeTrackRecord`/`computeReliability`/`fit.ts`. **Point-in-time** (`matchStatsBefore` bere
@@ -1229,16 +1263,21 @@ sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **k
    v backtestu prokazatelně zabrala** (ROI −7.7 % → −5.2 %, overround 0.11 % vs. 2.99 %).
    Plán byl JSON sloupec `oddsBooks` na `FixturePrediction` → z něj nejlepší cena
    i sharp konsenzus. **0 volání API navíc.** Tohle je nejlevnější zbývající zlepšení.
-3. **Rohy = jediný nezměřený kandidát na hranu.** `Corners Over Under` nabízí 9 z 13 knih
-   včetně Pinnacle (marže 5–9 %, rozptyl linií 10.25 vs 10.5) a **rohy už měříme**
-   (`CORNERS` v `ALL_METRICS`, venue splity, okna, ratingy). `expectedGoals`
-   (`lib/stats/predict.ts`) je obecné „λ z útoku a obrany vůči ligovému měřítku" → táž
-   konstrukce nad `CORNERS` dá λ rohů a Poissonova mřížka `P(Over/Under X.5)`.
-   **Validace je zadarmo a offline:** `npm run import-odds` už stahuje i skutečné počty
-   rohů (`MatchOddsRecord.corners`, sloupce `HC`/`AC`, hlavní ligy) → kalibraci a log-loss
-   změříš na 10 000+ zápasech dřív, než na to vsadíš korunu. Živé kurzy chodí v téže
-   odpovědi, kterou už stahujeme. **Postup: nejdřív změř kalibraci proti skutečným rohům,
-   teprve pak řeš kurzy.**
+3. **Rohy — KROK 1 HOTOV (model je kalibrovaný a má skill), krok 2 čeká na živé kurzy.**
+   Celé měření je v sekci „MODEL ROHŮ" výše: `lib/picks/corners.ts`, `npm run backtest --
+   --corners` (+ `--corners-grid`, `--corners-tune=k,t`). Shrnutí: λ trefuje úroveň
+   (9.785 vs 9.771), po útlumu součtu (`totalSpread = 0.3`) je ECE 0.014–0.021 a model
+   **poráží konstantu na všech liniích** i na hold-out sezóně. Skill je ale malý
+   (0.0025 log-lossu je týmová informace, zbytek je znalost ligy) a **marže na rozích je
+   5–9 %**, tedy násobek 1X2.
+   **Co dál, v tomhle pořadí:** (a) snímat živé kurzy na rohy z `/odds` (chodí v téže
+   odpovědi, kterou už stahujeme = 0 volání navíc) — trh `Corners Over Under`, 9 z 13 knih
+   včetně Pinnacle, pozor na **různé linie** (10.25 vs 10.5) mezi knihami; (b) měřit
+   **CLV**, ne ROI — na verdikt z výsledků by při téhle velikosti signálu byly potřeba
+   tisíce sázek; (c) teprve při kladném CLV řešit sázení.
+   **Nejlepší jednotlivé zlepšení modelu není další ladění λ, ale tvar rozdělení:** rohy
+   jsou overdisperzní (Var/⌀ = 1.17), takže Poisson podstřeluje chvosty — negativně
+   binomické rozdělení je první věc k vyzkoušení, a je opět zdarma a offline.
 4. **Týmové totaly** (`Total - Home`/`Total - Away`, bet 16/17) – marginály naší mřížky
    je dávají zadarmo, žádný nový model. Levné rozšíření, nezměřené.
 5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior

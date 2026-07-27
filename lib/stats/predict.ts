@@ -568,8 +568,13 @@ function blend(
  * Vrací i `ref`, vůči kterému se poměřovalo: venue varianta → venue průměr, fallback na
  * TOTAL → celkový průměr. Volající z něj skládá λ, takže neutrální reprezentace zůstanou
  * bez domácí výhody.
+ *
+ * **Exportováno záměrně:** konstrukce „síla = poměr k ligovému měřítku se shrinkage" není
+ * specifická pro góly – `lib/picks/corners.ts` ji používá nad `CORNERS`/`CORNERS_AGAINST`.
+ * Sdílení té funkce je celý smysl: model rohů tak není druhá implementace téhož, která se
+ * může tiše rozejít, ale tatáž matematika nad jinou metrikou.
  */
-function strengthRatio(
+export function strengthRatio(
   values: MetricValue[],
   metric: Metric,
   venue: Venue,

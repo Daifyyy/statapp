@@ -34,6 +34,13 @@ import {
 import type { MatchOddsRecord } from "../lib/picks/oddsDataset.ts";
 import { computeMarketBenchmark } from "../lib/picks/market.ts";
 import { flatBets, summarizePnl, type PriceLevel } from "../lib/picks/pnl.ts";
+import {
+  backtestCorners,
+  cornerCalibration,
+  dispersion,
+  DEFAULT_CORNER_TUNING,
+  type CornerRow,
+} from "../lib/picks/corners.ts";
 
 const CACHE_DIR = join(process.cwd(), ".cache", "backtest");
 
@@ -147,14 +154,23 @@ function attachStats(history: HistoryMatch[], league: number, season: number): v
 /**
  * Přilepí zavírací kurzy z `npm run import-odds` (sidecar `odds-<liga>-<sezóna>.json`).
  * Bez nich backtest měří jen „jsme lepší než hádání"; s nimi teprve „porazíme trh".
+ *
+ * **Rohy z téhož souboru se přilepují i při `--no-odds`**: `HC`/`AC` jsou skutečné
+ * výsledky zápasu, ne ceny. Kdyby je vypínal přepínač o kurzech, běh `--corners --no-odds`
+ * by tiše neměřil nic – a přesně takhle selhávají best-effort cesty (viz `fetchOdds`).
  */
 function attachOdds(history: HistoryMatch[], league: number, season: number): void {
   const file = join(CACHE_DIR, `odds-${league}-${season}.json`);
-  if (noOdds || !existsSync(file)) return;
+  if (!existsSync(file)) return;
   const odds = JSON.parse(readFileSync(file, "utf8")) as Record<string, MatchOddsRecord>;
   for (const m of history) {
     const o = odds[String(m.fixtureId)];
-    if (o) m.odds = o;
+    if (!o) continue;
+    if (!noOdds) m.odds = o;
+    if (o.corners) {
+      m.homeMetrics = { ...m.homeMetrics, CORNERS: o.corners.home };
+      m.awayMetrics = { ...m.awayMetrics, CORNERS: o.corners.away };
+    }
   }
 }
 
@@ -329,6 +345,140 @@ async function main() {
       console.log(`${String(hl).padEnd(8)}${cells.join("")}`);
     }
     console.log("(log-loss/ECE; nižší = lepší. Okenní model: 1.0116/0.008)");
+    return;
+  }
+
+  // ── Model ROHŮ (`--corners`) ────────────────────────────────────────────────────
+  // Jediný nezměřený kandidát na hranu. Krok 1 je **kalibrace proti skutečným rohům**,
+  // ne kurzy: dokud model neumí říct „60 %" tak, aby to nastalo v 60 %, je zbytečné se
+  // ptát, jestli je ta cena dobrá. Skutečné rohy jsou v `.cache/backtest/odds-*.json`
+  // (football-data, sloupce HC/AC) → celé měření je offline a zdarma.
+  if (process.argv.includes("--corners")) {
+    // `--corners-tune=k,t` = konkrétní parametry (fit na jedné sezóně → ověření na druhé).
+    const ct = arg("corners-tune");
+    const cTuning = ct
+      ? {
+          base: { ...DEFAULT_TUNING, shrinkMatches: nums(ct)[0] },
+          totalSpread: nums(ct)[1],
+        }
+      : DEFAULT_CORNER_TUNING;
+    if (ct) console.log(`Ladění rohů: k=${cTuning.base.shrinkMatches}, t=${cTuning.totalSpread}`);
+    const cRows = backtestCorners(history, { seasons, minMatches, tuning: cTuning });
+    console.log("\n=== MODEL ROHŮ ===");
+    if (cRows.length === 0) {
+      console.log(
+        "Žádná data o rozích. Spusť `npm run import-odds` (rohy vozí hlavní ligy;\n" +
+          "Norsko/Dánsko/Rakousko je ve zdroji nemají)."
+      );
+      return;
+    }
+    console.log(`Predikováno: ${cRows.length} zápasů se skutečnými rohy`);
+
+    // 1) Sedí vůbec úroveň λ? Systematické vychýlení se přelije do všech linií naráz,
+    //    takže tohle se musí ověřit dřív než kalibrace tvaru.
+    const avgC = (f: (r: CornerRow) => number) =>
+      cRows.reduce((a, r) => a + f(r), 0) / cRows.length;
+    console.log("\n--- Úroveň (λ vs. skutečnost) ---");
+    console.log(
+      `⌀ λ celkem:  ${avgC((r) => r.lambdaTotal).toFixed(3)}   ` +
+        `| ⌀ skutečné rohy: ${avgC((r) => r.actualTotal).toFixed(3)}`
+    );
+    console.log(
+      `⌀ λ domácí:  ${avgC((r) => r.lambdaHome).toFixed(3)}   ` +
+        `| skutečnost: ${avgC((r) => r.actualHome).toFixed(3)}`
+    );
+    console.log(
+      `⌀ λ hosté:   ${avgC((r) => r.lambdaAway).toFixed(3)}   ` +
+        `| skutečnost: ${avgC((r) => r.actualAway).toFixed(3)}`
+    );
+
+    // 2) Platí vůbec Poissonův předpoklad? Var/⌀ > 1 = overdisperze → Poisson podstřelí
+    //    chvosty, tedy přesně ty pravděpodobnosti, na které se sází.
+    const d = dispersion(cRows);
+    console.log("\n--- Tvar rozdělení (test předpokladu Poissonu) ---");
+    console.log(
+      `⌀ ${d.mean.toFixed(2)}  rozptyl ${d.variance.toFixed(2)}  → Var/⌀ = ${d.ratio.toFixed(3)}  ` +
+        (d.ratio > 1.15
+          ? "⚠ OVERDISPERZE (Poisson podstřelí chvosty)"
+          : d.ratio < 0.85
+            ? "⚠ underdisperze"
+            : "✅ Poisson sedí")
+    );
+
+    // 3) Kalibrace a log-loss po liniích – laťkou je konstanta „vždy základní míra".
+    console.log("\n--- Linie Over/Under (log-loss, nižší = lepší) ---");
+    console.log("linie   n      model     konstanta   rozdíl     ECE     verdikt");
+    for (const line of [8.5, 9.5, 10.5, 11.5, 12.5]) {
+      const c = cornerCalibration(cRows, line);
+      const delta = c.baseLogloss - c.logloss;
+      console.log(
+        `${line.toFixed(1).padEnd(7)} ${String(c.n).padStart(5)}  ` +
+          `${c.logloss.toFixed(4)}    ${c.baseLogloss.toFixed(4)}    ` +
+          `${(delta >= 0 ? "+" : "") + delta.toFixed(4)}   ` +
+          `${(c.ece ?? 0).toFixed(4)}  ` +
+          (delta > 0.002
+            ? `✅ přidává (základ ${pct(c.baseRate)})`
+            : `⚠ nepřidává (základ ${pct(c.baseRate)})`)
+      );
+    }
+
+    // 4) Kalibrační křivka na hlavní linii – tady je vidět TVAR chyby.
+    const main = cornerCalibration(cRows, 10.5);
+    console.log("\n--- Kalibrační křivka, linie 10.5 (predikováno → skutečnost) ---");
+    for (const b of main.bins) {
+      if (b.count < 30 || b.avgPredicted == null || b.observed == null) continue;
+      const delta = b.observed - b.avgPredicted;
+      const mark = delta > 0.03 ? " ⬆ podstřeleno" : delta < -0.03 ? " ⬇ přestřeleno" : "";
+      console.log(
+        `  ${pct(b.lower).padStart(6)}–${pct(b.upper).padEnd(6)} ` +
+          `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
+      );
+    }
+
+    console.log(
+      "\nPozn.: tohle měří JEN kvalitu modelu, ne ziskovost – kurzy na rohy v historickém\n" +
+        "zdroji nejsou (chodí jen živě z API). Teprve když model porazí konstantu A je\n" +
+        "kalibrovaný, má smysl řešit ceny."
+    );
+    return;
+  }
+
+  // Grid modelu rohů (`--corners-grid`): shrinkage × útlum rozptylu součtu λ. Verdikt dle
+  // log-lossu na hlavní linii 10.5 – u gólů přesně tenhle grid ukázal, že součet λ potřebuje
+  // vlastní útlum (Over 2.5 ECE 0.054 → 0.014), takže u rohů se na to musí zeptat taky.
+  if (process.argv.includes("--corners-grid")) {
+    // Rozsah jde záměrně až do degenerace (`t = 0` = „vždy ligový průměr", `k = 60` =
+    // „ignoruj tým"). Když optimum leží AŽ TAM, není to nastavení k dolazení – je to
+    // odpověď, že týmový signál v rohách není. Grid, který to nedosáhne, tuhle odpověď
+    // schová za „optimum na hranici".
+    const ks = [6, 15, 30, 60];
+    const ts = [1.0, 0.7, 0.5, 0.3, 0.15, 0];
+    console.log("\n=== Grid modelu rohů (log-loss / ECE na linii 10.5) ===");
+    console.log("k\\t   " + ts.map((t) => t.toFixed(2).padStart(15)).join(""));
+    for (const k of ks) {
+      const cells: string[] = [];
+      for (const t of ts) {
+        const r = backtestCorners(history, {
+          seasons,
+          minMatches,
+          tuning: {
+            base: { ...DEFAULT_TUNING, shrinkMatches: k },
+            totalSpread: t,
+          },
+        });
+        const c = cornerCalibration(r, 10.5);
+        cells.push(`${c.logloss.toFixed(4)}/${(c.ece ?? 0).toFixed(3)}`.padStart(15));
+      }
+      console.log(`${String(k).padEnd(6)}${cells.join("")}`);
+    }
+    const base = cornerCalibration(
+      backtestCorners(history, { seasons, minMatches }),
+      10.5
+    );
+    console.log(
+      `(nižší = lepší; laťka = konstanta ${base.baseLogloss.toFixed(4)}, ` +
+        `dnes k=${DEFAULT_CORNER_TUNING.base.shrinkMatches}/t=${DEFAULT_CORNER_TUNING.totalSpread})`
+    );
     return;
   }
 

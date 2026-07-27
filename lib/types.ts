@@ -36,7 +36,14 @@ export type Metric =
    * ten, kdo má po ruce statistiky obou stran (`/fixtures/statistics` je vrací v jedné
    * odpovědi). Mimo `ALL_METRICS` → v UI se nezobrazuje.
    */
-  | "XG_AGAINST";
+  | "XG_AGAINST"
+  /**
+   * Rohy, které tým **inkasoval** (= rohy soupeře v tom zápase) – obranný protějšek
+   * `CORNERS`, přesně jako `XG_AGAINST` u xG. Model rohů (`lib/picks/corners.ts`) ho
+   * potřebuje na druhou stranu λ: kolik rohů tým soupeři pouští. Mimo `ALL_METRICS`
+   * → v UI se nezobrazuje a nevyžaduje bump cache verze.
+   */
+  | "CORNERS_AGAINST";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -135,6 +142,7 @@ export const METRIC_LABELS: Record<Metric, string> = {
   SCORED: "Skóroval (podíl zápasů)",
   CLEAN_SHEET: "Čisté konto (podíl zápasů)",
   XG_AGAINST: "Inkasované xG",
+  CORNERS_AGAINST: "Inkasované rohy",
 };
 
 /**

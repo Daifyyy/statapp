@@ -87,8 +87,11 @@ export function matchStatsBefore(
       // stejně jako v produkci; góly je vždy přepíšou (jsou spolehlivější než dopočet).
       const stats = isHome ? m.homeMetrics : m.awayMetrics;
       // xG SOUPEŘE = xG, které tým inkasoval → kvalita obrany bez šumu z proměňování.
+      // Rohy soupeře = rohy, které tým pustil → obranná strana λ v modelu rohů
+      // (`lib/picks/corners.ts`). Obojí je tatáž úvaha, jen nad jinou metrikou.
       const oppStats = isHome ? m.awayMetrics : m.homeMetrics;
       const xgAgainst = oppStats?.XG;
+      const cornersAgainst = oppStats?.CORNERS;
       return {
         fixtureId: m.fixtureId,
         date: m.date,
@@ -100,6 +103,7 @@ export function matchStatsBefore(
         metrics: {
           ...stats,
           ...(xgAgainst != null ? { XG_AGAINST: xgAgainst } : {}),
+          ...(cornersAgainst != null ? { CORNERS_AGAINST: cornersAgainst } : {}),
           GOALS_FOR: gf,
           GOALS_AGAINST: ga,
         },
