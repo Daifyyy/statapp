@@ -1324,13 +1324,15 @@ sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **k
 
 ### Otevřené body (v pořadí, jak dávají smysl)
 
-1. **Ruční kroky, které blokují ostrý provoz** (žádný kód):
-   - **`CRON_SECRET` ve Vercelu + redeploy.** Ověřeno 26. 7.: `GET /api/warm?league=…`
-     vrací 200 **bez autorizace** → kdokoli může jedním requestem spustit stovky volání
-     API-Football a vyčerpat denní kvótu. `requireCronAuth` je fail-open, takže stačí
-     proměnnou nastavit, kód se nemění.
-   - Po 4. 8. zkontrolovat, že v `FixturePrediction` přibývá `oddsHome` a `oddsCloseAt`
-     (kurzy se tahají až do 72 h / 12 h před výkopem, dřív tam nic nebude).
+1. **HOTOVO: `CRON_SECRET` je nastavený a endpointy jsou zamčené.** Ověřeno 27. 7. 2026 –
+   `/api/warm` i všechny `/api/cron/*` vrací zvenčí **401**. To je zároveň důkaz, že
+   proměnná na Vercelu opravdu je: `requireCronAuth` je **fail-open**, takže bez ní by
+   vracely 200. Rozvrh běží přes GitHub Actions (viz „Plánované úlohy"), ověřeno zeleným
+   během s odpovědí `{"ok":true,"due":0,…}`.
+   **Zbývá časově vázaná kontrola:** po startu lig (7. 8.) ověřit, že v `FixturePrediction`
+   přibývá `oddsHome`, `oddsCloseAt` a `oddsBooks` (kurzy se tahají až 72 h / 12 h před
+   výkopem, dřív tam nic nebude), a že **zavírací snímek chodí i u večerních zápasů** –
+   to byla ta oprava s vlastním cronem každé 3 h.
 2. **HOTOVO: ukládají se všechny sázkovky** (`oddsBooks`/`oddsCloseBooks` + `lib/picks/books.ts`
    — viz „EV / value tipy" výše). Zbývá k tomu jen jedna věc: **data začnou přibývat až
    od zápasů, které projdou cronem po nasazení** — starší řádky knihy nemají a dopočítat
