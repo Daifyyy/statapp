@@ -42,6 +42,12 @@ import {
   DEFAULT_CORNER_TUNING,
   type CornerRow,
 } from "../lib/picks/corners.ts";
+import {
+  teamTotalCalibration,
+  teamTotalDispersion,
+  teamTotalLevel,
+  type TotalSide,
+} from "../lib/picks/teamTotals.ts";
 
 const CACHE_DIR = join(process.cwd(), ".cache", "backtest");
 
@@ -559,6 +565,59 @@ async function main() {
   console.time("backtest");
   const rows = backtest(history, { seasons, minMatches, tuning, ratings });
   console.timeEnd("backtest");
+
+  // ── TÝMOVÉ TOTALY (`--team-totals`) ─────────────────────────────────────────────
+  // Marginály naší mřížky zadarmo – žádný nový model, žádná nová data. Měří se kvalita,
+  // ne ziskovost: historické kurzy na týmové totaly nemáme.
+  if (process.argv.includes("--team-totals")) {
+    const settledRows = rows.filter((r) => r.available && r.homeGoals != null);
+    console.log("\n=== TÝMOVÉ TOTALY (marginály mřížky) ===");
+    if (settledRows.length === 0) {
+      console.log("Nic k vyhodnocení.");
+      return;
+    }
+    console.log(`Odehraných predikcí: ${settledRows.length}`);
+
+    for (const side of ["home", "away"] as TotalSide[]) {
+      const lvl = teamTotalLevel(settledRows, side);
+      const disp = teamTotalDispersion(settledRows, side);
+      console.log(`\n--- ${side === "home" ? "DOMÁCÍ" : "HOSTÉ"} ---`);
+      console.log(
+        `⌀ λ ${lvl.lambda.toFixed(3)}  | ⌀ skutečnost ${lvl.actual.toFixed(3)}  ` +
+          `| Pearson ⌀(x−λ)²/λ = ${disp.toFixed(3)}` +
+          (disp > 1.05 ? "  ⚠ overdisperze" : disp < 0.95 ? "  ⚠ underdisperze" : "  ✅")
+      );
+      console.log("linie   model     konstanta   rozdíl     ECE     verdikt");
+      for (const line of [0.5, 1.5, 2.5]) {
+        const c = teamTotalCalibration(settledRows, side, line);
+        const d = c.baseLogloss - c.logloss;
+        console.log(
+          `${line.toFixed(1).padEnd(7)} ${c.logloss.toFixed(4)}    ${c.baseLogloss.toFixed(4)}    ` +
+            `${(d >= 0 ? "+" : "") + d.toFixed(4)}   ${(c.ece ?? 0).toFixed(4)}  ` +
+            (d > 0.002
+              ? `✅ přidává (základ ${pct(c.baseRate)})`
+              : `⚠ nepřidává (základ ${pct(c.baseRate)})`)
+        );
+      }
+    }
+
+    // Křivka na nejsázenější lince (0.5 = „dá tým vůbec gól?").
+    console.log("\n--- Kalibrační křivka, domácí přes 0.5 (predikováno → skutečnost) ---");
+    for (const b of teamTotalCalibration(settledRows, "home", 0.5).bins) {
+      if (b.count < 30 || b.avgPredicted == null || b.observed == null) continue;
+      const delta = b.observed - b.avgPredicted;
+      const mark = delta > 0.03 ? " ⬆ podstřeleno" : delta < -0.03 ? " ⬇ přestřeleno" : "";
+      console.log(
+        `  ${pct(b.lower).padStart(6)}–${pct(b.upper).padEnd(6)} ` +
+          `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
+      );
+    }
+    console.log(
+      "\nPozn.: měří JEN kvalitu modelu. Kurzy na týmové totaly v historickém zdroji\n" +
+        "nejsou (chodí jen živě z API), takže o ziskovosti tohle neříká nic."
+    );
+    return;
+  }
 
   const usable = rows.filter((r) => r.available);
   console.log(

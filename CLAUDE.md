@@ -32,6 +32,8 @@ npm run backtest     # offline backtest na historii klubových lig (point-in-tim
 npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
 npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
 npm run backtest -- --no-odds       # bez sekce „vs. TRH" (jen kvalita modelu)
+npm run backtest -- --team-totals   # TÝMOVÉ TOTALY (marginály mřížky): úroveň, disperze,
+                     # kalibrace na liniích 0.5/1.5/2.5 pro domácí i hosty. 0 nových dat.
 npm run backtest -- --corners       # MODEL ROHŮ: úroveň λ, overdisperze, kalibrace po liniích
                      # --corners-grid = fit shrinkage × útlum součtu
                      # --corners-grid-nb = fit útlum × overdisperze (negativně binomické)
@@ -618,6 +620,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   a **95% CI bootstrapem**. CI tam není pro parádu — rozdělení výnosů je šikmé (většina sázek −1,
   občas +několik), takže pár set sázek dá ROI ±10 % čirým šumem. **Bez intervalu netvrď, že
   strategie vydělává.**
+- **TÝMOVÉ TOTALY** (`lib/picks/teamTotals.ts`, čisté + testy; `npm run backtest -- --team-totals`)
+  — **nejlepší trh, který máme mimo 1X2**, a stál nula práce navíc.
+  - **Žádný nový model ani data:** týmový total je **marginála** naší mřížky skóre.
+    Dosud se zahazovala.
+  - **Změřeno na 9 909 odehraných predikcích** (2024+2025), potvrzeno na 2025 zvlášť.
+    Úroveň λ sedí (domácí 1.541 vs 1.523, hosté 1.256 vs 1.244), Pearsonova disperze
+    **0.976 / 0.993** → **Poisson tu sedí** (na rozdíl od rohů, kde je 1.137). Skill nad
+    konstantou na všech šesti kombinacích: domácí +0.0196 / **+0.0274** / +0.0252
+    (linie 0.5/1.5/2.5), hosté +0.0133 / +0.0197 / +0.0192. ECE **0.010–0.020**.
+  - **Tohle je 3–4× víc než rohy** (+0.003…+0.008) a víc než Over 2.5 (+0.009) — a přitom
+    se **neladil ani jeden parametr**, takže tu není co přefitovat; čísla jsou z principu
+    out-of-sample. Nejlepší je linie **1.5** na obou stranách.
+  - **Dixon–Colesovo τ marginály ZACHOVÁVÁ přesně** (pro `i=0` je oprava
+    `ph₀·[1 + λₕρ(pa₁ − λₐpa₀)]` a `pa₁ = λₐpa₀` → nula; totéž `i=1`). Týmový total tedy
+    číselně **je** Poisson a `poissonVector(λ)` by dal totéž. Počítá se přesto z mřížky,
+    protože je to **konstrukčně** tentýž objekt jako 1X2 → trhy se nemůžou rozejít, a kdyby
+    mřížka dostala korekci, která marginály nezachovává (bivariační Poisson), opraví se to
+    samo. `LAMBDA_SHARPEN` marginály mění vždy (posouvá λ) → aplikuje se.
+  - **Neříká to nic o ziskovosti.** Historické kurzy na týmové totaly nemáme (football-data
+    je nedává), takže krok 2 je stejný jako u rohů: **snímat živé kurzy a měřit CLV**.
 - **MODEL ROHŮ** (`lib/picks/corners.ts`, čisté + testy; `npm run backtest -- --corners`)
   — **jediný trh, kde model má doložený skill A je kalibrovaný.** Zatím jen změřený,
   **v produkci se nepoužívá** (`compareTeams` se nemění, nic se neukládá, 0 API volání).
@@ -1354,8 +1376,10 @@ sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **k
    — overdisperze byla skutečná (podmíněný Pearson 1.137) a NB opravilo hlavně chvosty
    (ECE na linii 12.5 z 0.0215 na 0.0046). Další ladění λ už smysl nemá; příští informace
    musí přijít **zvenčí** (živé kurzy na rohy), ne z dalšího přeskládání týchž dat.
-4. **Týmové totaly** (`Total - Home`/`Total - Away`, bet 16/17) – marginály naší mřížky
-   je dávají zadarmo, žádný nový model. Levné rozšíření, nezměřené.
+4. **HOTOVO A ZMĚŘENO: týmové totaly jsou NEJLEPŠÍ trh, který máme mimo 1X2.**
+   Viz „TÝMOVÉ TOTALY" výše. Skill nad konstantou **+0.013 až +0.027** log-lossu na všech
+   šesti kombinacích (domácí/hosté × 0.5/1.5/2.5) = **3–4× víc než rohy**, ECE 0.010–0.020
+   bez jediného laděného parametru. Zbývá totéž co u rohů: **živé kurzy + CLV**, ne sázet.
 5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior
    a naší predikcí ji posouvat jen tam, kde máme konkrétní informaci. Jediná varianta,
    která nevyžaduje být lepší než Pinnacle. Až po bodech 2–3.

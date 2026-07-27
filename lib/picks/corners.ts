@@ -9,6 +9,7 @@ import {
 } from "@/lib/stats/predict";
 import type { HistoryMatch } from "./backtest";
 import { matchStatsBefore } from "./backtest";
+import { binaryCalibration, type BinaryCalibration } from "./calibration";
 
 /**
  * **Model rohů** – jediný kandidát na hranu, který jsme zatím nezměřili.
@@ -392,74 +393,21 @@ export function cornerValues(matches: MatchStat[], now: Date): MetricValue[] {
   );
 }
 
-/** Jeden kalibrační koš (protějšek `ReliabilityBin` pro binární trh). */
-export interface CornerBin {
-  lower: number;
-  upper: number;
-  count: number;
-  avgPredicted: number | null;
-  observed: number | null;
-}
-
-export interface CornerCalibration {
-  bins: CornerBin[];
-  /** Expected Calibration Error – vážený průměr |predikce − skutečnost| přes koše. */
-  ece: number | null;
-  n: number;
-  logloss: number;
-  /** Log-loss konstanty „vždy základní míra" – laťka, kterou model musí překonat. */
-  baseLogloss: number;
-  /** Jak často jev v datech nastal (základní míra). */
-  baseRate: number;
-}
-
-const BIN_EDGES = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
-
 /**
- * Kalibrace jedné linie Over/Under: rozbinuje predikce podle pravděpodobnosti a proti
- * každému koši postaví skutečnost. **Tohle je celý smysl kroku 1** – dokud model neumí
+ * Kalibrace jedné linie Over/Under. **Tohle je celý smysl kroku 1** – dokud model neumí
  * říct „60 %" tak, aby to nastalo v 60 %, nemá cenu se dívat na kurzy.
  *
- * Vrací i log-loss modelu vedle log-lossu konstanty: model, který nepřekoná základní
- * míru, nepřidává nic (táž laťka jako u Over 2.5 u gólů).
+ * Binování a ECE dělá sdílená `binaryCalibration` (týž výpočet používají týmové totaly).
  */
-export function cornerCalibration(rows: CornerRow[], line: number): CornerCalibration {
-  const points = rows.map((r) => ({
-    // Rozdělení bere z řádku, ne z globální konstanty → v jednom měření se nemůžou
-    // potkat Poissonovy a NB řádky vyhodnocené jinak, než jak vznikly.
-    p: overProbNegBin(r.lambdaTotal, line, r.varianceRatio),
-    hit: r.actualTotal > line,
-  }));
-  const n = points.length;
-  if (n === 0) {
-    return { bins: [], ece: null, n: 0, logloss: 0, baseLogloss: 0, baseRate: 0 };
-  }
-
-  const baseRate = points.filter((x) => x.hit).length / n;
-  const ll = (p: number, hit: boolean) => -Math.log(Math.max(hit ? p : 1 - p, 1e-9));
-  const logloss = points.reduce((a, x) => a + ll(x.p, x.hit), 0) / n;
-  const baseLogloss = points.reduce((a, x) => a + ll(baseRate, x.hit), 0) / n;
-
-  const bins: CornerBin[] = [];
-  let eceSum = 0;
-  for (let i = 0; i < BIN_EDGES.length - 1; i++) {
-    const lower = BIN_EDGES[i];
-    const upper = BIN_EDGES[i + 1];
-    // Poslední koš je uzavřený zprava, ať se p = 1 neztratí.
-    const inBin = points.filter(
-      (x) => x.p >= lower && (i === BIN_EDGES.length - 2 ? x.p <= upper : x.p < upper)
-    );
-    if (inBin.length === 0) {
-      bins.push({ lower, upper, count: 0, avgPredicted: null, observed: null });
-      continue;
-    }
-    const avgPredicted = inBin.reduce((a, x) => a + x.p, 0) / inBin.length;
-    const observed = inBin.filter((x) => x.hit).length / inBin.length;
-    eceSum += (inBin.length / n) * Math.abs(observed - avgPredicted);
-    bins.push({ lower, upper, count: inBin.length, avgPredicted, observed });
-  }
-
-  return { bins, ece: eceSum, n, logloss, baseLogloss, baseRate };
+export function cornerCalibration(rows: CornerRow[], line: number): BinaryCalibration {
+  return binaryCalibration(
+    rows.map((r) => ({
+      // Rozdělení bere z řádku, ne z globální konstanty → v jednom měření se nemůžou
+      // potkat Poissonovy a NB řádky vyhodnocené jinak, než jak vznikly.
+      p: overProbNegBin(r.lambdaTotal, line, r.varianceRatio),
+      hit: r.actualTotal > line,
+    }))
+  );
 }
 
 /**
