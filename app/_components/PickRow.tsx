@@ -107,6 +107,7 @@ function ValueBadge({
     edge: number;
     fairProb: number | null;
     edgeFair: number | null;
+    best: { odds: number; bookmaker: string; books: number; edge: number } | null;
   };
 }) {
   // Bez protistrany trhu (starší řádky) férovou cenu neznáme → jen kurz, žádné procento.
@@ -114,25 +115,43 @@ function ValueBadge({
   const pct = diff == null ? null : Math.round(diff * 100);
   const pos = pct != null && pct > 0;
   const marketPct = Math.round((value.fairProb ?? value.impliedProb) * 100);
+  // Nejlepší cena se ukazuje, jen když je REÁLNĚ lepší než referenční – jinak by
+  // odznak přibyl na každém řádku a nic neřekl.
+  const best = value.best && value.best.odds > value.odds ? value.best : null;
   return (
-    <span
-      className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
-        pos ? "bg-positive/10 text-positive" : "bg-background text-muted"
-      }`}
-      title={
-        `Kurz ${value.odds.toFixed(2)} · trh ${marketPct} %` +
-        (pct == null
-          ? " (férovou cenu neznáme – chybí protistrana trhu)"
-          : ` · lišíme se o ${pct > 0 ? "+" : ""}${pct} p.b. proti férové ceně`)
-      }
-    >
-      {value.odds.toFixed(2)}
-      {pct != null && (
-        <>
-          {" · "}
-          {pct > 0 ? "+" : ""}
-          {pct} p.b.
-        </>
+    <span className="flex shrink-0 items-center gap-1">
+      <span
+        className={`rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+          pos ? "bg-positive/10 text-positive" : "bg-background text-muted"
+        }`}
+        title={
+          `Kurz ${value.odds.toFixed(2)} · trh ${marketPct} %` +
+          (pct == null
+            ? " (férovou cenu neznáme – chybí protistrana trhu)"
+            : ` · lišíme se o ${pct > 0 ? "+" : ""}${pct} p.b. proti férové ceně`)
+        }
+      >
+        {value.odds.toFixed(2)}
+        {pct != null && (
+          <>
+            {" · "}
+            {pct > 0 ? "+" : ""}
+            {pct} p.b.
+          </>
+        )}
+      </span>
+      {best && (
+        <span
+          className="rounded-full bg-positive/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-positive"
+          title={
+            `Nejlepší cena napříč ${best.books} sázkovkami: ${best.odds.toFixed(2)} ` +
+            `(${best.bookmaker}) proti referenčnímu ${value.odds.toFixed(2)}. ` +
+            `Výběr nejlepší ceny je jediná páka, která v backtestu prokazatelně ` +
+            `zabrala (ROI −7.7 % → −5.2 %).`
+          }
+        >
+          ⌃ {best.odds.toFixed(2)}
+        </span>
       )}
     </span>
   );

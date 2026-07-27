@@ -1,5 +1,6 @@
 import type { PickMarket, PredictionRow } from "@/lib/types";
 import { devig } from "./market";
+import { bestPrice, parseBooks, type BestPrice, type BookSide } from "./books";
 
 /**
  * Rozdíl naší modelové pravděpodobnosti proti trhu. Čisté funkce nad uloženými
@@ -34,6 +35,25 @@ export interface ValueEstimate {
   fairProb: number | null;
   /** Rozdíl proti férové ceně (`prob − fairProb`). `null`, když nelze odmaržovat. */
   edgeFair: number | null;
+  /**
+   * **Nejlepší cena napříč všemi sázkovkami** (`oddsBooks`) – tedy cena, kterou bys
+   * reálně dostal, kdyby sis vybral knihu. Line-shopping je jediná páka, která
+   * v backtestu prokazatelně zabrala (ROI −7.7 % → −5.2 %).
+   *
+   * `edge` výše zůstává schválně počítaný z **referenčního** kurzu: je to jeden stabilní
+   * zdroj napříč historií, takže se čísla dají porovnávat v čase. Nejlepší cena je
+   * navíc, ne místo něj — jinak by se hrana samovolně nafoukla jen tím, že přibyla kniha.
+   *
+   * `null` u řádků bez `oddsBooks` (vše do 27. 7. 2026, backtest, mock).
+   */
+  best: {
+    odds: number;
+    bookmaker: string;
+    /** Kolik knih tu stranu kotovalo (1–2 = ber s rezervou). */
+    books: number;
+    /** EV proti nejlepší ceně (`prob × odds − 1`) – vyšší než `edge` o line-shopping. */
+    edge: number;
+  } | null;
 }
 
 /** Implikovaná pravděpodobnost z desetinného kurzu. */
@@ -64,7 +84,8 @@ function fairTwoWay(odds: number, opposite: number | null | undefined): number |
 export function valueOf(
   prob: number,
   odds: number | null | undefined,
-  fairProb: number | null = null
+  fairProb: number | null = null,
+  best: BestPrice | null = null
 ): ValueEstimate | null {
   if (odds == null || !Number.isFinite(odds) || odds <= 1) return null;
   if (!Number.isFinite(prob) || prob <= 0) return null;
@@ -75,6 +96,7 @@ export function valueOf(
     edge: edge(prob, odds),
     fairProb,
     edgeFair: fairProb == null ? null : prob - fairProb,
+    best: best ? { ...best, edge: edge(prob, best.odds) } : null,
   };
 }
 
@@ -91,18 +113,25 @@ export function rowValue(
   market: PickMarket,
   side: "home" | "away" | null
 ): ValueEstimate | null {
+  // Nejlepší cena napříč knihami z uloženého JSON snímku (0 volání API; prázdné
+  // u starších řádků → `null` a chování jako dřív).
+  const books = parseBooks(row.oddsBooks);
+  const best = (s: BookSide) => (books.length ? bestPrice(books, s) : null);
+
   if (market === "over25") {
     return valueOf(
       row.over25,
       row.oddsOver25,
-      row.oddsOver25 != null ? fairTwoWay(row.oddsOver25, row.oddsUnder25) : null
+      row.oddsOver25 != null ? fairTwoWay(row.oddsOver25, row.oddsUnder25) : null,
+      best("over25")
     );
   }
   if (market === "btts") {
     return valueOf(
       row.bttsYes,
       row.oddsBtts,
-      row.oddsBtts != null ? fairTwoWay(row.oddsBtts, row.oddsBttsNo) : null
+      row.oddsBtts != null ? fairTwoWay(row.oddsBtts, row.oddsBttsNo) : null,
+      best("btts")
     );
   }
   // market === "win"
@@ -110,7 +139,9 @@ export function rowValue(
     row.oddsHome != null && row.oddsDraw != null && row.oddsAway != null
       ? devig(row.oddsHome, row.oddsDraw, row.oddsAway)
       : null;
-  if (side === "home") return valueOf(row.homeWin, row.oddsHome, fair?.home ?? null);
-  if (side === "away") return valueOf(row.awayWin, row.oddsAway, fair?.away ?? null);
+  if (side === "home")
+    return valueOf(row.homeWin, row.oddsHome, fair?.home ?? null, best("home"));
+  if (side === "away")
+    return valueOf(row.awayWin, row.oddsAway, fair?.away ?? null, best("away"));
   return null;
 }

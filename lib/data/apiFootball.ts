@@ -456,6 +456,22 @@ const PREFERRED_BOOKMAKERS = [8, 6, 11, 2];
  */
 export const PINNACLE_FIRST_BOOKMAKERS = [4, 8, 6, 11, 2];
 
+/**
+ * Kurzy jedné sázkovky (decimal odds). Ukládá se jich **všech ~13 z jedné odpovědi**;
+ * typ žije tady, protože ho plní parser, ale čtou ho čisté funkce v `lib/picks/books.ts`.
+ */
+export interface BookOdds {
+  id: number;
+  name: string;
+  home: number | null;
+  draw: number | null;
+  away: number | null;
+  over25: number | null;
+  under25: number | null;
+  btts: number | null;
+  bttsNo: number | null;
+}
+
 /** Referenční kurzy jednoho zápasu (decimal odds; null = trh u sázkovky chybí). */
 export interface MatchOdds {
   bookmaker: string;
@@ -470,6 +486,11 @@ export interface MatchOdds {
   // férová cena ani férová hrana (`rowValue` v `lib/picks/value.ts`).
   under25?: number | null;
   bttsNo?: number | null;
+  /**
+   * Všechny sázkovky z téže odpovědi. Referenční `bookmaker` výše zůstává (kompatibilita
+   * + jeden stabilní zdroj pro EV), tohle je navíc pro nejlepší cenu a sharp konsenzus.
+   */
+  books?: BookOdds[];
 }
 
 /** Desetinný kurz z hodnoty daného labelu (case-insensitive); platný jen > 1. */
@@ -499,24 +520,48 @@ export async function fetchOdds(
     preferred.map((id) => books.find((b) => b.id === id)).find(
       (b): b is (typeof books)[number] => b != null
     ) ?? books[0];
+  // Rozparsuje se KAŽDÁ kniha z odpovědi – je to čistě práce s daty, která už dorazila
+  // (0 volání navíc), a nejlepší cena napříč knihami je jediná prokazatelně funkční páka.
+  const allBooks = res[0]!.bookmakers.map((b) => bookOddsOf(b));
+  const ref = bookOddsOf(book);
+  const out: MatchOdds = {
+    bookmaker: book.name,
+    home: ref.home,
+    draw: ref.draw,
+    away: ref.away,
+    over25: ref.over25,
+    btts: ref.btts,
+    under25: ref.under25,
+    bttsNo: ref.bttsNo,
+    books: allBooks.filter((b) => b.home != null || b.over25 != null || b.btts != null),
+  };
+  // Bez jediného použitelného kurzu nemá smysl řádek ukládat.
+  if (out.home == null && out.over25 == null && out.btts == null) return null;
+  return out;
+}
+
+/** Jedna sázkovka z odpovědi `/odds` na náš tvar (1X2 + total 2.5 + BTTS, obě strany). */
+function bookOddsOf(book: {
+  id: number;
+  name: string;
+  bets: { id: number; values: { value: string; odd: string }[] }[];
+}): BookOdds {
   const betValues = (betId: number) =>
     book.bets.find((b) => b.id === betId)?.values ?? [];
   const mw = betValues(1);
   const goals = betValues(5);
   const btts = betValues(8);
-  const out: MatchOdds = {
-    bookmaker: book.name,
+  return {
+    id: book.id,
+    name: book.name,
     home: oddOf(mw, "Home"),
     draw: oddOf(mw, "Draw"),
     away: oddOf(mw, "Away"),
     over25: oddOf(goals, "Over 2.5"),
-    btts: oddOf(btts, "Yes"),
     under25: oddOf(goals, "Under 2.5"),
+    btts: oddOf(btts, "Yes"),
     bttsNo: oddOf(btts, "No"),
   };
-  // Bez jediného použitelného kurzu nemá smysl řádek ukládat.
-  if (out.home == null && out.over25 == null && out.btts == null) return null;
-  return out;
 }
 
 /** Zranění/absence týmu v dané sezóně (pokrytí v API je nekonzistentní). */

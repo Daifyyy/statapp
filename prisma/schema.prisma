@@ -213,6 +213,14 @@ model FixturePrediction {
   oddsUnder25   Float?
   oddsBttsNo    Float?
   oddsFetchedAt DateTime?
+  // VŠECH ~13 sázkovek z téže odpovědi (`BookOdds[]` jako JSON). Dřív se 12 z nich
+  // zahazovalo a zůstala jediná „preferovaná" – přitom **nejlepší cena napříč knihami
+  // byla jediná páka, která v backtestu prokazatelně zabrala** (ROI −7.7 % → −5.2 %,
+  // overround 0.11 % vs. 2.99 % u jedné knihy). 0 volání API navíc, jen se nezahazuje
+  // to, co už máme. Z toho se čte nejlepší cena (`bestPrice`) i sharp konsenzus
+  // (`sharpFair`) – obojí čistou funkcí v `lib/picks/books.ts`.
+  oddsBooks      Json?
+  oddsCloseBooks Json?
   // DRUHÝ snímek: zavírací linie (těsně před výkopem). Rozdíl proti prvnímu snímku je CLV
   // = jediný ukazatel hrany viditelný hned po výkopu, ne až po stovkách výsledků. Jeden
   // snímek to změřit neumí – nešlo by odlišit „model měl pravdu" od „chytili jsme starší

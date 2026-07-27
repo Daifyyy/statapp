@@ -616,6 +616,18 @@ export interface PredictionRow {
   oddsCloseAway: number | null;
   oddsCloseOver25: number | null;
   oddsCloseUnder25: number | null;
+  /**
+   * Kurzy **všech ~13 sázkovek** obou snímků (`BookOdds[]` jako JSON; typ je volný,
+   * protože sloupec je `Json?` – validuje ho `parseBooks` v `lib/picks/books.ts`).
+   * Z nich nejlepší cena (jediná v backtestu prokazatelně funkční páka) i sharp
+   * konsenzus. `null` u řádků z doby před zavedením (do 27. 7. 2026).
+   *
+   * **Volitelné schválně:** řádky z backtestu a mocku knihy nemají a mít nemusí (jejich
+   * zdrojem je football-data, ne `/odds`), takže by je jinak musely povinně vyplňovat
+   * nullem – povinné pole, které nikdo z nich nenaplní, by nic neuhlídalo.
+   */
+  oddsBooks?: unknown;
+  oddsCloseBooks?: unknown;
 }
 
 /** Trh, na který pravidlo cílí. */
@@ -668,6 +680,13 @@ export interface MatchPick {
     edge: number;
     fairProb: number | null;
     edgeFair: number | null;
+    /** Nejlepší cena napříč sázkovkami (line-shopping); `null` u starších řádků. */
+    best: {
+      odds: number;
+      bookmaker: string;
+      books: number;
+      edge: number;
+    } | null;
   } | null;
   /** Krátké vysvětlení (z uložených hodnot). */
   explanation: string;

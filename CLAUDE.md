@@ -487,9 +487,21 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (`odds*` sloupce, `saveOdds`/`saveClosingOdds`, guard `oddsSnapshotState`). Životní cyklus
   jako benchmark: **jen klubové ligy, dva snímky na zápas** (`ODDS_LOOKAHEAD_HOURS=72`
   a zavírací `ODDS_CLOSING_HOURS=12` – viz CLV níže), rozpočet ~2 volání/zápas.
-  **Pozor na nevyužitý zdroj:** odpověď nese **13 sázkovek**, my z ní bereme jednu
-  (`PREFERRED_BOOKMAKERS`) – nejlepší cena napříč knihami přitom byla jediná páka, která
-  v backtestu zabrala. Viz otevřený bod 2 v sekci „STAV K 26. 7. 2026" dole. **Past, která to celé tiše vypnula** (opraveno 26. 7. 2026): `/odds` vrací
+  **VŠECH ~13 SÁZKOVEK se ukládá** (`oddsBooks`/`oddsCloseBooks`, JSON, od 27. 7. 2026):
+  odpověď `/odds` je nese všechny a dřív se 12 z nich zahazovalo ve prospěch jedné
+  „preferované" – přitom **nejlepší cena napříč knihami byla jediná páka, která
+  v backtestu prokazatelně zabrala** (ROI −7.7 % → −5.2 %, overround 0.11 % vs. 2.99 %).
+  **0 volání API navíc.** Čte je `lib/picks/books.ts` (čisté + testy), a záměrně **dvěma
+  různými funkcemi, které se nesmí zaměnit**: `bestPrice` = nejvyšší kurz = cena, kterou
+  reálně dostaneš (na rozhodnutí „kam vsadit"), `sharpFair` = odmaržovaná cena z knihy
+  s **nejnižší marží** = nejlepší odhad pravděpodobnosti (na měřítko: CLV, benchmark).
+  Nejlepší cena je jako odhad pravděpodobnosti **vychýlená** – je to maximum přes knihy,
+  takže straně s výjimečně štědrým kurzem systematicky podstřelí pravděpodobnost (kryto
+  testem). `ValueEstimate.best` proto nese nejlepší cenu **vedle** `edge` z referenčního
+  kurzu, ne místo něj: referenční kniha je jeden stabilní zdroj napříč historií, kdežto
+  hrana počítaná z nejlepší ceny by se nafoukla jen tím, že přibyla sázkovka.
+  `PickRow` ukazuje odznak `⌃ <kurz>`, jen když je nejlepší cena **reálně vyšší** než
+  referenční. **Past, která to celé tiše vypnula** (opraveno 26. 7. 2026): `/odds` vrací
   u exotických trhů (Exact Score, handicapy) `value` jako **číslo**, ne řetězec – zod schéma
   odmítlo celou odpověď, `fetchOdds` hodil výjimku a protože je fetch kurzů best-effort
   (`catch` v pipeline i v Tipovačce), **nikdy se neuložil ani jeden kurz** (0 řádků s
@@ -1268,12 +1280,11 @@ sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **k
      proměnnou nastavit, kód se nemění.
    - Po 4. 8. zkontrolovat, že v `FixturePrediction` přibývá `oddsHome` a `oddsCloseAt`
      (kurzy se tahají až do 72 h / 12 h před výkopem, dřív tam nic nebude).
-2. **NEDODĚLÁNO: ukládat všechny sázkovky.** Jedna odpověď `/odds` nese **13 knih**
-   (`fetchOdds` v `apiFootball.ts:493` z nich vezme jednu podle `PREFERRED_BOOKMAKERS`)
-   a 12 se zahodí. Přitom **nejlepší cena napříč knihami byla jediná páka, která
-   v backtestu prokazatelně zabrala** (ROI −7.7 % → −5.2 %, overround 0.11 % vs. 2.99 %).
-   Plán byl JSON sloupec `oddsBooks` na `FixturePrediction` → z něj nejlepší cena
-   i sharp konsenzus. **0 volání API navíc.** Tohle je nejlevnější zbývající zlepšení.
+2. **HOTOVO: ukládají se všechny sázkovky** (`oddsBooks`/`oddsCloseBooks` + `lib/picks/books.ts`
+   — viz „EV / value tipy" výše). Zbývá k tomu jen jedna věc: **data začnou přibývat až
+   od zápasů, které projdou cronem po nasazení** — starší řádky knihy nemají a dopočítat
+   je nejde (historické kurzy API nevrací). Než se naplní, `ValueEstimate.best` je `null`
+   a UI se chová jako dřív.
 3. **Rohy — KROK 1 HOTOV (model je kalibrovaný a má skill), krok 2 čeká na živé kurzy.**
    Celé měření je v sekci „MODEL ROHŮ" výše: `lib/picks/corners.ts`, `npm run backtest --
    --corners` (+ `--corners-grid`, `--corners-tune=k,t`). Shrnutí: λ trefuje úroveň

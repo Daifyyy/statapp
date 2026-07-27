@@ -1,4 +1,4 @@
-import type { FixturePrediction } from "@prisma/client";
+import type { FixturePrediction, Prisma } from "@prisma/client";
 import type { PredictionRow } from "@/lib/types";
 import { prisma } from "@/lib/db";
 import { PREDICT_PARAMS } from "@/lib/stats/predict";
@@ -87,6 +87,8 @@ function toRow(p: FixturePrediction): PredictionRow {
     oddsCloseAway: p.oddsCloseAway,
     oddsCloseOver25: p.oddsCloseOver25,
     oddsCloseUnder25: p.oddsCloseUnder25,
+    oddsBooks: p.oddsBooks,
+    oddsCloseBooks: p.oddsCloseBooks,
   };
 }
 
@@ -189,6 +191,7 @@ export async function saveOdds(
     btts: number | null;
     under25?: number | null;
     bttsNo?: number | null;
+    books?: unknown;
   }
 ): Promise<void> {
   await prisma.fixturePrediction.update({
@@ -203,6 +206,8 @@ export async function saveOdds(
       // Protistrany: bez nich nejde odmaržovat Over/BTTS (viz komentář ve schématu).
       oddsUnder25: odds.under25 ?? null,
       oddsBttsNo: odds.bttsNo ?? null,
+      // Všechny knihy z téže odpovědi → nejlepší cena + sharp konsenzus (0 volání navíc).
+      ...(odds.books ? { oddsBooks: odds.books as Prisma.InputJsonValue } : {}),
       oddsFetchedAt: new Date(),
     },
   });
@@ -221,6 +226,7 @@ export async function saveClosingOdds(
     away: number | null;
     over25: number | null;
     under25?: number | null;
+    books?: unknown;
   }
 ): Promise<void> {
   await prisma.fixturePrediction.update({
@@ -231,6 +237,9 @@ export async function saveClosingOdds(
       oddsCloseAway: odds.away,
       oddsCloseOver25: odds.over25,
       oddsCloseUnder25: odds.under25 ?? null,
+      // Zavírací snímek všech knih. Teprve s ním jde CLV počítat proti **sharp
+      // konsenzu** místo jedné vybrané knihy – tedy proti nejlepšímu odhadu trhu.
+      ...(odds.books ? { oddsCloseBooks: odds.books as Prisma.InputJsonValue } : {}),
       oddsCloseAt: new Date(),
     },
   });
