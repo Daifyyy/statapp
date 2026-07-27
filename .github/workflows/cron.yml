@@ -1,0 +1,91 @@
+# Plánované úlohy (crony) appky.
+#
+# **Proč GitHub Actions a ne `vercel.json`:** Vercel Hobby plán dovolí jen **2 cron
+# joby a jen denní** frekvenci. Úloh máme šest a snímky kurzů potřebují běžet **každé
+# 3 hodiny** – jinak zavírací snímek dostanou jen zápasy s výkopem mezi 04:30 a 16:30
+# UTC (viz `ODDS_CLOSING_HOURS` v lib/data/predictions.ts) a CLV by stálo na vychýlené
+# menšině. Actions to zvládnou zdarma a v libovolné frekvenci.
+#
+# Nastavení (jednorázově, v GitHubu → Settings → Secrets and variables → Actions):
+#   - secret   CRON_SECRET  … stejná hodnota jako env proměnná na Vercelu
+#   - variable APP_URL      … https://statapp-uvol.vercel.app  (bez koncového lomítka)
+#
+# Pozn.: `schedule` v Actions je **best-effort** – při zátěži se spuštění opozdí
+# i o pár desítek minut. Pro snímky kurzů to nevadí (okno je hodinové), pro denní
+# úlohy vůbec. Časy jsou v **UTC**.
+
+name: Cron
+
+on:
+  schedule:
+    # Snímky kurzů – nejčastější úloha, kvůli zavírací linii u večerních zápasů.
+    - cron: "0 */3 * * *"
+    # Denní údržba (časy odpovídají původnímu vercel.json).
+    - cron: "0 4 * * *" # warm
+    - cron: "30 4 * * *" # predict-upcoming
+    - cron: "0 5 * * *" # refresh-transfers
+    - cron: "0 6 * * *" # settle-results
+    - cron: "15 6 * * *" # settle-tips
+  # Ruční spuštění (Actions → Cron → Run workflow), např. po výpadku.
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Kterou úlohu spustit ručně"
+        required: true
+        default: snapshot-odds
+        type: choice
+        options:
+          - snapshot-odds
+          - warm
+          - predict-upcoming
+          - refresh-transfers
+          - settle-results
+          - settle-tips
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Zvol endpoint podle času spuštění
+        id: pick
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          MANUAL: ${{ inputs.job }}
+        run: |
+          case "${MANUAL:-}" in
+            "") ;;                       # není ruční běh → rozhodne rozvrh
+            *) echo "path=${MANUAL}" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          case "$SCHEDULE" in
+            "0 */3 * * *")  path="snapshot-odds" ;;
+            "0 4 * * *")    path="warm" ;;
+            "30 4 * * *")   path="predict-upcoming" ;;
+            "0 5 * * *")    path="refresh-transfers" ;;
+            "0 6 * * *")    path="settle-results" ;;
+            "15 6 * * *")   path="settle-tips" ;;
+            *) echo "Neznámý rozvrh: $SCHEDULE" >&2; exit 1 ;;
+          esac
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Zavolej endpoint
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          JOB: ${{ steps.pick.outputs.path }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "Chybí proměnná APP_URL (Settings → Variables)." >&2
+            exit 1
+          fi
+          # `warm` má jinou cestu než ostatní (není pod /cron/).
+          if [ "$JOB" = "warm" ]; then url="$APP_URL/api/warm"; else url="$APP_URL/api/cron/$JOB"; fi
+          echo "→ $url"
+          # `--fail-with-body` = nenulový exit u 4xx/5xx, ale tělo se pořád vypíše,
+          # takže je v logu vidět DŮVOD (např. 401 = nesedí CRON_SECRET).
+          # Bez `--fail*` by curl skončil úspěchem i na 500 a úloha by selhávala tiše –
+          # což je přesně ta třída chyb, která u kurzů stála rok dat.
+          curl --fail-with-body --silent --show-error --location \
+               --max-time 300 --retry 2 --retry-delay 30 \
+               --header "Authorization: Bearer $CRON_SECRET" \
+               "$url"
+          echo

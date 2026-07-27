@@ -364,7 +364,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   stáhl podruhé, až přišel na řadu soupeř (**2× dražší**). Nejdražší opakující se položka
   v sezóně; nevracet zpět.
 - Cold porovnání ~8 s (mezisezóna nestahuje předchozí sezónu), warm ~0.15 s.
-- **Předehřívání:** `GET /api/warm` (katalog, lehké, denní cron ve `vercel.json`);
+- **Předehřívání:** `GET /api/warm` (katalog, lehké, denní cron – viz „Plánované úlohy");
   `GET /api/warm?league=ID` předehřeje zápasová data ligy (těžké, na vyžádání).
 
 ## Účty / tiering / oblíbené (FREE vs PRO)
@@ -439,7 +439,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `fixture.goals` = koncové). U vyřazovacích zápasů (`AET`/`PEN`) by koncové skóre dalo remíze
   po 90 min podobu výhry → zkazilo by 1X2, Over 2.5, BTTS i MLE `DC_RHO`. `SettledMatch` proto
   nese `afterExtraTime` a UI u skóre ukazuje „90′“. Starší řádky přepočítá `npm run resettle`.
-  Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
+  Crony `app/api/cron/{predict-upcoming,settle-results}` (denně, viz „Plánované úlohy",
   `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá).
   **Cron má časový rozpočet a rotuje pořadí soutěží** (`rotateLeagues(…, dayOfYear())`,
   `budgetMs` 4 min pod `maxDuration = 300`). Bez toho se při 16+8 soutěžích a studené cache
@@ -1259,6 +1259,27 @@ ovlivní i produkci; nasaď nový kód hned.
 `CURRENT_CACHE_VERSION` (`cache.ts`) → staré řádky se přestanou číst a samy se
 dotáhnou znovu (zadarmo) s plnou sadou. Žádné plošné mazání. `saveMatchStats`
 proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/api/warm?league=ID`.
+
+## Plánované úlohy (crony) — POZOR: Vercel Hobby, spouští je GITHUB ACTIONS
+- **Rozvrh žije v `.github/workflows/cron.yml`, ne ve `vercel.json`** (ten je prázdný).
+  Důvod je tvrdý limit plánu: **Vercel Hobby dovolí 2 cron joby a jen denní frekvenci.**
+  Úloh je šest a snímky kurzů musí běžet **každé 3 h**, jinak zavírací linii dostanou jen
+  zápasy s výkopem 04:30–16:30 UTC (viz `ODDS_CLOSING_HOURS`). Actions to zvládnou zdarma.
+  Jeden vlastník rozvrhu = žádné dvojité běhy; **nevracet crony do `vercel.json`**.
+- **Nastavení v GitHubu** (Settings → Secrets and variables → Actions): secret `CRON_SECRET`
+  (stejná hodnota jako env na Vercelu) + variable `APP_URL` (`https://…`, bez lomítka).
+  Workflow umí i ruční spuštění (Actions → Cron → Run workflow → vyber úlohu).
+  `curl --fail-with-body` = nenulový exit u 4xx/5xx, ale tělo se vypíše → v logu je vidět
+  důvod (401 = nesedí secret). Bez `--fail*` by curl uspěl i na 500 a úloha selhávala tiše.
+- **`maxDuration` je na Hobby STROPOVANÁ NA 60 s a vyšší hodnota se tiše ignoruje.**
+  Tohle už jednou způsobilo škodu: routa `predict-upcoming` měla `maxDuration = 300`
+  a `DEFAULT_BUDGET_MS` 4 minuty, takže **vnitřní rozpočet nikdy nedoběhl** a běh vždycky
+  zabil platformní timeout — to je ten stav z poznámky „běh v 04:30 byl zabit v 04:31:03".
+  Zvýšení `maxDuration` ho tedy neopravilo, jen skrylo. Dnes je `maxDuration = 60` všude
+  a rozpočet **50 s**. Nezvyšovat bez Pro plánu; místo delšího běhu se spoléhej na
+  **rotaci soutěží** (`rotateLeagues`) — jeden běh pokryje část a zbytek dojede další dny.
+- Ověření, že úlohy skutečně běží: GitHub → Actions → Cron (zelená/červená u každého běhu
+  a v logu odpověď endpointu). Vercel dashboard už crony neukazuje, protože tam žádné nejsou.
 
 ## Deployment
 GitHub `Daifyyy/statapp` → Vercel (auto-deploy na push do `main`). Env na Vercelu:

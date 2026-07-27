@@ -123,8 +123,15 @@ export const ODDS_CLOSING_HOURS = 12;
  * Kolik času smí jeden běh spotřebovat, než skončí čistě. Musí být **pod** `maxDuration`
  * routy – doběhnutí vlastní silou vrátí statistiku a nechá cache teplou pro příští běh,
  * kdežto zabití platformou zahodí i informaci, kam se pipeline dostala.
+ *
+ * **50 s, protože Vercel Hobby stropuje funkce na 60 s.** Dřív tu byly 4 minuty pod
+ * `maxDuration = 300` – jenže tu hodnotu Hobby plán nectí, takže rozpočet **nikdy
+ * nedoběhl** a běh vždycky zabila platforma. Přesně ten stav popisuje poznámka z 26. 7.
+ * („běh v 04:30 byl zabit v 04:31:03"); zvýšení `maxDuration` ho neopravilo, jen skrylo.
+ * Rotace soutěží je proto na Hobby o to důležitější: jeden běh pokryje jen část seznamu
+ * a zbytek se dostane na řadu další dny.
  */
-const DEFAULT_BUDGET_MS = 4 * 60_000;
+const DEFAULT_BUDGET_MS = 50_000;
 
 export interface PredictUpcomingResult {
   leagues: number;
@@ -276,8 +283,14 @@ export async function runPredictUpcoming(
   return { leagues: queue.length, covered, fixtures, predicted, stopped };
 }
 
-/** Kolik zápasů smí jeden běh snímků obsloužit (strop volání API na běh). */
-const SNAPSHOT_LIMIT = 60;
+/**
+ * Kolik zápasů smí jeden běh snímků obsloužit (strop volání API na běh).
+ *
+ * 40 kvůli 60s stropu Hobby plánu: volání jdou sekvenčně přes rate limiter (~0.5 s
+ * na zápas), takže 40 se pohodlně vejde. Zbytek dobere další běh – fronta se nikam
+ * neztratí, `fixturesNeedingOdds` ji spočítá znovu.
+ */
+const SNAPSHOT_LIMIT = 40;
 
 /**
  * **Snímky kurzů** – oba (otevírací + zavírací) pro zápasy v okně před výkopem.

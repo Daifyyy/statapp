@@ -7,11 +7,16 @@ import { requireCronAuth } from "@/lib/cronAuth";
 // Predikce nadcházejících zápasů (denní cron). Warm cache → levné; první studené
 // naplnění radši lokálně / přes ?league=ID. Idempotentní (upsert).
 //
-// `maxDuration` musí být VĚTŠÍ než rozpočet `runPredictUpcoming` (4 min), aby se běh
-// ukončil sám a stihl vrátit statistiku – zabití platformou po limitu je tichá ztráta
-// informace o tom, kam se pipeline dostala. Soutěže se navíc denně rotují, takže i běh,
-// který nestihne všechny, pokryje zbytek další dny.
-export const maxDuration = 300;
+// `maxDuration` musí být VĚTŠÍ než rozpočet `runPredictUpcoming`, aby se běh ukončil
+// sám a stihl vrátit statistiku – zabití platformou je tichá ztráta informace o tom,
+// kam se pipeline dostala. Soutěže se denně rotují, takže i zkrácený běh pokryje
+// zbytek další dny.
+//
+// **60 s je strop Vercel Hobby plánu.** Vyšší hodnota se tu tvářila jako nastavená
+// (bylo tu 300), ale platforma ji ignoruje – rozpočet 4 min proto nikdy nedoběhl a běh
+// vždy zabil timeout. Nezvyšuj to zpátky bez Pro plánu; místo toho drž
+// `DEFAULT_BUDGET_MS` pod touhle hodnotou.
+export const maxDuration = 60;
 
 export async function GET(req: Request) {
   if (!isRealDataConfigured()) {

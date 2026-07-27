@@ -14,7 +14,10 @@ import { requireCronAuth } from "@/lib/cronAuth";
 //
 // Kvótu to nezdraží: každý zápas dostane nejvýš dva snímky za život (guard v DB),
 // častější běh jen mění, KDY se ta dvě volání provedou. Výběr zápasů je čistě DB dotaz.
-export const maxDuration = 120;
+//
+// 60 s = strop Vercel Hobby plánu (vyšší hodnota se ignoruje). Proto je i default
+// `SNAPSHOT_LIMIT` malý – radši víc krátkých běhů než jeden zabitý timeoutem.
+export const maxDuration = 60;
 
 export async function GET(req: Request) {
   if (!isRealDataConfigured()) {
