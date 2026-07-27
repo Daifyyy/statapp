@@ -112,6 +112,80 @@ describe("rowClv", () => {
   });
 });
 
+describe("sharp konsenzus a rohy", () => {
+  /** Zavírací snímek v REFERENČNÍCH sloupcích (bez knih) – jako starší řádky. */
+  const CLOSE_REF = {
+    oddsCloseHome: 1.9,
+    oddsCloseDraw: 3.5,
+    oddsCloseAway: 4.3,
+    oddsCloseOver25: 1.85,
+    oddsCloseUnder25: 2.05,
+  };
+
+  it("dá PŘEDNOST sharp knihám před referenčními sloupci", () => {
+    // Referenční sloupce říkají jedno, sharp knihy druhé – musí vyhrát sharp.
+    const r = row({
+      oddsBooks: [
+        { name: "Sharp", home: 2.02, draw: 3.5, away: 4.05 },
+        { name: "Líná", home: 1.7, draw: 3.0, away: 3.4 },
+      ],
+      oddsCloseBooks: [{ name: "Sharp", home: 1.85, draw: 3.55, away: 4.4 }],
+    });
+    const c = rowClv(r, "home")!;
+    expect(c.source).toBe("sharp");
+    // Domácí zlevnili (2.02 → 1.85) = trh se pohnul k nám → kladné CLV.
+    expect(c.clv).toBeGreaterThan(0);
+  });
+
+  it("bez knih spadne na referenční sloupce (starší řádky fungují dál)", () => {
+    const c = rowClv(row(CLOSE_REF), "home")!;
+    expect(c.source).toBe("reference");
+  });
+
+  it("NEMÍCHÁ sharp a referenční zdroj mezi snímky", () => {
+    // Knihy jen v otevíracím snímku → nesmí se to zkombinovat se zavíracími sloupci,
+    // to by měřilo rozdíl mezi sázkovkami, ne pohyb trhu.
+    const c = rowClv(
+      row({ ...CLOSE_REF, oddsBooks: [{ name: "Sharp", home: 2.02, draw: 3.5, away: 4.05 }] }),
+      "home"
+    )!;
+    expect(c.source).toBe("reference");
+  });
+
+  it("rohy: počítá se na lince z OTEVÍRACÍHO snímku", () => {
+    const r = row({
+      oddsBooks: [
+        { name: "Sharp", corners: [{ line: 10.5, over: 2.0, under: 1.85 }] },
+        { name: "B", corners: [{ line: 10.5, over: 1.95, under: 1.9 }] },
+      ],
+      oddsCloseBooks: [
+        // Zavírací nabízí obě linie; musí se vzít 10.5 (ta z otevíracího), ne 11.5.
+        { name: "Sharp", corners: [
+          { line: 10.5, over: 1.8, under: 2.05 },
+          { line: 11.5, over: 3.2, under: 1.35 },
+        ] },
+      ],
+    });
+    const c = rowClv(r, "cornersOver")!;
+    expect(c.source).toBe("sharp");
+    expect(c.line).toBe(10.5);
+    // Over zlevnilo (2.0 → 1.8) → pravděpodobnost vzrostla → kladné CLV.
+    expect(c.clv).toBeGreaterThan(0);
+  });
+
+  it("rohy: chybí-li linie v zavíracím snímku, CLV se nespočítá (nedosadí se jiná)", () => {
+    const r = row({
+      oddsBooks: [{ name: "S", corners: [{ line: 10.5, over: 2.0, under: 1.85 }] }],
+      oddsCloseBooks: [{ name: "S", corners: [{ line: 11.5, over: 3.2, under: 1.35 }] }],
+    });
+    expect(rowClv(r, "cornersOver")).toBeNull();
+  });
+
+  it("rohy nemají referenční fallback – bez knih prostě nejsou", () => {
+    expect(rowClv(row(), "cornersOver")).toBeNull();
+  });
+});
+
 describe("summarizeClv", () => {
   it("spočítá průměr i podíl tipů, které trh předběhly", () => {
     const good = row({ oddsCloseHome: 1.8, oddsCloseDraw: 3.6, oddsCloseAway: 4.5 });
@@ -126,11 +200,33 @@ describe("summarizeClv", () => {
     expect(s.avgClv).toBeGreaterThan(0);
   });
 
+  it("hlásí, kolik tipů se měřilo proti sharp konsenzu", () => {
+    const sharpRow = row({
+      oddsBooks: [
+        { name: "Sharp", home: 2.02, draw: 3.5, away: 4.05 },
+        { name: "Líná", home: 1.85, draw: 3.2, away: 3.6 },
+      ],
+      oddsCloseBooks: [{ name: "Sharp", home: 1.9, draw: 3.5, away: 4.3 }],
+    });
+    const refRow = row({
+      oddsCloseHome: 1.9,
+      oddsCloseDraw: 3.5,
+      oddsCloseAway: 4.3,
+    });
+    const s = summarizeClv([
+      { row: sharpRow, side: "home" },
+      { row: refRow, side: "home" }, // jen referenční sloupce
+    ]);
+    expect(s.n).toBe(2);
+    expect(s.sharpShare).toBeCloseTo(0.5, 6);
+  });
+
   it("tipy bez zavíracího snímku se do souhrnu nepočítají", () => {
     expect(summarizeClv([{ row: row(), side: "home" }])).toEqual({
       n: 0,
       avgClv: 0,
       beatRate: 0,
+      sharpShare: 0,
     });
   });
 });

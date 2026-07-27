@@ -9,6 +9,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/cron/snapshot-odds",
+      "schedule": "0 */3 * * *"
+    },
+    {
       "path": "/api/cron/settle-results",
       "schedule": "0 6 * * *"
     },

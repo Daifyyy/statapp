@@ -1,5 +1,6 @@
 import type { PickMarket, PredictionRow } from "@/lib/types";
 import { devig } from "./market";
+import { mainCornerLine, parseBooks, sharpCornerFair, sharpFair, sharpFairTotal } from "./books";
 
 /**
  * CLV (closing line value) = o kolik se linie pohnula od našeho snímku k zavření.
@@ -18,7 +19,13 @@ import { devig } from "./market";
  */
 
 /** Strana, které se CLV týká. Remíza se netipuje, takže tu není. */
-export type ClvSide = "home" | "away" | "over25" | "under25";
+export type ClvSide =
+  | "home"
+  | "away"
+  | "over25"
+  | "under25"
+  | "cornersOver"
+  | "cornersUnder";
 
 /** Trh + strana pravidla → strana pro CLV (`null` = trh, kde CLV nesledujeme). */
 export function clvSideOf(
@@ -28,6 +35,36 @@ export function clvSideOf(
   if (market === "over25") return "over25";
   if (market === "btts") return null; // zavírací linii BTTS neukládáme (model tam nemá signál)
   return side;
+}
+
+/**
+ * Odmaržovaná pravděpodobnost strany ze **sharp konsenzu** (kniha s nejnižší marží
+ * napříč všemi uloženými sázkovkami), nebo `null`, když knihy nemáme.
+ *
+ * Proč to je lepší než referenční sloupce: ty nesou **jednu vybranou knihu**
+ * (`PREFERRED_BOOKMAKERS`, typicky Bet365 s marží 5–7 %). CLV z ní měří „jak se pohnul
+ * Bet365", což je zašuměnější a pomalejší než sharp linie. Pohyb sharp knihy je ta
+ * informace, o kterou u CLV jde.
+ *
+ * **Rohy jdou JEN touhle cestou** – pro ně žádné referenční sloupce neexistují,
+ * kurzy žijí výhradně v JSON snímku, a to včetně toho, na jaké lince jsou.
+ */
+function sharpProbOf(booksJson: unknown, side: ClvSide, cornerLine: number | null): number | null {
+  const books = parseBooks(booksJson);
+  if (books.length === 0) return null;
+  if (side === "cornersOver" || side === "cornersUnder") {
+    if (cornerLine == null) return null;
+    const f = sharpCornerFair(books, cornerLine);
+    if (!f) return null;
+    return side === "cornersOver" ? f.over : f.under;
+  }
+  if (side === "over25" || side === "under25") {
+    const f = sharpFairTotal(books);
+    if (!f) return null;
+    return side === "over25" ? f.over25 : f.under25;
+  }
+  const f = sharpFair(books);
+  return f ? f[side] : null;
 }
 
 /** Odmaržovaná pravděpodobnost strany z jednoho snímku (`null` = snímek není úplný). */
@@ -41,6 +78,7 @@ function fairOf(
     under25: number | null;
   }
 ): number | null {
+  if (side === "cornersOver" || side === "cornersUnder") return null; // jen ze sharp knih
   if (side === "over25" || side === "under25") {
     if (odds.over25 == null || odds.under25 == null) return null;
     if (odds.over25 <= 1 || odds.under25 <= 1) return null;
@@ -62,13 +100,42 @@ export interface ClvResult {
    * tj. stala se pravděpodobnější), což je signál hrany.
    */
   clv: number;
+  /** Odkud pravděpodobnosti pocházejí – sharp konsenzus je přesnější měřítko. */
+  source: "sharp" | "reference";
+  /** U rohů linie, na které se to počítalo (jinde `null`). */
+  line: number | null;
 }
 
 /**
  * CLV jedné strany z uloženého řádku. `null`, když chybí kterýkoli ze snímků – tedy
  * i u všech řádků z doby před zavedením druhého snímku (26. 7. 2026).
+ *
+ * **Preferuje se sharp konsenzus** z uložených knih (`oddsBooks`/`oddsCloseBooks`);
+ * teprve když knihy chybí (řádky do 27. 7. 2026), spadne se na referenční sloupce.
+ * Obě strany snímku musí přijít ze **stejného zdroje** – míchat sharp „open" s
+ * referenčním „close" by měřilo rozdíl mezi sázkovkami, ne pohyb trhu.
  */
 export function rowClv(row: PredictionRow, side: ClvSide): ClvResult | null {
+  // Rohy: linie se určí z OTEVÍRACÍHO snímku a stejná se pak hledá v zavíracím.
+  // Kdyby se u každého snímku vzala „jeho" nejčastější linie, mohly by to být dvě
+  // různé sázky a rozdíl by neměl význam.
+  const line =
+    side === "cornersOver" || side === "cornersUnder"
+      ? mainCornerLine(parseBooks(row.oddsBooks))
+      : null;
+
+  const sharpOpen = sharpProbOf(row.oddsBooks, side, line);
+  const sharpClose = sharpProbOf(row.oddsCloseBooks, side, line);
+  if (sharpOpen != null && sharpClose != null) {
+    return {
+      openProb: sharpOpen,
+      closeProb: sharpClose,
+      clv: sharpClose - sharpOpen,
+      source: "sharp",
+      line,
+    };
+  }
+
   const openProb = fairOf(side, {
     home: row.oddsHome,
     draw: row.oddsDraw,
@@ -84,7 +151,13 @@ export function rowClv(row: PredictionRow, side: ClvSide): ClvResult | null {
     under25: row.oddsCloseUnder25,
   });
   if (openProb == null || closeProb == null) return null;
-  return { openProb, closeProb, clv: closeProb - openProb };
+  return {
+    openProb,
+    closeProb,
+    clv: closeProb - openProb,
+    source: "reference",
+    line: null,
+  };
 }
 
 export interface ClvSummary {
@@ -94,6 +167,12 @@ export interface ClvSummary {
   avgClv: number;
   /** Podíl tipů s kladným CLV (0–1). Náhodný výběr dá kolem 0.5. */
   beatRate: number;
+  /**
+   * Podíl tipů měřených proti **sharp konsenzu** (zbytek jede na referenční knize).
+   * Diagnostika, ne cíl: nízké číslo znamená, že se koukáš hlavně na pohyb jedné
+   * sázkovky, což je zašuměnější měřítko.
+   */
+  sharpShare: number;
 }
 
 /**
@@ -107,14 +186,16 @@ export function summarizeClv(
   let sum = 0;
   let beat = 0;
   let n = 0;
+  let sharp = 0;
   for (const p of picks) {
     const r = rowClv(p.row, p.side);
     if (!r) continue;
     n++;
     sum += r.clv;
     if (r.clv > 0) beat++;
+    if (r.source === "sharp") sharp++;
   }
   return n === 0
-    ? { n: 0, avgClv: 0, beatRate: 0 }
-    : { n, avgClv: sum / n, beatRate: beat / n };
+    ? { n: 0, avgClv: 0, beatRate: 0, sharpShare: 0 }
+    : { n, avgClv: sum / n, beatRate: beat / n, sharpShare: sharp / n };
 }

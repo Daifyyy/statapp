@@ -1,4 +1,4 @@
-import type { BookOdds } from "@/lib/data/apiFootball";
+import type { BookOdds, CornerLineOdds } from "@/lib/data/apiFootball";
 import { devig } from "./market";
 
 /**
@@ -45,6 +45,7 @@ export function parseBooks(value: unknown): BookOdds[] {
     const b = raw as Record<string, unknown>;
     if (typeof b.name !== "string") continue;
     const num = (k: string) => (typeof b[k] === "number" && b[k] > 1 ? (b[k] as number) : null);
+    const corners = parseCornerLines(b.corners);
     out.push({
       id: typeof b.id === "number" ? b.id : 0,
       name: b.name,
@@ -55,7 +56,22 @@ export function parseBooks(value: unknown): BookOdds[] {
       under25: num("under25"),
       btts: num("btts"),
       bttsNo: num("bttsNo"),
+      ...(corners.length ? { corners } : {}),
     });
+  }
+  return out;
+}
+
+/** Rohové linky z JSON (stejná obranná logika jako `parseBooks`). */
+function parseCornerLines(value: unknown): CornerLineOdds[] {
+  if (!Array.isArray(value)) return [];
+  const out: CornerLineOdds[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const c = raw as Record<string, unknown>;
+    if (typeof c.line !== "number" || !Number.isFinite(c.line)) continue;
+    const num = (k: string) => (typeof c[k] === "number" && c[k] > 1 ? (c[k] as number) : null);
+    out.push({ line: c.line, over: num("over"), under: num("under") });
   }
   return out;
 }
@@ -126,6 +142,78 @@ export function sharpFair(
   const fair = devig(best.book.home!, best.book.draw!, best.book.away!);
   if (!fair) return null;
   return { ...fair, bookmaker: best.book.name, overround: best.over };
+}
+
+// ── ROHY ────────────────────────────────────────────────────────────────────────
+// Rohový trh má oproti gólovým jednu komplikaci navíc: **každá kniha může nabízet
+// jinou linii** (9.5 / 10.5 / 11.5, občas i 10.25). Kurz na 10.5 a kurz na 11.5 jsou
+// dvě různé sázky, takže „nejlepší cena" se smí hledat jen UVNITŘ jedné linie.
+// Kdyby se porovnaly napříč linkami, vypadalo by to jako obrovská hrana a byl by to
+// jen artefakt – přesně ta chyba, kterou u rohů uděláš nejsnáz.
+
+/** Které linie jsou v nabídce a kolik knih je kotuje (sestupně dle pokrytí). */
+export function cornerLines(books: BookOdds[]): { line: number; books: number }[] {
+  const count = new Map<number, number>();
+  for (const b of books) {
+    for (const c of b.corners ?? []) {
+      if (c.over == null && c.under == null) continue;
+      count.set(c.line, (count.get(c.line) ?? 0) + 1);
+    }
+  }
+  return [...count.entries()]
+    .map(([line, n]) => ({ line, books: n }))
+    .sort((a, b) => b.books - a.books || a.line - b.line);
+}
+
+/** Nejčastěji kotovaná linie = ta, kterou má smysl vyhodnocovat. `null` bez dat. */
+export function mainCornerLine(books: BookOdds[]): number | null {
+  return cornerLines(books)[0]?.line ?? null;
+}
+
+/**
+ * Nejlepší cena rohů **na konkrétní lince**. Linie je povinný parametr schválně –
+ * nejde ji uhodnout a míchat linky by dalo nesmysl (viz komentář výše).
+ */
+export function bestCornerPrice(
+  books: BookOdds[],
+  line: number,
+  side: "over" | "under"
+): BestPrice | null {
+  let best: BestPrice | null = null;
+  let count = 0;
+  for (const b of books) {
+    const c = b.corners?.find((x) => x.line === line);
+    const o = c?.[side];
+    if (o == null) continue;
+    count++;
+    if (!best || o > best.odds) best = { odds: o, bookmaker: b.name, books: 0 };
+  }
+  return best ? { ...best, books: count } : null;
+}
+
+/**
+ * Sharp férová pravděpodobnost rohů na dané lince (kniha s nejnižší marží, obě strany).
+ * Tohle je měřítko pro CLV a pro porovnání s modelem (`overProbNegBin`), ne cena k sázení.
+ */
+export function sharpCornerFair(
+  books: BookOdds[],
+  line: number
+): { over: number; under: number; bookmaker: string; overround: number } | null {
+  let best: { book: BookOdds; c: CornerLineOdds; over: number } | null = null;
+  for (const b of books) {
+    const c = b.corners?.find((x) => x.line === line);
+    if (!c || c.over == null || c.under == null) continue;
+    const over = 1 / c.over + 1 / c.under - 1;
+    if (!best || over < best.over) best = { book: b, c, over };
+  }
+  if (!best) return null;
+  const sum = 1 / best.c.over! + 1 / best.c.under!;
+  return {
+    over: 1 / best.c.over! / sum,
+    under: 1 / best.c.under! / sum,
+    bookmaker: best.book.name,
+    overround: best.over,
+  };
 }
 
 /**

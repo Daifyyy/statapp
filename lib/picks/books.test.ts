@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { BookOdds } from "@/lib/data/apiFootball";
 import {
+  bestCornerPrice,
   bestOverround,
   bestPrice,
+  cornerLines,
+  mainCornerLine,
   overroundOf,
   parseBooks,
+  sharpCornerFair,
   sharpFair,
   sharpFairTotal,
 } from "./books";
@@ -137,6 +141,71 @@ describe("sharpFairTotal", () => {
 
   it("kniha jen s jednou stranou se ignoruje (nejde odmaržovat)", () => {
     expect(sharpFairTotal([book("X", { over25: 1.8 })])).toBeNull();
+  });
+});
+
+describe("rohy (různé linie napříč knihami)", () => {
+  // Realita: každá kniha nabízí jinou linii. Porovnat kurz na 10.5 s kurzem na 11.5
+  // by dalo zdánlivě obrovskou hranu, a byl by to jen artefakt.
+  const CORNER_BOOKS: BookOdds[] = [
+    book("Pinnacle", {
+      corners: [
+        { line: 9.5, over: 1.62, under: 2.32 },
+        { line: 10.5, over: 2.02, under: 1.85 },
+      ],
+    }),
+    book("Líná", { corners: [{ line: 10.5, over: 1.9, under: 1.8 }] }),
+    book("Akční", {
+      corners: [
+        { line: 10.5, over: 2.15, under: 1.72 },
+        { line: 11.5, over: 2.65, under: 1.48 },
+      ],
+    }),
+  ];
+
+  it("najde nabízené linie a spočítá jejich pokrytí", () => {
+    const lines = cornerLines(CORNER_BOOKS);
+    expect(lines[0]).toEqual({ line: 10.5, books: 3 }); // nejlépe pokrytá první
+    expect(lines.map((l) => l.line).sort((a, b) => a - b)).toEqual([9.5, 10.5, 11.5]);
+  });
+
+  it("hlavní linie = ta nejšířeji kotovaná", () => {
+    expect(mainCornerLine(CORNER_BOOKS)).toBe(10.5);
+    expect(mainCornerLine([])).toBeNull();
+  });
+
+  it("nejlepší cena se hledá JEN uvnitř jedné linie", () => {
+    const b = bestCornerPrice(CORNER_BOOKS, 10.5, "over")!;
+    expect(b.odds).toBe(2.15);
+    expect(b.bookmaker).toBe("Akční");
+    expect(b.books).toBe(3);
+    // Kurz 2.65 na lince 11.5 je vyšší, ale je to JINÁ sázka – nesmí se přimíchat.
+    expect(b.odds).toBeLessThan(2.65);
+  });
+
+  it("linie, kterou nikdo nekotuje, vrátí null", () => {
+    expect(bestCornerPrice(CORNER_BOOKS, 12.5, "over")).toBeNull();
+  });
+
+  it("sharp férová cena rohů bere knihu s nejnižší marží na TÉ lince", () => {
+    const f = sharpCornerFair(CORNER_BOOKS, 10.5)!;
+    expect(f.over + f.under).toBeCloseTo(1, 9);
+    // Pinnacle: 1/2.02 + 1/1.85 = 1.0357; Líná: 1.0819; Akční: 1.0466 → Pinnacle.
+    expect(f.bookmaker).toBe("Pinnacle");
+    expect(f.overround).toBeLessThan(0.04);
+  });
+
+  it("kniha jen s jednou stranou linie se pro férovou cenu ignoruje", () => {
+    const oneSided = [book("X", { corners: [{ line: 10.5, over: 1.9, under: null }] })];
+    expect(sharpCornerFair(oneSided, 10.5)).toBeNull();
+    // …ale na nejlepší cenu se použít dá (na tu protistranu nepotřebuješ).
+    expect(bestCornerPrice(oneSided, 10.5, "over")!.odds).toBe(1.9);
+  });
+
+  it("projde kolečkem přes JSON beze ztráty linií", () => {
+    const parsed = parseBooks(JSON.parse(JSON.stringify(CORNER_BOOKS)));
+    expect(mainCornerLine(parsed)).toBe(10.5);
+    expect(bestCornerPrice(parsed, 11.5, "over")!.odds).toBe(2.65);
   });
 });
 

@@ -470,6 +470,20 @@ export interface BookOdds {
   under25: number | null;
   btts: number | null;
   bttsNo: number | null;
+  /**
+   * Rohy Over/Under. **Pole, ne jedna hodnota** – knihy nabízejí RŮZNÉ linie (9.5, 10.5,
+   * 11.5, někdy i čtvrtinové 10.25) a porovnávat kurz na 10.5 s kurzem na 11.5 by byla
+   * hrubá chyba. Ukládá se, co která kniha nabízí, a párování po lince řeší až čtení
+   * (`lib/picks/books.ts`).
+   */
+  corners?: CornerLineOdds[];
+}
+
+/** Kurz Over/Under rohů na JEDNÉ konkrétní lince. */
+export interface CornerLineOdds {
+  line: number;
+  over: number | null;
+  under: number | null;
 }
 
 /** Referenční kurzy jednoho zápasu (decimal odds; null = trh u sázkovky chybí). */
@@ -509,6 +523,18 @@ function oddOf(
  * když API kurzy nemá (časté mimo top-5 / daleko před výkopem) nebo je řádek prázdný.
  * Stejně jako benchmark: mimo `compareTeams`, fetch 1×/zápas, jen klubové ligy.
  */
+/**
+ * Syrová odpověď `/odds` (po zod validaci). Slouží **sondě** (`npm run probe-odds`)
+ * k výpisu toho, jaké trhy zápas vůbec nabízí a pod jakými názvy/id.
+ *
+ * Proč to existuje: rohový trh hledáme podle **názvu** (`isCornerBet`), protože id se
+ * mezi knihami liší a hádat ho by znamenalo tiché selhání. Sonda je způsob, jak si to
+ * na reálném zápase ověřit dřív, než se na ta data někdo spolehne.
+ */
+export function fetchOddsRaw(fixture: number) {
+  return apiGet("/odds", { fixture }, oddsSchema);
+}
+
 export async function fetchOdds(
   fixture: number,
   preferred: number[] = PREFERRED_BOOKMAKERS
@@ -533,24 +559,82 @@ export async function fetchOdds(
     btts: ref.btts,
     under25: ref.under25,
     bttsNo: ref.bttsNo,
-    books: allBooks.filter((b) => b.home != null || b.over25 != null || b.btts != null),
+    books: allBooks.filter(
+      (b) => b.home != null || b.over25 != null || b.btts != null || b.corners?.length
+    ),
   };
-  // Bez jediného použitelného kurzu nemá smysl řádek ukládat.
-  if (out.home == null && out.over25 == null && out.btts == null) return null;
+  // Bez jediného použitelného kurzu nemá smysl řádek ukládat. Rohy se počítají taky –
+  // jinak by se zahodila odpověď, kde je jediný trh, který nás nově zajímá.
+  if (
+    out.home == null &&
+    out.over25 == null &&
+    out.btts == null &&
+    !out.books?.some((b) => b.corners?.length)
+  ) {
+    return null;
+  }
   return out;
 }
 
-/** Jedna sázkovka z odpovědi `/odds` na náš tvar (1X2 + total 2.5 + BTTS, obě strany). */
+/**
+ * Trh rohů se hledá **podle názvu, ne podle pevného id**. Id trhů se mezi knihami
+ * i verzemi API liší a špatně uhodnuté číslo by tiše vrátilo prázdno – přesně ten typ
+ * selhání, které u kurzů už jednou nastalo (numerické `value` shodilo celé zod schéma
+ * a rok se neuložil ani jeden kurz). Název „…Corners…" je stabilní a ověřitelný
+ * (`npm run probe-odds` vypíše všechny trhy zápasu i s id).
+ */
+function isCornerBet(bet: { id: number; name?: string }): boolean {
+  return bet.name != null && /corner/i.test(bet.name);
+}
+
+/** „Over 10.5" / „Under 9.5" → linie a strana. `null` u čehokoli jiného. */
+function parseOverUnderLabel(
+  value: string
+): { side: "over" | "under"; line: number } | null {
+  const m = /^(over|under)\s+(\d+(?:\.\d+)?)$/i.exec(value.trim());
+  if (!m) return null;
+  const line = Number(m[2]);
+  return Number.isFinite(line)
+    ? { side: m[1].toLowerCase() as "over" | "under", line }
+    : null;
+}
+
+/** Rohové Over/Under kurzy jedné knihy, seskupené po linkách. */
+function cornerOddsOf(
+  bets: { id: number; name?: string; values: { value: string; odd: string }[] }[]
+): CornerLineOdds[] {
+  const byLine = new Map<number, CornerLineOdds>();
+  for (const bet of bets) {
+    if (!isCornerBet(bet)) continue;
+    for (const v of bet.values) {
+      const parsed = parseOverUnderLabel(v.value);
+      if (!parsed) continue;
+      const odd = parseFloat(v.odd);
+      if (!Number.isFinite(odd) || odd <= 1) continue;
+      const entry = byLine.get(parsed.line) ?? {
+        line: parsed.line,
+        over: null,
+        under: null,
+      };
+      entry[parsed.side] = odd;
+      byLine.set(parsed.line, entry);
+    }
+  }
+  return [...byLine.values()].sort((a, b) => a.line - b.line);
+}
+
+/** Jedna sázkovka z odpovědi `/odds` na náš tvar (1X2 + total 2.5 + BTTS + rohy). */
 function bookOddsOf(book: {
   id: number;
   name: string;
-  bets: { id: number; values: { value: string; odd: string }[] }[];
+  bets: { id: number; name?: string; values: { value: string; odd: string }[] }[];
 }): BookOdds {
   const betValues = (betId: number) =>
     book.bets.find((b) => b.id === betId)?.values ?? [];
   const mw = betValues(1);
   const goals = betValues(5);
   const btts = betValues(8);
+  const corners = cornerOddsOf(book.bets);
   return {
     id: book.id,
     name: book.name,
@@ -561,6 +645,7 @@ function bookOddsOf(book: {
     under25: oddOf(goals, "Under 2.5"),
     btts: oddOf(btts, "Yes"),
     bttsNo: oddOf(btts, "No"),
+    ...(corners.length ? { corners } : {}),
   };
 }
 

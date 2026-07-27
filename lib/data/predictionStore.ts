@@ -161,19 +161,50 @@ export async function saveBenchmark(
   });
 }
 
+/** Zápas, kterému chybí snímek kurzu, a který z nich. */
+export interface OddsSnapshotNeed {
+  fixtureId: number;
+  kickoff: Date;
+  need: "open" | "close";
+}
+
 /**
- * Které snímky kurzu už zápas má. Pipeline podle toho pozná, jestli má vzít **první**
- * snímek (cena, kterou bychom dostali), **zavírací** (nejlepší odhad trhu), nebo nic –
- * viz `runPredictUpcoming`. Každý snímek se bere právě jednou.
+ * Zápasy, kterým chybí některý ze **dvou snímků kurzu** – vstup pro
+ * `/api/cron/snapshot-odds`.
+ *
+ * Řadí se podle výkopu vzestupně, protože **zavírací snímek je časově neopakovatelný**:
+ * okno je 12 h a po výkopu už ho nic nedožene, kdežto otevírací má 60 h rezervy. Když
+ * dojde rozpočet, mají tedy přednost ty nejbližší.
+ *
+ * Čte jen DB (žádné volání API) → zápasy, které snímek už mají, se ani nedotknou kvóty.
  */
-export async function oddsSnapshotState(
-  fixtureId: number
-): Promise<{ hasOpen: boolean; hasClose: boolean }> {
-  const row = await prisma.fixturePrediction.findUnique({
-    where: { fixtureId },
-    select: { oddsFetchedAt: true, oddsCloseAt: true },
+export async function fixturesNeedingOdds(opts: {
+  leagueIds: number[];
+  now: Date;
+  lookaheadHours: number;
+  closingHours: number;
+  limit: number;
+}): Promise<OddsSnapshotNeed[]> {
+  const lookahead = new Date(opts.now.getTime() + opts.lookaheadHours * 3_600_000);
+  const closing = new Date(opts.now.getTime() + opts.closingHours * 3_600_000);
+  const rows = await prisma.fixturePrediction.findMany({
+    where: {
+      leagueId: { in: opts.leagueIds },
+      kickoff: { gt: opts.now, lte: lookahead },
+      OR: [
+        { oddsFetchedAt: null },
+        { AND: [{ oddsCloseAt: null }, { kickoff: { lte: closing } }] },
+      ],
+    },
+    select: { fixtureId: true, kickoff: true, oddsFetchedAt: true },
+    orderBy: { kickoff: "asc" },
+    take: opts.limit,
   });
-  return { hasOpen: row?.oddsFetchedAt != null, hasClose: row?.oddsCloseAt != null };
+  return rows.map((r) => ({
+    fixtureId: r.fixtureId,
+    kickoff: r.kickoff,
+    need: r.oddsFetchedAt == null ? "open" : "close",
+  }));
 }
 
 /**

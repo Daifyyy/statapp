@@ -32,10 +32,11 @@ import {
   applyResult,
   hasBenchmark,
   saveBenchmark,
-  oddsSnapshotState,
   saveOdds,
   saveClosingOdds,
+  fixturesNeedingOdds,
 } from "./predictionStore";
+import { logError } from "@/lib/logError";
 
 /**
  * Orchestrace predikční pipeline (běží jen na pozadí / cron, real data).
@@ -97,7 +98,7 @@ const UPCOMING_PER_LEAGUE = 15;
  * Kurzy tahneme jen pro zápasy do tohoto okna před výkopem. Týden staré kurzy nemají
  * pro EV smysl (trh se hýbe); 72 h je kompromis „už actionable, pořád ne moc brzy".
  */
-const ODDS_LOOKAHEAD_HOURS = 72;
+export const ODDS_LOOKAHEAD_HOURS = 72;
 
 /**
  * Druhý snímek kurzu = **zavírací linie** (nejpřesnější odhad, jaký trh vydá).
@@ -108,11 +109,15 @@ const ODDS_LOOKAHEAD_HOURS = 72;
  * Prostor tam je: mezi otevřením a zavřením se linie hne v průměru o 9.7 % a u 52 %
  * zápasů o víc než 8 %.
  *
- * Cena: +1 volání na zápas (~30–50/den = pod 1 % denní kvóty). Cron běží denně, takže
- * „zavírací" je ve skutečnosti poslední snímek před výkopem – u zápasů, které cron po
- * prvním snímku už nezastihne, zůstane `oddsClose*` prázdné a CLV se prostě nespočítá.
+ * Cena: +1 volání na zápas (~30–50/den = pod 1 % denní kvóty).
+ *
+ * **Snímky NEBERE denní predikční cron, ale vlastní `/api/cron/snapshot-odds` každé
+ * 3 h** – a je to nutnost, ne kosmetika. S jedním během v 04:30 UTC a 12h oknem by
+ * zavírací snímek dostaly **jen zápasy s výkopem mezi 04:30 a 16:30 UTC**: večerní
+ * zápas ve 21:45 SELČ je v 04:30 ještě 15 h daleko (mimo okno) a další běh cronu je
+ * až po výkopu. CLV by se tak počítalo z vychýlené menšiny (víkendová odpoledne).
  */
-const ODDS_CLOSING_HOURS = 12;
+export const ODDS_CLOSING_HOURS = 12;
 
 /**
  * Kolik času smí jeden běh spotřebovat, než skončí čistě. Musí být **pod** `maxDuration`
@@ -253,27 +258,10 @@ export async function runPredictUpcoming(
             // benchmark je best-effort
           }
 
-          // Kurzy: DVA snímky. První („náš") v okně 72 h = cena, kterou bychom dostali,
-          // druhý („zavírací") těsně před výkopem = nejlepší odhad trhu. Rozdíl mezi nimi
-          // je CLV. Jen klubové ligy, best-effort jako benchmark.
-          try {
-            const hoursToKickoff =
-              (new Date(f.fixture.date).getTime() - Date.now()) / 3_600_000;
-            const snapshot = await oddsSnapshotState(f.fixture.id);
-            if (hoursToKickoff <= ODDS_LOOKAHEAD_HOURS && !snapshot.hasOpen) {
-              const odds = await fetchOdds(f.fixture.id);
-              if (odds) await saveOdds(f.fixture.id, odds);
-            } else if (
-              hoursToKickoff <= ODDS_CLOSING_HOURS &&
-              snapshot.hasOpen &&
-              !snapshot.hasClose
-            ) {
-              const odds = await fetchOdds(f.fixture.id);
-              if (odds) await saveClosingOdds(f.fixture.id, odds);
-            }
-          } catch {
-            // kurzy jsou best-effort
-          }
+          // Kurzy se tady ZÁMĚRNĚ neberou – vlastníkem obou snímků je
+          // `runSnapshotOdds` (`/api/cron/snapshot-odds`, každé 3 h). Denní běh by
+          // zavírací linii u večerních zápasů nikdy nestihl (viz `ODDS_CLOSING_HOURS`)
+          // a dva vlastníci téhož zápisu jsou zbytečná past.
         }
       } catch {
         // přeskoč problémový zápas, pokračuj dál
@@ -286,6 +274,71 @@ export async function runPredictUpcoming(
     }
   }
   return { leagues: queue.length, covered, fixtures, predicted, stopped };
+}
+
+/** Kolik zápasů smí jeden běh snímků obsloužit (strop volání API na běh). */
+const SNAPSHOT_LIMIT = 60;
+
+/**
+ * **Snímky kurzů** – oba (otevírací + zavírací) pro zápasy v okně před výkopem.
+ *
+ * Proč vlastní cron a ne součást `runPredictUpcoming`: predikční cron běží 1×/den ve
+ * 04:30 UTC, takže by zavírací snímek (okno 12 h) dostaly **jen zápasy s výkopem mezi
+ * 04:30 a 16:30 UTC** – večerní zápasy, tedy většina, nikdy. CLV by pak stálo na
+ * vychýlené menšině. Tenhle běh je proti tomu levný (jen `/odds`, žádné `compareTeams`)
+ * a může jezdit každé 3 h.
+ *
+ * Kvótu to nezdraží: `fixturesNeedingOdds` čte jen DB a každý zápas dostane nejvýš dva
+ * snímky za život (guard `oddsFetchedAt`/`oddsCloseAt`). Častější běh mění jen *kdy*
+ * se ta dvě volání provedou, ne kolik jich je.
+ *
+ * **Chyby se počítají a vracejí, nepolykají se.** Fetch kurzů je best-effort a přesně
+ * proto rok tiše nefungoval (zod schéma padalo na numerickém `value` a nikdo se to
+ * nedozvěděl) – běh, který hlásí `errors: 0` a `saved: 0`, musí jít poznat od běhu,
+ * který hlásí `errors: 40`.
+ */
+export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
+  due: number;
+  open: number;
+  close: number;
+  empty: number;
+  errors: number;
+}> {
+  const due = await fixturesNeedingOdds({
+    // Jen klubové ligy: reprezentace kurzy prakticky nemají a napříč konfederacemi
+    // by stejně nebyly srovnatelné (týž důvod jako u benchmarku).
+    leagueIds: PREDICTION_LEAGUES,
+    now: new Date(),
+    lookaheadHours: ODDS_LOOKAHEAD_HOURS,
+    closingHours: ODDS_CLOSING_HOURS,
+    limit,
+  });
+
+  let open = 0;
+  let close = 0;
+  let empty = 0;
+  let errors = 0;
+  for (const item of due) {
+    try {
+      const odds = await fetchOdds(item.fixtureId);
+      if (!odds) {
+        // API pro zápas kurzy nemá (běžné daleko před výkopem i u menších lig).
+        empty++;
+        continue;
+      }
+      if (item.need === "open") {
+        await saveOdds(item.fixtureId, odds);
+        open++;
+      } else {
+        await saveClosingOdds(item.fixtureId, odds);
+        close++;
+      }
+    } catch (e) {
+      errors++;
+      logError("snapshot-odds", e, { fixtureId: item.fixtureId, need: item.need });
+    }
+  }
+  return { due: due.length, open, close, empty, errors };
 }
 
 /** Dotáhne výsledky u predikcí, jejichž zápas už proběhl (batch po 20 ID). */

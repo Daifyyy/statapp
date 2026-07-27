@@ -572,6 +572,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   kontrolní součet, aby se nemohly podstrčit kurzy jiného zápasu; dnes 99.1 % (13 976/14 097).
   Jména se páruje kombinací shody tokenů („Man United" ⊂ „Manchester United") a bigramů
   („Levadiakos" vs „Levadeiakos"), plus ruční alias tam, kde se klub jmenuje jinak (WSG Tirol).
+- **Snímky kurzů má VLASTNÍ cron `/api/cron/snapshot-odds` (každé 3 h), ne denní pipeline.**
+  Není to ladění, ale oprava vychýlení: predikční cron jede 1×/den ve 04:30 UTC a zavírací
+  okno je 12 h, takže večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 ještě **15 h**
+  daleko → mimo okno, a další běh přijde až po výkopu. Zavírací snímek by tak dostávaly
+  **jen zápasy s výkopem mezi 04:30 a 16:30 UTC** (víkendová odpoledne) a CLV by se
+  počítalo z nereprezentativní menšiny. `runSnapshotOdds` + `fixturesNeedingOdds`
+  (čistý DB dotaz, řadí dle výkopu vzestupně — **zavírací snímek je neopakovatelný**,
+  otevírací má 60 h rezervy). **Kvótu to nezdraží**: guard `oddsFetchedAt`/`oddsCloseAt`
+  drží dva snímky na zápas za život, častější běh mění jen *kdy*. Běh **vrací
+  `errors`** místo tichého `catch` — přesně tahle tichost stála rok bez jediného kurzu.
+  `runPredictUpcoming` kurzy **záměrně nebere** (jeden vlastník zápisu).
 - **CLV (`lib/picks/clv.ts`, čisté + testy) = jediná zpětná vazba, která přijde HNED.**
   Na verdikt „má tip hranu?" z výsledků jsou potřeba stovky sázek (fotbal je z valné části
   náhoda); posun **zavírací linie** od našeho snímku je vidět po každém zápase. Kladné CLV
@@ -582,6 +593,25 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   Cena: +1 volání/zápas (~30–50/den, pod 1 % kvóty). CLV se počítá z **odmaržovaných**
   pravděpodobností obou snímků – jinak by do něj protekla změna marže místo změny názoru
   trhu (kryto testem). BTTS se nesnímá (model tam nemá signál). UI: `ClvPanel` v `PicksApp`.
+  **Měří se proti SHARP KONSENZU, ne proti referenční knize** (od 27. 7. 2026): `rowClv`
+  vezme z `oddsBooks`/`oddsCloseBooks` knihu s **nejnižší marží** (`sharpFair`) a teprve
+  bez knih spadne na referenční sloupce (`source: "sharp" | "reference"`, podíl hlásí
+  `ClvSummary.sharpShare`). Referenční kniha je typicky Bet365 s marží 5–7 % → její pohyb
+  je pomalejší a zašuměnější než sharp linie. **Oba snímky musí být ze stejného zdroje** —
+  sharp „open" proti referenčnímu „close" by měřilo rozdíl mezi sázkovkami, ne pohyb trhu
+  (kryto testem).
+  **ROHY v CLV** (`cornersOver`/`cornersUnder`): kurzy na rohy žijí **výhradně v JSON
+  snímku knih**, žádné vlastní sloupce nemají — a je to tak schválně, protože **každá kniha
+  nabízí jinou linii** (9.5 / 10.5 / 11.5, občas 10.25). Skalární sloupec by linii zahodil.
+  Čtení proto páruje **po lince** (`bestCornerPrice`/`sharpCornerFair` berou linii povinným
+  parametrem, `mainCornerLine` = nejšířeji kotovaná): linie se určí z **otevíracího** snímku
+  a tatáž se hledá v zavíracím; když tam není, CLV se **nespočítá** (nedosadí se jiná).
+  Porovnat kurz na 10.5 s kurzem na 11.5 by vypadalo jako obrovská hrana a byl by to
+  artefakt — nejsnáz udělatelná chyba na rohovém trhu. Rohy nemají referenční fallback.
+  Parsuje se **podle názvu trhu** (`/corner/i`), ne podle uhodnutého id — id se mezi knihami
+  liší a špatné číslo by selhalo tiše. Ověření: `npm run probe-odds -- <fixtureId> --markets`
+  vypíše linie i všechny trhy s id. **Nebylo ověřeno proti živému API** (mezisezóna) →
+  udělej to na prvním zápase s kurzy.
 - **Peníze měří `lib/picks/pnl.ts`** (čisté + testy), ne track-record: `flatBets` vybere sázky
   (default kritérium **EV proti vyplácenému kurzu**; `criterion: "disagreement"` přepne na rozdíl
   proti férové ceně), `summarizePnl` dá zisk, ROI, maximální propad

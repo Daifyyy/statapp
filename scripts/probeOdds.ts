@@ -5,9 +5,18 @@
 // a je prázdný, když ho sázkovka pro zápas tehdy neměla (časté mimo top ligy, u
 // reprezentací, daleko před výkopem, u starších zápasů).
 //
-// Spuštění: npm run probe-odds -- <fixtureId> [<fixtureId> ...]
+// Vypisuje i **rohové linie** napříč knihami (ty se mezi sázkovkami liší) a s
+// `--markets` seznam všech trhů i s id – tím se ověří, že se rohový trh chytá podle
+// názvu. Rohy nešlo ověřit při implementaci (mezisezóna), tak si to ověř na prvním
+// zápase, který bude mít kurzy.
+//
+// Spuštění: npm run probe-odds -- <fixtureId> [<fixtureId> ...] [--markets]
 // (na tomto stroji s NODE_OPTIONS=--use-system-ca kvůli TLS proxy, jako ostatní sondy)
-import { fetchOdds, PINNACLE_FIRST_BOOKMAKERS } from "../lib/data/apiFootball.ts";
+import {
+  fetchOdds,
+  fetchOddsRaw,
+  PINNACLE_FIRST_BOOKMAKERS,
+} from "../lib/data/apiFootball.ts";
 
 async function main() {
   const ids = process.argv.slice(2).map(Number).filter(Number.isFinite);
@@ -44,6 +53,48 @@ async function main() {
       console.log(
         "→ Tip na trh/stranu označenou „chybí“ zůstane bez kurzu, i když ostatní trhy kurz mají."
       );
+
+      // ROHY: nabízené linie napříč knihami. Linie se mezi sázkovkami LIŠÍ (9.5 vs
+      // 10.5 vs 11.5) a porovnávat kurzy napříč linkami je hrubá chyba – proto se
+      // vypisuje pokrytí každé z nich zvlášť.
+      const books = mo.books ?? [];
+      const lines = new Map<number, number>();
+      for (const b of books) {
+        for (const c of b.corners ?? []) {
+          if (c.over != null || c.under != null) {
+            lines.set(c.line, (lines.get(c.line) ?? 0) + 1);
+          }
+        }
+      }
+      console.log(`\n  Sázkovek v odpovědi: ${books.length}`);
+      if (lines.size === 0) {
+        console.log("  Rohy: ŽÁDNÉ – nabídku Over/Under rohů nemá ani jedna kniha.");
+      } else {
+        console.log("  Rohy (linie → kolik knih ji kotuje):");
+        for (const [line, n] of [...lines.entries()].sort((a, b) => b[1] - a[1])) {
+          const best = books
+            .flatMap((b) => (b.corners ?? []).filter((c) => c.line === line).map((c) => c.over))
+            .filter((o): o is number => o != null);
+          console.log(
+            `    ${line.toFixed(2).padStart(6)}  ${String(n).padStart(2)} knih` +
+              (best.length ? `  nejlepší Over ${Math.max(...best).toFixed(2)}` : "")
+          );
+        }
+      }
+
+      // Názvy trhů – rohy hledáme podle názvu, ne podle id, takže tohle je způsob,
+      // jak si ověřit, že se shoda chytá (a jak se trh u téhle knihy vlastně jmenuje).
+      if (process.argv.includes("--markets")) {
+        const raw = await fetchOddsRaw(id);
+        const first = raw[0]?.bookmakers?.[0];
+        if (first) {
+          console.log(`\n  Trhy u „${first.name}“ (id → název):`);
+          for (const bet of first.bets) {
+            const mark = bet.name && /corner/i.test(bet.name) ? "  ← ROHY" : "";
+            console.log(`    ${String(bet.id).padStart(4)}  ${bet.name ?? "(bez názvu)"}${mark}`);
+          }
+        }
+      }
     } catch (e) {
       console.log("Chyba dotazu:", (e as Error).message);
     }
