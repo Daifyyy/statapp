@@ -31,6 +31,9 @@ import {
   scoreProbs,
   type ProbPick,
 } from "../lib/picks/trackRecord.ts";
+import type { MatchOddsRecord } from "../lib/picks/oddsDataset.ts";
+import { computeMarketBenchmark } from "../lib/picks/market.ts";
+import { flatBets, summarizePnl, type PriceLevel } from "../lib/picks/pnl.ts";
 
 const CACHE_DIR = join(process.cwd(), ".cache", "backtest");
 
@@ -45,6 +48,7 @@ const seasons = arg("seasons") ? nums(arg("seasons")!) : [2024, 2025];
 const minMatches = Number(arg("minMatches") ?? 0);
 const refresh = process.argv.includes("--refresh");
 const noStats = process.argv.includes("--no-stats");
+const noOdds = process.argv.includes("--no-odds");
 
 /**
  * Zápasy ligy+sezóny s diskovou cache: iterace nad modelem pak běží úplně offline
@@ -140,6 +144,20 @@ function attachStats(history: HistoryMatch[], league: number, season: number): v
   }
 }
 
+/**
+ * Přilepí zavírací kurzy z `npm run import-odds` (sidecar `odds-<liga>-<sezóna>.json`).
+ * Bez nich backtest měří jen „jsme lepší než hádání"; s nimi teprve „porazíme trh".
+ */
+function attachOdds(history: HistoryMatch[], league: number, season: number): void {
+  const file = join(CACHE_DIR, `odds-${league}-${season}.json`);
+  if (noOdds || !existsSync(file)) return;
+  const odds = JSON.parse(readFileSync(file, "utf8")) as Record<string, MatchOddsRecord>;
+  for (const m of history) {
+    const o = odds[String(m.fixtureId)];
+    if (o) m.odds = o;
+  }
+}
+
 async function main() {
   // Baseline okno (sezóna − 1) musí být taky staženo, jinak nemá 1. kolo z čeho vyjít.
   const needed = [...new Set(seasons.flatMap((s) => [s - 1, s]))].sort();
@@ -157,6 +175,7 @@ async function main() {
       const rows = await loadSeason(league, season);
       if (!cached) fetched++;
       attachStats(rows, league, season);
+      attachOdds(rows, league, season);
       history.push(...rows);
     }
   }
@@ -435,6 +454,79 @@ async function main() {
           `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
       );
     }
+  }
+
+  // ── Jediné měřítko, které u sázení rozhoduje: TRH ──────────────────────────────
+  // Log-loss proti naivní konstantě říká „umíme fotbal", tohle říká „umíme vydělat".
+  const oddsById = new Map(
+    history.filter((m) => m.odds).map((m) => [m.fixtureId, m.odds!])
+  );
+  if (oddsById.size > 0) {
+    const bench = computeMarketBenchmark(usable);
+    console.log("\n=== Vs. TRH (zavírací linie, football-data.co.uk) ===");
+    if (bench.our && bench.market) {
+      const diff = bench.market.logloss - bench.our.logloss;
+      console.log(
+        `Společná podmnožina: ${bench.n} zápasů | průměrná marže ${(
+          100 * ((bench.avgOverround ?? 1) - 1)
+        ).toFixed(2)} %`
+      );
+      console.log(
+        `log-loss:     náš ${bench.our.logloss.toFixed(4)}   trh ${bench.market.logloss.toFixed(4)}` +
+          `   → ${diff >= 0 ? "vedeme" : "ztrácíme"} ${Math.abs(diff).toFixed(4)}`
+      );
+      console.log(
+        `přesnost:     náš ${(100 * bench.our.accuracy).toFixed(1)} %      trh ${(
+          100 * bench.market.accuracy
+        ).toFixed(1)} %`
+      );
+      console.log(
+        diff >= 0
+          ? "→ Model je na této podmnožině lepší než zavírací linie. Ověř na hold-out sezóně, než tomu uvěříš."
+          : "→ Trh je lepší. Kladné EV z vlastního modelu tedy čekat nelze (viz ROI níže)."
+      );
+    }
+
+    // ROI ploché strategie na třech cenových hladinách. Rozdíl mezi nimi = line-shopping.
+    // Kritérium je EV proti VYPLÁCENÉMU kurzu (p × kurz − 1) – tedy přesně to, co
+    // rozhoduje o zisku. Marže je v něm zahrnutá tím, že se počítá z ceny, kterou
+    // sázkovka platí; „hrana nad férovou cenou" je volnější podmínka (viz `flatBets`).
+    console.log("\n=== ROI ploché sázky (1 jednotka, kritérium EV = p × kurz − 1) ===");
+    console.log("hladina      práh    n      ROI       95% CI              max. propad");
+    for (const level of ["pinnacle", "average", "best"] as PriceLevel[]) {
+      for (const minEdge of [0, 0.02, 0.05]) {
+        const pnl = summarizePnl(flatBets(usable, oddsById, { level, minEdge }));
+        if (pnl.n === 0) continue;
+        console.log(
+          `${level.padEnd(12)} ${(100 * minEdge).toFixed(0).padStart(2)} %  ${String(pnl.n).padStart(5)}  ` +
+            `${(100 * pnl.roi).toFixed(2).padStart(7)} %  ` +
+            `[${(100 * pnl.roiLow).toFixed(1)} %, ${(100 * pnl.roiHigh).toFixed(1)} %]`.padEnd(20) +
+            `${pnl.maxDrawdown.toFixed(0).padStart(6)} j.`
+        );
+      }
+    }
+    console.log(
+      "Čti interval, ne ROI: pokud CI obsahuje nulu, není z čeho tvrdit, že strategie vydělává."
+    );
+
+    // Rozpad po trzích na nejlepší ceně – kdyby někde hrana byla, bude vidět tady.
+    console.log("\n=== ROI po trzích (nejlepší cena, bez prahu) ===");
+    const all = flatBets(usable, oddsById, { level: "best", minEdge: 0 });
+    for (const market of ["home", "away", "over25", "under25"] as const) {
+      const pnl = summarizePnl(all.filter((b) => b.market === market));
+      if (pnl.n === 0) continue;
+      console.log(
+        `${market.padEnd(9)} n=${String(pnl.n).padStart(5)}  ROI ${(100 * pnl.roi)
+          .toFixed(2)
+          .padStart(7)} %  [${(100 * pnl.roiLow).toFixed(1)} %, ${(
+          100 * pnl.roiHigh
+        ).toFixed(1)} %]  ⌀ kurz ${pnl.avgOdds.toFixed(2)}`
+      );
+    }
+  } else {
+    console.log(
+      "\n(Kurzy nejsou stažené → sekce „vs. TRH“ přeskočena. Spusť `npm run import-odds`.)"
+    );
   }
 
   // Fit post-parametrů na TÉTO historii (ne na 62 zápasech z MS).

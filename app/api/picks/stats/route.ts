@@ -7,7 +7,8 @@ import {
 } from "@/lib/picks/trackRecord";
 import { computeMarketBenchmark } from "@/lib/picks/market";
 import { computeReliability } from "@/lib/picks/reliability";
-import { ruleSchema } from "@/lib/picks/rules";
+import { clvSideOf, summarizeClv } from "@/lib/picks/clv";
+import { evaluateRule, ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { logError } from "@/lib/logError";
 
@@ -32,12 +33,21 @@ export async function GET(req: Request) {
 
   try {
     const rows = await getSettledPredictionRows();
+    // CLV navoleného pravidla: posunula se linie od našeho snímku k zavření směrem k nám?
+    // Počítá se jen z řádků se DVĚMA snímky kurzu (od 26. 7. 2026), takže je zpočátku prázdné.
+    const clvPicks = rows.flatMap((row) => {
+      const m = evaluateRule(row, parsed.data);
+      if (!m.ok) return [];
+      const side = clvSideOf(parsed.data.market, m.side);
+      return side ? [{ row, side }] : [];
+    });
     return NextResponse.json({
       trackRecord: computeTrackRecord(rows),
       benchmark: computeBenchmarkTrackRecord(rows),
       market: computeMarketBenchmark(rows),
       backtest: backtestRule(rows, parsed.data),
       reliability: computeReliability(rows),
+      clv: summarizeClv(clvPicks),
     });
   } catch (e) {
     logError("api/picks/stats", e);

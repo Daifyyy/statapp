@@ -41,6 +41,13 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     oddsAway: null,
     oddsOver25: null,
     oddsBtts: null,
+    oddsUnder25: null,
+    oddsBttsNo: null,
+    oddsCloseHome: null,
+    oddsCloseDraw: null,
+    oddsCloseAway: null,
+    oddsCloseOver25: null,
+    oddsCloseUnder25: null,
     readinessSample: 10,
     ...over,
   };
@@ -95,5 +102,49 @@ describe("rowValue", () => {
 
   it("chybějící kurz → null (value nelze posoudit)", () => {
     expect(rowValue(row({ homeWin: 0.7 }), "win", "home")).toBeNull();
+  });
+});
+
+describe("férová cena (edgeFair)", () => {
+  // Jádro opravy z 26. 7. 2026: dřív se hrana počítala proti kurzu S MARŽÍ, takže
+  // tip kolem nuly vypadal jako value.
+  it("1X2: fairProb je NIŽŠÍ než 1/kurz o marži → neshoda vyjde větší než EV", () => {
+    const r = row({ homeWin: 0.5, oddsHome: 2.0, oddsDraw: 3.5, oddsAway: 4.0 });
+    const v = rowValue(r, "win", "home")!;
+    // Marže 3.57 % je rozpuštěná v implikovaných pravděpodobnostech, takže férová
+    // domácí je 0.4828, ne 0.50.
+    expect(v.fairProb).toBeCloseTo(0.4828, 4);
+    // EV proti VYPLÁCENÉMU kurzu je nula (0.5 × 2.0 − 1) → sázka nevydělá…
+    expect(v.edge).toBeCloseTo(0.0, 10);
+    // …ale s trhem se přesto rozcházíme o 1.7 p.b. To jsou dvě různé otázky:
+    // „vydělá to?" (edge) vs. „myslíme si něco jiného?" (edgeFair).
+    expect(v.edgeFair).toBeCloseTo(0.0172, 4);
+    expect(v.fairProb!).toBeLessThan(v.impliedProb);
+  });
+
+  it("Over 2.5: bez protistrany férovou cenu neznáme", () => {
+    const bez = rowValue(row({ over25: 0.6, oddsOver25: 1.9 }), "over25", null)!;
+    expect(bez.fairProb).toBeNull();
+    expect(bez.edgeFair).toBeNull();
+
+    const s = rowValue(
+      row({ over25: 0.6, oddsOver25: 1.9, oddsUnder25: 2.1 }),
+      "over25",
+      null
+    )!;
+    expect(s.fairProb).toBeCloseTo(2.1 / (1.9 + 2.1), 6);
+    expect(s.edgeFair).toBeCloseTo(0.6 - 2.1 / (1.9 + 2.1), 6);
+  });
+
+  it("BTTS zvládne obě strany stejně", () => {
+    const v = rowValue(row({ bttsYes: 0.55, oddsBtts: 2.0, oddsBttsNo: 2.0 }), "btts", null)!;
+    expect(v.fairProb).toBeCloseTo(0.5, 10); // 2.00/2.00 = férová linie
+    expect(v.edgeFair).toBeCloseTo(0.05, 10);
+  });
+
+  it("neúplný 1X2 (chybí remíza) → fairProb null, edge zůstane", () => {
+    const v = rowValue(row({ homeWin: 0.5, oddsHome: 2.0, oddsAway: 4.0 }), "win", "home")!;
+    expect(v.fairProb).toBeNull();
+    expect(v.edge).toBeCloseTo(0, 10);
   });
 });

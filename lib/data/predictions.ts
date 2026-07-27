@@ -11,9 +11,11 @@ import {
 import {
   ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
   CLUB_LEAGUES,
+  dayOfYear,
   isNationalTournamentLeague,
   isNationalHomeAwayLeague,
   isNeutralNationalLeague,
+  rotateLeagues,
 } from "./catalog";
 import { compareTeams } from "@/lib/stats/compare";
 import {
@@ -30,8 +32,9 @@ import {
   applyResult,
   hasBenchmark,
   saveBenchmark,
-  hasOdds,
+  oddsSnapshotState,
   saveOdds,
+  saveClosingOdds,
 } from "./predictionStore";
 
 /**
@@ -51,7 +54,20 @@ import {
 export const MODEL_VERSION = 7;
 
 /**
- * Sledované klubové ligy pro predikci = VŠECH `CLUB_LEAGUES` (18 lig, `catalog.ts`).
+ * Ligy, kde model **neporazil naivní konstantu** (45/26/29) – predikce pro ně nemá cenu
+ * počítat. Změřeno `npm run backtest` (sezóny 2024+2025, per liga):
+ *   Polsko 106     log-loss 1.0807 vs konstanta 1.0694 → **−0.011 = horší než hádat**
+ *   Švýcarsko 207  log-loss 1.0746 vs konstanta 1.0722 → **−0.002 = nic**
+ * Nejde o „málo dat" (612 a 460 zápasů) ani o chybějící xG – ten nemají ani ligy, které
+ * vedou (Portugalsko +0.117, Řecko +0.098, ČR +0.089). Tip z ligy bez hrany je čistý šum,
+ * navíc stojí čas cronu a kvótu. Belgie (144) tu **není**: dřív označená za nejslabší,
+ * v širším měření je +0.032 nad konstantou, tedy slabá, ale se skillem.
+ * Před vyřazením další ligy vždy nejdřív změř – pořadí odporuje intuici.
+ */
+export const NO_SKILL_LEAGUES = [106, 207];
+
+/**
+ * Sledované klubové ligy pro predikci = `CLUB_LEAGUES` bez `NO_SKILL_LEAGUES`.
  * Predikční pipeline (tahle) a to, co appka denně NABÍZÍ v „Zápasy"/Tipovačce
  * (`PROGRAM_CLUB_LEAGUE_IDS`, užší Top 8 + ČR), jsou **vědomě oddělené seznamy**:
  * model počítá predikce nad co nejširší množinou (víc dat = víc hodnoty pro záložku
@@ -60,7 +76,9 @@ export const MODEL_VERSION = 7;
  * predikce zpět na `isProgramClubLeague` – jinak by tam vlivem širšího `PREDICTION_
  * LEAGUES` prosakovaly i ligy, které Program vůbec nenabízí (viz `repository.ts`).
  */
-export const PREDICTION_LEAGUES = CLUB_LEAGUES.map((l) => l.id);
+export const PREDICTION_LEAGUES = CLUB_LEAGUES.map((l) => l.id).filter(
+  (id) => !NO_SKILL_LEAGUES.includes(id)
+);
 
 /**
  * Všechny sledované soutěže pro predikci: klubové ligy + reprezentační soutěže
@@ -77,23 +95,71 @@ const UPCOMING_PER_LEAGUE = 15;
 
 /**
  * Kurzy tahneme jen pro zápasy do tohoto okna před výkopem. Týden staré kurzy nemají
- * pro EV smysl (trh se hýbe); 72 h je kompromis „už actionable, pořád 1× za život
- * zápasu" – cron běží denně, takže okno každý zápas zachytí těsně před výkopem.
+ * pro EV smysl (trh se hýbe); 72 h je kompromis „už actionable, pořád ne moc brzy".
  */
 const ODDS_LOOKAHEAD_HOURS = 72;
+
+/**
+ * Druhý snímek kurzu = **zavírací linie** (nejpřesnější odhad, jaký trh vydá).
+ *
+ * Proč dva snímky: s jedním se nedá rozlišit „model měl pravdu" od „chytili jsme starší
+ * linii, než se trh pohnul". Rozdíl mezi naším snímkem a zavíracím je **CLV** – jediný
+ * ukazatel hrany, který je vidět **hned po výkopu**, ne až po stovkách výsledků.
+ * Prostor tam je: mezi otevřením a zavřením se linie hne v průměru o 9.7 % a u 52 %
+ * zápasů o víc než 8 %.
+ *
+ * Cena: +1 volání na zápas (~30–50/den = pod 1 % denní kvóty). Cron běží denně, takže
+ * „zavírací" je ve skutečnosti poslední snímek před výkopem – u zápasů, které cron po
+ * prvním snímku už nezastihne, zůstane `oddsClose*` prázdné a CLV se prostě nespočítá.
+ */
+const ODDS_CLOSING_HOURS = 12;
+
+/**
+ * Kolik času smí jeden běh spotřebovat, než skončí čistě. Musí být **pod** `maxDuration`
+ * routy – doběhnutí vlastní silou vrátí statistiku a nechá cache teplou pro příští běh,
+ * kdežto zabití platformou zahodí i informaci, kam se pipeline dostala.
+ */
+const DEFAULT_BUDGET_MS = 4 * 60_000;
+
+export interface PredictUpcomingResult {
+  leagues: number;
+  /** Kolik soutěží se skutečně stihlo projít (< `leagues` = došel rozpočet). */
+  covered: number;
+  fixtures: number;
+  predicted: number;
+  /** Běh skončil kvůli časovému rozpočtu, ne proto, že by došly ligy. */
+  stopped: boolean;
+}
 
 /**
  * Spočítá a uloží predikce nadcházejících zápasů. `leagueIds` umožní ruční/dávkový
  * běh jedné soutěže (mimo sezónu vrací prázdno). Idempotentní (upsert). Klubové ligy
  * staví týmy přes konfederačně-nezávislý `getCompareTeam`; reprezentační turnaje
  * (MS) staví týmy s meta z fixture (tým z libovolné konfederace).
+ *
+ * **Pořadí soutěží se každý den pootočí** (`rotateLeagues`) a běh má **časový rozpočet**.
+ * Studená liga stojí desítky volání API, takže při 18 klubových + 8 reprezentačních
+ * soutěžích se do jednoho běhu nemusí vejít všechno; bez rotace by konec seznamu nedostal
+ * predikci nikdy. Ruční běh s explicitním `leagueIds` (`?league=ID`) se **nerotuje** –
+ * tam si pořadí volí volající.
  */
 export async function runPredictUpcoming(
-  leagueIds: number[] = ALL_PREDICTION_LEAGUES
-): Promise<{ leagues: number; fixtures: number; predicted: number }> {
+  leagueIds?: number[],
+  budgetMs: number = DEFAULT_BUDGET_MS
+): Promise<PredictUpcomingResult> {
+  const queue =
+    leagueIds ?? rotateLeagues(ALL_PREDICTION_LEAGUES, dayOfYear());
+  const deadline = Date.now() + budgetMs;
   let fixtures = 0;
   let predicted = 0;
-  for (const leagueId of leagueIds) {
+  let covered = 0;
+  let stopped = false;
+  for (const leagueId of queue) {
+    if (Date.now() >= deadline) {
+      stopped = true;
+      break;
+    }
+    covered++;
     let upcoming;
     try {
       upcoming = await fetchLeagueUpcomingFixtures(leagueId, UPCOMING_PER_LEAGUE);
@@ -116,7 +182,14 @@ export async function runPredictUpcoming(
     // Turnaje se hrají na neutrální půdě (Liga národů a kvalifikace ne).
     const neutral = isNeutralNationalLeague(leagueId);
     const buildSide = (t: { id: number; name: string; logo: string }) => {
-      if (!national) return getCompareTeam(t.id, leagueId, false);
+      // Meta z fixture i pro kluby: seznam týmů nové sezóny nemusí být publikovaný
+      // a nováček v něm chybí i pak – bez toho by se celý zápas tiše přeskočil.
+      if (!national)
+        return getCompareTeam(t.id, leagueId, false, {
+          name: t.name,
+          logoUrl: t.logo,
+          country: "",
+        });
       const meta = { name: t.name, logoUrl: t.logo, country: t.name };
       return homeAway
         ? getCompareNationalHomeAwayTeamFromFixture(t.id, leagueId, meta)
@@ -180,17 +253,23 @@ export async function runPredictUpcoming(
             // benchmark je best-effort
           }
 
-          // Referenční kurzy pro EV/value tipy. Jen klubové ligy, jen blízko výkopu
-          // (kurzy jsou pak actionable), 1×/zápas (guard hasOdds). Best-effort jako benchmark.
+          // Kurzy: DVA snímky. První („náš") v okně 72 h = cena, kterou bychom dostali,
+          // druhý („zavírací") těsně před výkopem = nejlepší odhad trhu. Rozdíl mezi nimi
+          // je CLV. Jen klubové ligy, best-effort jako benchmark.
           try {
             const hoursToKickoff =
               (new Date(f.fixture.date).getTime() - Date.now()) / 3_600_000;
-            if (
-              hoursToKickoff <= ODDS_LOOKAHEAD_HOURS &&
-              !(await hasOdds(f.fixture.id))
-            ) {
+            const snapshot = await oddsSnapshotState(f.fixture.id);
+            if (hoursToKickoff <= ODDS_LOOKAHEAD_HOURS && !snapshot.hasOpen) {
               const odds = await fetchOdds(f.fixture.id);
               if (odds) await saveOdds(f.fixture.id, odds);
+            } else if (
+              hoursToKickoff <= ODDS_CLOSING_HOURS &&
+              snapshot.hasOpen &&
+              !snapshot.hasClose
+            ) {
+              const odds = await fetchOdds(f.fixture.id);
+              if (odds) await saveClosingOdds(f.fixture.id, odds);
             }
           } catch {
             // kurzy jsou best-effort
@@ -199,9 +278,14 @@ export async function runPredictUpcoming(
       } catch {
         // přeskoč problémový zápas, pokračuj dál
       }
+      // Rozpočet se kontroluje i uvnitř ligy: jedna studená liga umí sama sníst celý běh.
+      if (Date.now() >= deadline) {
+        stopped = true;
+        break;
+      }
     }
   }
-  return { leagues: leagueIds.length, fixtures, predicted };
+  return { leagues: queue.length, covered, fixtures, predicted, stopped };
 }
 
 /** Dotáhne výsledky u predikcí, jejichž zápas už proběhl (batch po 20 ID). */

@@ -42,7 +42,7 @@ async function loadDigest(
 }
 
 /**
- * Týdenní digest = top value tipy nejbližších dní (PRO). Čte předpočítané predikce
+ * Týdenní digest = zápasy s největší neshodou s trhem (PRO). Čte předpočítané predikce
  * z DB přes `/api/digest` (nejvyšší edge napříč trhy). Sdílí `PickRow` s tipovací
  * záložkou; FREE/anonym → `ProLock` místo seznamu. Mobile-first.
  */
@@ -78,10 +78,11 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
         ]}
       />
 
-      <h1 className="mt-4 text-lg font-semibold text-foreground">Value tipy týdne</h1>
+      <h1 className="mt-4 text-lg font-semibold text-foreground">Kde se lišíme od trhu</h1>
       <p className="mt-1 text-sm text-muted">
-        Nejvýhodnější tipy nejbližších 7 dní – zápasy, kde má náš model největší hranu
-        nad kurzem sázkovky (edge). Seřazeno od největší hrany.
+        Zápasy nejbližších 7 dní, kde se náš odhad nejvíc rozchází s kurzy očištěnými
+        o marži sázkovky. Je to pozvánka podívat se, <em>proč</em> – ne tip: na historii
+        model trh nepřekonal a větší rozdíl vycházel spíš hůř.
       </p>
 
       {locked ? (
@@ -109,8 +110,8 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
         </ul>
       ) : (
         <Empty>
-          Tento týden nemáme žádný value tip (kurz výhodnější než náš odhad). Kurzy se plní
-          klubovým ligám blízko výkopu – mimo sezónu nebo daleko před zápasy je tu prázdno.
+          Tento týden se od trhu nikde výrazně nelišíme. Kurzy se plní klubovým ligám blízko
+          výkopu – mimo sezónu nebo daleko před zápasy je tu prázdno.
         </Empty>
       )}
     </main>

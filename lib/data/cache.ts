@@ -12,8 +12,34 @@ export type MatchContext = "league" | "euro" | "national";
 export const CURRENT_CACHE_VERSION = 3;
 
 /**
+ * Nejnižší verze, kterou ještě umíme přečíst. Bump `CURRENT_CACHE_VERSION` znamená
+ * „piš nově", tenhle práh znamená „co ještě neplatí za odpad" – a ty dvě věci **nemusí**
+ * být totéž. Verze 3 přidala jen **metadata o soupeři** (`opponentId/Name/Logo`) pro logo
+ * u formy; metriky jsou v v2 i v3 identické a chybějící soupeř je ošetřený na každé vrstvě
+ * (`rowToMatchStat` → `null`, `summary.ts`, `FormSummary.tsx`). Kdyby se v2 přestala číst,
+ * zahodí se ~9 000 zápasů a znovu se stáhnou (1 volání/zápas) – draze, a přesně na startu
+ * sezóny. Práh proto zvedej jen tehdy, když by starší řádky daly **špatná čísla**
+ * (chybějící metrika = tichý posun průměru), ne když jde o kosmetiku.
+ */
+export const MIN_READABLE_CACHE_VERSION = 2;
+
+/** TTL pro **prázdnou** odpověď – viz `cachedJson`. */
+const EMPTY_TTL_SECONDS = 3 * 60 * 60;
+
+/**
  * TTL cache raw odpovědí (ligy, týmy, seznamy zápasů). Read-through:
  * při miss/expiraci zavolá `fetcher`, výsledek uloží a vrátí (§1.1).
+ *
+ * Dvě pojistky proti tomu, aby se do cache zapsalo „nic" na dlouho:
+ *  - **`null` se necachuje vůbec.** Sloupec `payload` je non-nullable, takže upsert
+ *    s `null` házel výjimku, kterou volající `catch` spolkl – navenek to vypadalo jako
+ *    „null se schválně neukládá", ve skutečnosti to znamenalo plný přepočet (u ratingů
+ *    sken celé ligy nad `MatchStatCache`) při **každém** volání.
+ *  - **prázdné pole má krátké TTL** (`EMPTY_TTL_SECONDS`). Sáhnout na `teams:X:<sezóna>`
+ *    nebo `standings:X:<sezóna>` pár dní před publikací nové sezóny vrátí `[]`; s plným
+ *    TTL (24 h / 6 h) je pak liga slepá i poté, co API data doplní, a `buildClubTeam` pro
+ *    ni vrací `null`. Kratší TTL to zahojí, a legitimní prázdno (mimosezónní soutěž)
+ *    stojí jen pár volání denně navíc.
  */
 export async function cachedJson<T>(
   key: string,
@@ -26,7 +52,11 @@ export async function cachedJson<T>(
     return hit.payload as T;
   }
   const data = await fetcher();
-  const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
+  if (data == null) return data;
+  const ttl = Array.isArray(data) && data.length === 0
+    ? Math.min(ttlSeconds, EMPTY_TTL_SECONDS)
+    : ttlSeconds;
+  const expiresAt = new Date(now.getTime() + ttl * 1000);
   const payload = data as unknown as Prisma.InputJsonValue;
   await prisma.apiCache.upsert({
     where: { key },
@@ -107,7 +137,11 @@ export async function getCachedMatchStats(
   context: MatchContext
 ): Promise<Map<number, MatchStat>> {
   const rows = await prisma.matchStatCache.findMany({
-    where: { teamId, context, schemaVersion: CURRENT_CACHE_VERSION },
+    where: {
+      teamId,
+      context,
+      schemaVersion: { gte: MIN_READABLE_CACHE_VERSION },
+    },
   });
   return new Map(rows.map((r) => [r.fixtureId, rowToMatchStat(r)]));
 }

@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server";
-import { runPredictUpcoming, ALL_PREDICTION_LEAGUES } from "@/lib/data/predictions";
+import { runPredictUpcoming } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
 
 // Predikce nadcházejících zápasů (denní cron). Warm cache → levné; první studené
 // naplnění radši lokálně / přes ?league=ID. Idempotentní (upsert).
-export const maxDuration = 60;
+//
+// `maxDuration` musí být VĚTŠÍ než rozpočet `runPredictUpcoming` (4 min), aby se běh
+// ukončil sám a stihl vrátit statistiku – zabití platformou po limitu je tichá ztráta
+// informace o tom, kam se pipeline dostala. Soutěže se navíc denně rotují, takže i běh,
+// který nestihne všechny, pokryje zbytek další dny.
+export const maxDuration = 300;
 
 export async function GET(req: Request) {
   if (!isRealDataConfigured()) {
@@ -19,7 +24,8 @@ export async function GET(req: Request) {
   if (denied) return denied;
 
   const leagueParam = new URL(req.url).searchParams.get("league");
-  const leagueIds = leagueParam ? [Number(leagueParam)] : ALL_PREDICTION_LEAGUES;
+  // Bez parametru = celý (rotovaný) seznam soutěží; s parametrem jen ta jedna.
+  const leagueIds = leagueParam ? [Number(leagueParam)] : undefined;
 
   try {
     const stats = await runPredictUpcoming(leagueIds);

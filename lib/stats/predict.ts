@@ -137,7 +137,17 @@ const LAMBDA_SHARPEN = 1.0;
  * Aplikuje se na finální 1X2 z mřížky (po ρ i zostření), ne na λ – proto žije vedle nich
  * jako další `PredictParams`, ne v `sharpenLambdas`. `a = 1, b = 0` je přesný no-op.
  * Fituje se přes `fitCalibration` (`lib/picks/fit.ts`) nad `npm run backtest`, ne nad pár
- * desítkami zápasů z DB (stejná zásada jako u `LAMBDA_SHARPEN`). Zatím nekalibrováno.
+ * desítkami zápasů z DB (stejná zásada jako u `LAMBDA_SHARPEN`).
+ *
+ * **ZMĚŘENO A ZAMÍTNUTO** (backtest 18 lig, sezóny 2024+2025, 10 981 predikcí): fit vyšel
+ * `a = 0.85, b = −0.30` se zlepšením log-loss **1.0274 → 1.0267**, tj. 0.0007 – a `b`
+ * skončilo **na hranici gridu** (rozsah je [−0.30, 0.30]), což je klasický příznak
+ * přefitování, ne nalezené struktury. Model navíc kalibraci nepotřebuje: ECE 1X2 je
+ * **0.0103** a koše sedí (64.2 % → 62.6 %, 83.6 % → 83.2 %) – to je jiný svět než
+ * diagnóza výše, která pochází z doby před ratingy (C2) a shrinkage λ. Ty dvě věci
+ * nesouměrnou chybu narovnaly samy, takže Platt už nemá co opravovat.
+ * Zůstává přesný no-op; kód (`calibrateOutcome`, sloupce `calibA/calibB`, `reprice`)
+ * ponechán, aby se dal zapnout beze změny schématu, kdyby se kalibrace zhoršila.
  */
 const CALIB_A = 1.0;
 const CALIB_B = 0.0;

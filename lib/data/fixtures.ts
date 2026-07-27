@@ -116,10 +116,14 @@ export function pickRound(
   raw: ApiFixture[],
   direction: "last" | "next"
 ): RoundFixture[] {
+  // U „nejbližšího kola" platí stejný důvod jako v Programu: odložený/zrušený zápas si
+  // drží PŮVODNÍ (minulý) výkop, takže by tvořil vlastní skupinu s nejstarším průměrem
+  // data a výběr „nejbližšího" by vyhrál – Tabulky by pak jako příští kolo ukázaly jediný
+  // zápas, který se nehraje.
   const eligible =
     direction === "last"
       ? raw.filter((f) => FINISHED_STATUSES.has(f.fixture.status.short))
-      : raw;
+      : raw.filter((f) => !NOT_UPCOMING.has(f.fixture.status.short));
 
   const groups = new Map<string, ApiFixture[]>();
   for (const f of eligible) {

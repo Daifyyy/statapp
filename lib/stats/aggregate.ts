@@ -48,11 +48,16 @@ function metricOf(m: MatchStat, metric: Metric): number | undefined {
   return m.metrics[metric];
 }
 
-/** Vážený průměr metriky přes zápasy jednoho okna (váha = důležitost zápasu). */
+/**
+ * Vážený průměr metriky přes zápasy jednoho okna (váha = důležitost zápasu).
+ * `seen` (volitelně) posbírá váhy **podle zápasu** – okna se překrývají, takže sečíst
+ * `effectiveSample` přes okna by tentýž zápas započítalo víckrát (viz `computeMetricValue`).
+ */
 function aggregateWindow(
   matches: MatchStat[],
   metric: Metric,
-  entityType: EntityType
+  entityType: EntityType,
+  seen?: Map<number, number>
 ): WindowAgg {
   let weightSum = 0;
   let valueSum = 0;
@@ -60,6 +65,7 @@ function aggregateWindow(
     const raw = metricOf(m, metric);
     if (raw === undefined) continue; // např. chybějící xG
     const w = matchWeight(m, entityType);
+    seen?.set(m.fixtureId, w);
     weightSum += w;
     valueSum += w * raw;
   }
@@ -81,13 +87,21 @@ export function computeMetricValue(
 ): MetricValue {
   const windowValues: WindowValue[] = [];
   const breakdown: WindowBreakdown[] = [];
-  let effectiveSample = 0;
+  /**
+   * Váha každého zápasu, který do metriky přispěl – klíčem `fixtureId`, takže se
+   * **nezapočítá dvakrát**. Okna se totiž překrývají (LAST5 ⊂ LAST10) a na startu
+   * sezóny splývají úplně: SEASON je celý loňský pool a LAST10/LAST5 jeho novější řezy,
+   * tedy tytéž zápasy. Sečtený vzorek pak hlásil ~3× víc, než kolik zápasů reálně
+   * existuje, a `readiness` proto v srpnu tvrdilo „dost dat" o predikci postavené
+   * výhradně na minulé sezóně – přesně naopak, než jak má odznak „málo dat" fungovat.
+   */
+  const sampleByFixture = new Map<number, number>();
 
   for (const window of windowsFor(entityType)) {
     const selected = selectWindowMatches(matches, window, now).filter((m) =>
       matchesVenue(m, venue)
     );
-    const agg = aggregateWindow(selected, metric, entityType);
+    const agg = aggregateWindow(selected, metric, entityType, sampleByFixture);
     const weight = weights[window];
     windowValues.push({ weight, value: agg.value });
     breakdown.push({
@@ -96,8 +110,10 @@ export function computeMetricValue(
       value: agg.value === null ? null : round2(agg.value),
       weight,
     });
-    effectiveSample += agg.effectiveSample;
   }
+
+  let effectiveSample = 0;
+  for (const w of sampleByFixture.values()) effectiveSample += w;
 
   const value = weightedAverage(windowValues);
   // Zobrazený vzorek i práh spolehlivosti vychází ze stejné zaokrouhlené hodnoty,

@@ -31,6 +31,10 @@ npm run backtest     # offline backtest na historii klubových lig (point-in-tim
                      # 1 volání/liga+sezóna, pak .cache/backtest → další běhy offline
 npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refresh
 npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
+npm run backtest -- --no-odds       # bez sekce „vs. TRH" (jen kvalita modelu)
+npm run import-odds  # ZAVÍRACÍ KURZY z football-data.co.uk → .cache/backtest (0 volání API).
+                     # Bez nich backtest neumí měřit hranu proti trhu ani ROI.
+                     # --leagues=39,140 --seasons=2024,2025
 npm run backtest-national           # backtest REPREZENTACÍ (turnaje + Liga národů);
                      # --ratings=1095,2,1 = globální ratingy, --grid, --from=/--to=
 npm run backfill-stats              # xG/střely k historii: 1 volání/zápas, --limit stropuje
@@ -94,8 +98,13 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   **λ se staví multiplikativně vůči ligovému měřítku** (Maher/DC, `expectedGoals`):
   `λ = ref × (útok/ref)^s × (obdržené soupeře/ref)^s`, kde `ref` = **kolik gólů dá v této lize
   průměrný domácí, resp. hostující tým** (`LeagueBaseline`, z home/away splitů tabulky přes
-  `computeLeagueBaseline` → `getLeagueBaseline`, sdílí `standings:` cache = **0 API navíc**;
-  bez tabulky `DEFAULT_BASELINE`). Domácí výhoda je **v rozdílu ref**, λ ji nepřidává zvlášť.
+  `computeLeagueBaseline` → `getLeagueBaseline`, sdílí `standings:` cache = **0 API navíc**).
+  Na **startu sezóny** má tabulka málo zápasů (`computeLeagueBaseline` chce 20 doma i venku,
+  jinak vrací `null`) → `getLeagueBaseline` spadne na **loňskou tabulku téže ligy**, teprve
+  pak na `DEFAULT_BASELINE` (1.5/1.2). Generický default je průměr přes ligy a nízkoskórovým
+  soutěžím (Řecko, Turecko, ČR) systematicky nadsazuje góly, takže by prvních pár kol tlačil
+  Over 2.5 i BTTS nahoru – a stejným číslem se normalizují i ratingy.
+  Domácí výhoda je **v rozdílu ref**, λ ji nepřidává zvlášť.
   `ref` se řídí tím, odkud data přišla (venue rozpad vs. fallback TOTAL) → **venue-neutrální
   reprezentace domácí výhodu nedostanou** a prohození týmů dá zrcadlovou predikci.
   Dvě pojistky proti šumu (`PredictTuning`, fitnuté `npm run backtest`): **shrinkage**
@@ -176,7 +185,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   reálně stojí za λ = **nejslabší ze 4 vstupů** (útok×obrana obou týmů, efektivní vzorek
   `MetricValue.sampleSize` ve venue s fallbackem na TOTAL). Vrací `{sample, score 0–1, level
   low|medium|ok}` (`PREDICTION_READY_SAMPLE=4`). Na startu sezóny je LAST5/LAST10 tenké →
-  predikce stojí na baseline minulé sezóny → odznak „málo dat". Ukládá se jako `readinessSample`
+  predikce stojí na baseline minulé sezóny → odznak „málo dat".
+  **To ale dlouho NEPLATILO** (opraveno 26. 7. 2026): `computeMetricValue` sčítal
+  `effectiveSample` přes okna, jenže okna se **překrývají** (LAST5 ⊂ LAST10) a na startu
+  sezóny splývají úplně – SEASON je celý loňský pool a LAST10/LAST5 jeho novější řezy, tedy
+  tytéž zápasy. Vzorek proto hlásil až trojnásobek, readiness vycházelo „ok" a přepínač
+  „Skrýt málo dat" (default ON) v srpnu nefiltroval nic. Dnes se váhy sbírají do mapy podle
+  `fixtureId` → **jeden zápas se počítá jednou** (viz test „zápas ve VÍCE oknech"). Vedlejší
+  efekt: `sampleSize` (a tím i `lowConfidence`) je napříč appkou nižší a znamená
+  „kolik zápasů za tím reálně stojí" – prahy `LOW_CONFIDENCE_SAMPLE`/`PREDICTION_READY_SAMPLE`
+  se **nezměnily**, ale nově je splní až 4 skutečné zápasy místo dvou.
+  Ukládá se jako `readinessSample`
   (Float) na `FixturePrediction`/`PredictionRow`; v `PicksApp` rekonstruováno přes `readinessOf`.
   Čistá funkce, žádná nová data. UI: banner v `MatchPrediction`, `ReadinessTag` na řádku tipu.
 - **Insights = rule-engine** (`lib/insights/`): `engine.ts` spustí registry pravidel
@@ -220,7 +239,9 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - **Data (Program):** `fetchFixturesByDate(date)` (`apiFootball.ts`) = **1 volání `/fixtures?date=`
   na den** (timezone `Europe/Prague`) → levné. `getFixturesByDates(dates)`
   (`realRepository.ts`, TTL `ApiCache` 1 h, paralelně, výpadek dne nezhasne ostatní) profiltruje přes
-  **`FIXTURE_LIST_LEAGUE_IDS`** (`catalog.ts` = 18 klubových lig + reprezentace), vyřadí
+  **`FIXTURE_LIST_LEAGUE_IDS`** (`catalog.ts` = **`PROGRAM_CLUB_LEAGUE_IDS`, tj. Top 8 + ČR (9 lig)**
+  + reprezentace; **ne** všech 18 `CLUB_LEAGUES` – denní seznam je vědomě užší než rozsah
+  predikcí, viz „Rozsahy lig" níže), vyřadí
   dohrané (`FINISHED_STATUSES`) a normalizuje čistou **`normalizeUpcomingFixtures`**
   (`lib/data/fixtures.ts`, testy `fixtures.test.ts`) na `UpcomingFixture`. Mock:
   `lib/data/mock/fixtures.ts` (funguje bez DB/API).
@@ -315,10 +336,23 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
 - api-sports limit 300/min, ale edge nás reálně stropuje ~5 úspěšných volání/s a občas
   odmítá i pod limitem (distribuované nody). `lib/data/rateLimiter.ts` = semafor
   souběžnosti 3 + klouzavý minutový strop; `apiGet` retry s krátkým backoffem.
-- **Denní kvóta (plán Pro) = 7500.** Odhad spotřeby v rozjeté sezóně ≈ **450–600/den**
-  (seznamy zápasů ~200 + statistiky nově odehraných ~50 + kurzy ~30–75 + benchmark ~75 +
-  tabulky/warm/settle ~30) → **rezerva ~90 %**. Predikce **nestojí volání na zápas**:
+- **Denní kvóta (plán Pro) = 7500.** Odhad spotřeby v rozjeté sezóně ≈ **700–900/den**
+  (seznamy zápasů ~200 + statistiky nově odehraných ~120 + kurzy ~50–100 + benchmark ~120 +
+  tabulky/kola/warm/settle ~80) → **rezerva ~88 %**. Číslo vyskočilo z původních 450–600
+  rozšířením predikcí z 8 na 16 klubových lig. Predikce **nestojí volání na zápas**:
   `compareTeams` čte z trvalé `MatchStatCache`, takže zápas se stahuje **1× za život**.
+- **Verze zápasové cache má DVĚ konstanty** (`cache.ts`): `CURRENT_CACHE_VERSION` (čím se
+  zapisuje) a **`MIN_READABLE_CACHE_VERSION` (co se ještě čte)**. Bump té první při přidání
+  **kosmetického** pole (verze 3 = metadata o soupeři pro logo u formy) by jinak zahodil
+  ~9 000 cachovaných zápasů a znovu je stáhl po 1 volání – práh proto zvedej jen tehdy, když
+  by starší řádky daly **špatná čísla** (chybějící metrika = tichý posun průměru), ne když jde
+  o zobrazení. Lokálně stažené statistiky jde do produkční cache přepsat **zdarma**:
+  `npm run backfill-stats -- --from-cache`.
+- **`cachedJson` neukládá `null` a prázdné pole cachuje krátce** (3 h). `null` do
+  non-nullable `payload` házelo výjimku, kterou volající `catch` spolkl (u ratingů to
+  znamenalo sken celé ligy při každém volání); prázdná odpověď na plné TTL zase umí
+  na startu sezóny **oslepit ligu na 24 h**, když se na `teams:<liga>:<sezóna>` sáhne
+  pár dní před publikací nové sezóny.
 - **`/fixtures/statistics` vrací OBA týmy v jedné odpovědi.** `assemble` (`realRepository`)
   proto z ní ukládá i **soupeřův** `MatchStat` – dřív se druhá půlka zahodila a týž zápas se
   stáhl podruhé, až přišel na řadu soupeř (**2× dražší**). Nejdražší opakující se položka
@@ -385,7 +419,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   `/predikce` i track-record **jen ČTOU z DB** – nikdy se nepočítá živě per request
   (1 zápas ≈ 26–35 API volání → drahé). Studené naplnění dělej lokálně / `?league=ID`.
 - **Pipeline** (`lib/data/predictions.ts`, real data): `runPredictUpcoming`
-  (`ALL_PREDICTION_LEAGUES` = Top-8 klubových lig `PREDICTION_LEAGUES` + reprezentační
+  (`ALL_PREDICTION_LEAGUES` = 16 klubových lig `PREDICTION_LEAGUES` + reprezentační
   soutěže z `catalog.ts`: finálové turnaje `NATIONAL_TOURNAMENT_LEAGUE_IDS` (MS=1, EURO=4,
   Copa América=9, AFCON=6, Asian Cup=7, Gold Cup=22) stavěné **venue-neutrálně**, a soutěže
   s reálným domácí/venku `NATIONAL_HOME_AWAY_LEAGUE_IDS` (UEFA NL=5, CONCACAF NL=536)
@@ -400,39 +434,62 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   po 90 min podobu výhry → zkazilo by 1X2, Over 2.5, BTTS i MLE `DC_RHO`. `SettledMatch` proto
   nese `afterExtraTime` a UI u skóre ukazuje „90′“. Starší řádky přepočítá `npm run resettle`.
   Crony `app/api/cron/{predict-upcoming,settle-results}` (denně ve `vercel.json`,
-  `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá). Reprezentační
+  `CRON_SECRET`, `?league=ID` override). Mimo sezónu = prázdno (UI to zvládá).
+  **Cron má časový rozpočet a rotuje pořadí soutěží** (`rotateLeagues(…, dayOfYear())`,
+  `budgetMs` 4 min pod `maxDuration = 300`). Bez toho se při 16+8 soutěžích a studené cache
+  stihl vždy jen **začátek** seznamu a konec nedostal predikci **nikdy** – změřeno 26. 7. 2026:
+  běh v 04:30 byl zabit v 04:31:03 (`maxDuration` byla 60 s) a v DB bylo 8 lig z 18. Rotace
+  z toho dělá „každý den se začne jinde", takže i zkrácený běh pokryje zbytek další dny;
+  jakmile je cache teplá a běh doběhne celý, rotace nedělá nic. Ruční `?league=ID` se nerotuje.
+  Reprezentační
   řádky v `PicksApp` **jsou klikací**: `/api/picks` jim dohledá konfederaci každého týmu
   (`getNationalConfedMap`) a deep-link míří do NATIONAL Porovnání (stejně jako Zápasy);
   `MatchPick` proto nese `compareMode`+`home/awayCompareLeagueId`, klikatelnost řeší
   `buildCompareHref` (tým bez dohledané konfederace → `null` = neklikací).
-- **Sledované klubové ligy = Top 8 UEFA** (`PREDICTION_LEAGUES` = 39/140/135/78/61 +
-  Portugalsko 94 + Nizozemsko 88 + Belgie 144; rozšířeno z Top-5). **Přidání lig
-  nezpřesňuje jádro** – ratingy jsou ligově-lokální (normalizované na ligový průměr 1.0)
-  a `LeagueBaseline` je per-liga, takže žádná cross-league chyba k opravě není (na rozdíl
-  od reprezentací). Backtest to potvrdil: fitnuté konstanty se rozšířením nepohnuly
-  (ρ −0.04→−0.045, zostření λ optimum kleslo na s=1.05 se **zero** ziskem = „sharpen
-  nezapínat" ještě silněji, Platt kalibrace na hranici gridu = overfit). **Hodnota Top-8
-  je pokrytí + živoucí dataset (celoroční kalibrace/track-record), ne přesnost.**
-  **Per-liga log-loss (backtest 2024–25, 5 391 predikcí)** vyvrací intuici, že nové ligy
-  jsou horší: **Portugalsko je NEJlépe predikovaná liga z celé osmičky (0.9665)** i bez xG
-  (polarizovaná – Benfica/Porto/Sporting dominují), Nizozemsko je nad průměrem Top-5
-  (1.0088). **Jedině Belgie (Jupiler Pro League) táhne průměr nahoru** (log-loss 1.0511,
-  přesnost jen 45.4 %, ECE 0.036) – bez ní by 7ligový průměr byl ~1.0015, tj. **lepší** než
-  původní Top-5 (1.0063). Příčina: belgická **nadstavba s dělením bodů** (championship
-  play-off, top-6 se odpojí, body se půlí) pokřiví ligovou tabulku, ze které se staví
-  baseline i ratingy (stejný druh pasti jako `deriveLeagueAccess` u nadstaveb – „Relegation
-  Round/Group"). Belgie **není rozbitá** (pořád skill nad naivní konstantou ~1.077), jen
-  nejslabší. xG **není** rozdíl (PT bez xG poráží všechny xG ligy) → rozhoduje struktura
-  ligy. **TODO / hlídat na živých datech:** zůstává v seznamu; pokud bude i live takhle
-  slabá, kandidát na (a) vyřazení z `PREDICTION_LEAGUES`, nebo (b) speciální ošetření
-  nadstavby v `LeagueBaseline`/ratinzích (curated fallback jako u `LEAGUE_ACCESS`).
+- **Rozsahy lig: TŘI různé seznamy, vědomě oddělené.**
+  `CLUB_LEAGUES` (18, katalog – Porovnání a Tabulky) ⊃ `PREDICTION_LEAGUES`
+  (16 = katalog bez `NO_SKILL_LEAGUES`, predikce/tipy) a zvlášť `PROGRAM_CLUB_LEAGUE_IDS`
+  (9 = Top 8 + ČR 345 → `FIXTURE_LIST_LEAGUE_IDS` = denní Program, Výsledky, Tipovačka).
+  Model počítá nad co nejširší množinou, denní seznam zůstává komorní. Důsledek, se kterým
+  je třeba počítat: tip z ligy mimo devítku je v Predikci klikací do Porovnání, ale
+  **v Programu ho uživatel nenajde a nejde ho tipovat**; `getRecentResults` proto filtruje
+  na `isProgramClubLeague` – a **filtr musí jít do dotazu**, ne až nad `take: 40`
+  (jinak ve dnech menších lig zůstane ve Výsledcích pár řádků, nebo nic).
+- **Ligy bez skillu se vyřazují MĚŘENÍM, ne odhadem** (`NO_SKILL_LEAGUES` v `predictions.ts`).
+  **Přidání lig nezpřesňuje jádro** – ratingy jsou ligově-lokální (normalizované na ligový
+  průměr 1.0) a `LeagueBaseline` je per-liga, takže žádná cross-league chyba k opravě není
+  (na rozdíl od reprezentací). Hodnota širšího seznamu je **pokrytí + živoucí dataset**, ne
+  přesnost. Fitnuté konstanty se rozšířením nepohnuly (ρ −0.04→−0.045, zostření λ s=1.00 =
+  „sharpen nezapínat", Platt kalibrace na hranici gridu = overfit; viz `predict.ts`).
+  **Per-liga log-loss (backtest 2024+2025, 10 981 predikcí, bez xG) proti naivní konstantě:**
+  Portugalsko **0.9644** (+0.117) > Řecko 0.9861 > **ČR 0.9784** (+0.089) > Itálie 1.0067 >
+  Turecko 0.9820 > Španělsko 0.9950 > Německo/Francie/NL/Anglie (+0.05…+0.07) >
+  Skotsko 1.0125 > Norsko 1.0171 > **Belgie 1.0510 (+0.032)** > Dánsko/Rakousko/Championship
+  (+0.014…+0.018) > **Švýcarsko 1.0746 (−0.002)** a **Polsko 1.0807 (−0.011)**.
+  Dvě věci proti intuici: **Belgie není nejhorší** (dřívější závěr z užšího vzorku; nadstavba
+  s dělením bodů jí škodí, ale skill má) a **malá liga ≠ špatná predikce** – ČR, Řecko a
+  Turecko patří ke špičce, zatímco Championship s 1 114 zápasy je u dna. xG rozdíl nedělá
+  (Portugalsko bez xG poráží všechny xG ligy) → rozhoduje **struktura ligy**: čím
+  polarizovanější (pár dominantních klubů), tím lépe predikovatelná.
+  **Polsko (106) a Švýcarsko (207) jsou proto z `PREDICTION_LEAGUES` vyřazené** – model tam
+  neporazil hádání, takže tip odtud je šum a stojí čas cronu i kvótu. Zůstávají v katalogu
+  (Porovnání/Tabulky je mají). Před vyřazením/přidáním další ligy **vždy nejdřív změř**
+  (`npm run backtest -- --leagues=ID`); pořadí odporuje intuici.
 - **EV / value tipy vůči kurzům** (`lib/picks/value.ts`, čisté + testy): predikční pipeline
   dotahuje **referenční kurzy sázkovky** (`fetchOdds` v `apiFootball.ts`, decimal odds 1X2 +
-  Over 2.5 + BTTS od jedné preferované sázkovky) a ukládá je na `FixturePrediction`
-  (`odds*` sloupce, `saveOdds`/`hasOdds`). Životní cyklus jako benchmark: **jen klubové ligy,
-  1×/zápas (guard `hasOdds`), jen do `ODDS_LOOKAHEAD_HOURS=72` před výkopem** (týden staré kurzy
-  nemají pro EV smysl; cron běží denně → každý zápas se chytí těsně před výkopem; rozpočet
-  ~1 volání/zápas). Ukládáme **syrové kurzy** → `impliedProb=1/kurz` i `edge=p_model×kurz−1`
+  Over 2.5 + BTTS **od jedné** preferované sázkovky) a ukládá je na `FixturePrediction`
+  (`odds*` sloupce, `saveOdds`/`saveClosingOdds`, guard `oddsSnapshotState`). Životní cyklus
+  jako benchmark: **jen klubové ligy, dva snímky na zápas** (`ODDS_LOOKAHEAD_HOURS=72`
+  a zavírací `ODDS_CLOSING_HOURS=12` – viz CLV níže), rozpočet ~2 volání/zápas.
+  **Pozor na nevyužitý zdroj:** odpověď nese **13 sázkovek**, my z ní bereme jednu
+  (`PREFERRED_BOOKMAKERS`) – nejlepší cena napříč knihami přitom byla jediná páka, která
+  v backtestu zabrala. Viz otevřený bod 2 v sekci „STAV K 26. 7. 2026" dole. **Past, která to celé tiše vypnula** (opraveno 26. 7. 2026): `/odds` vrací
+  u exotických trhů (Exact Score, handicapy) `value` jako **číslo**, ne řetězec – zod schéma
+  odmítlo celou odpověď, `fetchOdds` hodil výjimku a protože je fetch kurzů best-effort
+  (`catch` v pipeline i v Tipovačce), **nikdy se neuložil ani jeden kurz** (0 řádků s
+  `oddsHome` v produkci). Schéma proto přijímá string i number (`oddsText`, test
+  `lib/data/odds.test.ts`). Poučení: best-effort cesta musí mít **vlastní ověření**
+  (`npm run probe-odds -- <fixtureId>`), jinak selhává neviditelně. Ukládáme **syrové kurzy** → `impliedProb=1/kurz` i `edge=p_model×kurz−1`
   se dopočítají čistou funkcí (`valueOf`/`rowValue`), takže přepočet při změně modelu nevyžaduje
   nový fetch. Kurzy žijí **jen na uložených řádcích** (DB), ne v živém `compareTeams` → `MatchPrediction`
   je nemá (živé Porovnání zůstává bez odds fetchu). EV se zobrazuje jen v `PicksApp`.
@@ -470,6 +527,49 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   ukládáme jen kurz na „ano" → protistrana chybí, nejde odmaržovat) a **jen klubové zápasy**
   (reprezentace kurzy nemají a napříč konfederacemi jsou nesrovnatelné). Dokud trh vede, jsou
   „value" tipy spíš chyba modelu než hrana — `MarketPanel` to říká uživateli natvrdo.
+- **ZMĚŘENO: model trh NEPORAZÍ a plochá strategie prodělává** (26. 7. 2026, `npm run backtest`
+  nad 9 271 zápasy se zavíracími kurzy). **Tohle je odpověď na otázku „dá se z toho postavit
+  profitabilní sázecí model?" — ne. Nezkoušej to znovu bez NOVÉHO vstupu.**
+  - 1X2 log-loss: **náš 1.0239 vs. trh 0.9760** (ztrácíme 0.0479), přesnost 48.8 % vs 52.8 %.
+    Zaostáváme tedy zhruba o tolik, o kolik jsme napřed před naivní konstantou.
+  - ROI ploché sázky (1 jednotka, kritérium **EV = p × kurz − 1 > 0**, 95% CI bootstrapem):
+    sharp linie **−7.7 %** [−10.5; −4.6], průměr trhu **−11.2 %** [−13.6; −8.7], nejlepší cena
+    napříč knihami **−5.2 %** [−7.6; −2.7]. **Žádný interval neobsahuje nulu** → není to šum.
+  - **Vyšší práh EV výsledek ZHORŠÍ** (−7.7 % → −8.9 % při prahu 5 %). To je klasický podpis
+    modelu bez hrany: zápasy, kde model vidí největší výhodu, jsou ty, kde se nejvíc **mýlí**,
+    ne kde má navrch. Proto „ukazuj jen tipy s velkou hranou" situaci nezachrání.
+  - Po trzích (nejlepší cena): domácí −8.6 %, hosté −5.8 %, **Over 2.5 −1.8 %** [−5.5; +1.8],
+    Under 2.5 −3.6 %. Over 2.5 je nejblíž nule — sedí to s tím, že je to jediný trh, kde model
+    překonává základní míru. Ani tam ale zisk prokázaný není.
+  - **Line-shopping je jediná páka, která prokazatelně funguje**: nejlepší cena napříč 13 knihami
+    zvedne ROI o ~2 p.b. proti sharp linii a o ~5 p.b. proti průměru trhu (overround nejlepší
+    ceny je **0.11 %** vs. 2.99 % u Pinnacle). Sama o sobě ale ze ztráty zisk neudělá.
+- **Historické kurzy: `npm run import-odds`** (`lib/picks/oddsDataset.ts`, čisté + testy).
+  API-Football historické kurzy **nevrací** (ověřeno `/odds?fixture=<minulý>`, `?date=`,
+  `?league=&season=` → shodně 0 výsledků), takže zdrojem je **football-data.co.uk** (zdarma):
+  zavírací 1X2 ve třech hladinách (Pinnacle / průměr trhu / nejlepší cena), zavírací Over/Under 2.5
+  a **skutečné počty rohů**. Pokrývá 16 z 18 lig (**Fortuna liga zdroj nemá**). Ukládá se jako
+  sidecar `.cache/backtest/odds-<liga>-<sezóna>.json` (stejný vzor jako `stats-*.json`),
+  **0 volání API**. Párování je přes **datum (±1 den) + skóre + podobnost jmen** — skóre je tvrdý
+  kontrolní součet, aby se nemohly podstrčit kurzy jiného zápasu; dnes 99.1 % (13 976/14 097).
+  Jména se páruje kombinací shody tokenů („Man United" ⊂ „Manchester United") a bigramů
+  („Levadiakos" vs „Levadeiakos"), plus ruční alias tam, kde se klub jmenuje jinak (WSG Tirol).
+- **CLV (`lib/picks/clv.ts`, čisté + testy) = jediná zpětná vazba, která přijde HNED.**
+  Na verdikt „má tip hranu?" z výsledků jsou potřeba stovky sázek (fotbal je z valné části
+  náhoda); posun **zavírací linie** od našeho snímku je vidět po každém zápase. Kladné CLV
+  je nutná podmínka dlouhodobě ziskového sázení – kdo vydělává bez něj, má zatím štěstí.
+  Proto pipeline bere **DVA snímky kurzu** místo jednoho náhodného v okně 0–72 h:
+  „náš" (≤ `ODDS_LOOKAHEAD_HOURS` 72 h) a **zavírací** (≤ `ODDS_CLOSING_HOURS` 12 h),
+  sloupce `oddsClose*` + `oddsCloseAt`, guard `oddsSnapshotState` (dřív `hasOdds`).
+  Cena: +1 volání/zápas (~30–50/den, pod 1 % kvóty). CLV se počítá z **odmaržovaných**
+  pravděpodobností obou snímků – jinak by do něj protekla změna marže místo změny názoru
+  trhu (kryto testem). BTTS se nesnímá (model tam nemá signál). UI: `ClvPanel` v `PicksApp`.
+- **Peníze měří `lib/picks/pnl.ts`** (čisté + testy), ne track-record: `flatBets` vybere sázky
+  (default kritérium **EV proti vyplácenému kurzu**; `criterion: "disagreement"` přepne na rozdíl
+  proti férové ceně), `summarizePnl` dá zisk, ROI, maximální propad
+  a **95% CI bootstrapem**. CI tam není pro parádu — rozdělení výnosů je šikmé (většina sázek −1,
+  občas +několik), takže pár set sázek dá ROI ±10 % čirým šumem. **Bez intervalu netvrď, že
+  strategie vydělává.**
 - **Offline backtest** (`lib/picks/backtest.ts` + `npm run backtest`, čisté + testy): přehraje
   historii klubových lig **stejným jádrem** (`compareTeams`) a vydá `PredictionRow[]` → jde rovnou
   do `computeTrackRecord`/`computeReliability`/`fit.ts`. **Point-in-time** (`matchStatsBefore` bere
@@ -1090,6 +1190,70 @@ konzistentní. Přihlašovat se přes produkční doménu, ne přes deployment U
 znaku (https, bez koncového `/`).
 **Pozn. (lokál):** Google token exchange = odchozí TLS → `npm run dev` spouštěj s
 `NODE_OPTIONS=--use-system-ca` (jako probe/prisma). Bez auth env app běží jako anonym (FREE).
+
+## STAV K 26. 7. 2026 — kde jsme skončili a čím pokračovat
+
+Dvě sezení: (A) předsezónní údržba před startem lig 7. 8., (B) odpověď na otázku
+„dokážeme z našich dat postavit profitabilní sázecí model?". **Vše níže je v pracovním
+stromu, ale NENÍ commitnuté ani nasazené.** Schéma (`prisma db push`) už v Neonu je –
+sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **kód nasaď brzy**.
+
+### Hotovo v tomto kole
+- **Sezónní údržba:** rotace + časový rozpočet predikčního cronu (dřív umíral v 60s
+  timeoutu a poslední ligy nedostaly predikci nikdy), `MIN_READABLE_CACHE_VERSION`
+  (bump verze zneviditelnil 9 000 zápasů), fallback formy pro nováčky z 2. ligy,
+  filtr lig do dotazu ve Výsledcích, `cachedJson` neukládá `null` a prázdno cachuje krátce,
+  readiness přestal počítat jeden zápas třikrát, baseline padá na loňskou tabulku,
+  guard na předsezónní tabulky, status filtr v `pickRound`, vlastní rate-limit buckety
+  v Tabulkách, `ROUND_TTL` 30 min → 6 h. Detaily u jednotlivých sekcí výše.
+- **Oprava, která odblokovala kurzy:** zod schéma `/odds` padalo na numerickém `value`
+  u exotických trhů → v produkci **nebyl uložený ani jeden kurz**. Viz „EV / value tipy".
+- **Změřená odpověď na otázku o profitabilitě:** ne. `npm run import-odds` +
+  sekce „vs. TRH" v `npm run backtest`. Čísla a interpretace jsou v sekci o měřítkách výše.
+- **Poctivější UI:** `edgeFair` vedle `edge`, protistrany Over/BTTS v DB, „value tipy"
+  přeznačené na „kde se lišíme od trhu", `MarketPanel` říká i ROI z backtestu.
+- **CLV:** dva snímky kurzu + `lib/picks/clv.ts` + `ClvPanel`.
+
+### Otevřené body (v pořadí, jak dávají smysl)
+
+1. **Ruční kroky, které blokují ostrý provoz** (žádný kód):
+   - **`CRON_SECRET` ve Vercelu + redeploy.** Ověřeno 26. 7.: `GET /api/warm?league=…`
+     vrací 200 **bez autorizace** → kdokoli může jedním requestem spustit stovky volání
+     API-Football a vyčerpat denní kvótu. `requireCronAuth` je fail-open, takže stačí
+     proměnnou nastavit, kód se nemění.
+   - Po 4. 8. zkontrolovat, že v `FixturePrediction` přibývá `oddsHome` a `oddsCloseAt`
+     (kurzy se tahají až do 72 h / 12 h před výkopem, dřív tam nic nebude).
+2. **NEDODĚLÁNO: ukládat všechny sázkovky.** Jedna odpověď `/odds` nese **13 knih**
+   (`fetchOdds` v `apiFootball.ts:493` z nich vezme jednu podle `PREFERRED_BOOKMAKERS`)
+   a 12 se zahodí. Přitom **nejlepší cena napříč knihami byla jediná páka, která
+   v backtestu prokazatelně zabrala** (ROI −7.7 % → −5.2 %, overround 0.11 % vs. 2.99 %).
+   Plán byl JSON sloupec `oddsBooks` na `FixturePrediction` → z něj nejlepší cena
+   i sharp konsenzus. **0 volání API navíc.** Tohle je nejlevnější zbývající zlepšení.
+3. **Rohy = jediný nezměřený kandidát na hranu.** `Corners Over Under` nabízí 9 z 13 knih
+   včetně Pinnacle (marže 5–9 %, rozptyl linií 10.25 vs 10.5) a **rohy už měříme**
+   (`CORNERS` v `ALL_METRICS`, venue splity, okna, ratingy). `expectedGoals`
+   (`lib/stats/predict.ts`) je obecné „λ z útoku a obrany vůči ligovému měřítku" → táž
+   konstrukce nad `CORNERS` dá λ rohů a Poissonova mřížka `P(Over/Under X.5)`.
+   **Validace je zadarmo a offline:** `npm run import-odds` už stahuje i skutečné počty
+   rohů (`MatchOddsRecord.corners`, sloupce `HC`/`AC`, hlavní ligy) → kalibraci a log-loss
+   změříš na 10 000+ zápasech dřív, než na to vsadíš korunu. Živé kurzy chodí v téže
+   odpovědi, kterou už stahujeme. **Postup: nejdřív změř kalibraci proti skutečným rohům,
+   teprve pak řeš kurzy.**
+4. **Týmové totaly** (`Total - Home`/`Total - Away`, bet 16/17) – marginály naší mřížky
+   je dávají zadarmo, žádný nový model. Levné rozšíření, nezměřené.
+5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior
+   a naší predikcí ji posouvat jen tam, kde máme konkrétní informaci. Jediná varianta,
+   která nevyžaduje být lepší než Pinnacle. Až po bodech 2–3.
+6. **Brána (drž ji):** do stakingu, bankrollu ani Kelly kritéria **neinvestovat**, dokud
+   aspoň jeden trh nemá kladné CLV nebo ROI, jehož interval spolehlivosti nezahrnuje nulu.
+   Dnes takový trh **není**.
+
+### Co nezkoušet znovu (změřeno, zamítnuto)
+- Porazit zavírací linii na 1X2 / Over 2.5 / BTTS gólovými průměry, xG a střelami.
+- Zpřísňovat práh hrany, aby se ROI zlepšilo – **zhoršuje ho** (−7.7 % → −8.9 %).
+- Platt kalibrace (`CALIB_A/B`) – fit skončil na hranici gridu se ziskem 0.0007.
+- Zostření λ (`LAMBDA_SHARPEN`) – optimum s = 1.00.
+- Historické kurzy z API-Football – **nevrací je** (ověřeno třemi tvary dotazu).
 
 ## Známé problémy / TODO
 - **iOS Safari zoom na mobilu:** po kliknutí na „Vyber tým" se stránka stále přibližuje,

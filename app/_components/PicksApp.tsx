@@ -15,6 +15,7 @@ import type {
   ReliabilityReport,
 } from "@/lib/picks/reliability";
 import type { MarketBenchmark } from "@/lib/picks/market";
+import type { ClvSummary } from "@/lib/picks/clv";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
@@ -93,6 +94,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [marketBench, setMarketBench] = useState<MarketBenchmark | null>(null);
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [reliability, setReliability] = useState<ReliabilityReport | null>(null);
+  const [clv, setClv] = useState<ClvSummary | null>(null);
 
   const retry = useCallback(() => {
     void loadPicks(market, venue, minProb, minEdge, minReadiness, () => true, {
@@ -130,6 +132,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         setMarketBench(d.market ?? null);
         setBacktest(d.backtest ?? null);
         setReliability(d.reliability ?? null);
+        setClv(d.clv ?? null);
       })
       .catch(() => {});
     return () => {
@@ -149,7 +152,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         user={user}
         nav={[
           { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/digest", label: "Value tipy", emoji: "🔥" },
+          { href: "/digest", label: "Vs. trh", emoji: "🔥" },
           { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
           { href: "/tabulky", label: "Tabulky", emoji: "📊" },
           { href: "/transfers", label: "Přestupy", emoji: "🔄" },
@@ -170,6 +173,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
       )}
       {track && <TrackRecordPanel track={track} />}
       {marketBench && marketBench.n > 0 && <MarketPanel market={marketBench} />}
+      {clv && clv.n > 0 && <ClvPanel clv={clv} />}
       {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
       {reliability && <ReliabilityPanel reliability={reliability} />}
 
@@ -422,14 +426,61 @@ function MarketPanel({ market }: { market: MarketBenchmark }) {
         {avgOverround != null && ` (⌀ ${((avgOverround - 1) * 100).toFixed(1)} %)`}.{" "}
         {beatsMarket ? (
           <span className="font-semibold text-positive">
-            ✅ Model překonává trh o {diff.toFixed(3)} → value tipy mají oporu.
+            ✅ Model překonává trh o {diff.toFixed(3)}.
           </span>
         ) : (
           <span className="font-semibold text-foreground">
-            ⚠ Trh je zatím lepší o {diff.toFixed(3)} → ber „hranu“ u tipů s rezervou.
+            ⚠ Trh je lepší o {diff.toFixed(3)} → rozdíly proti trhu ber jako podnět
+            k prozkoumání, ne jako hranu.
           </span>
         )}
         {n < 100 && " Malý vzorek – orientační."}
+      </p>
+      <p className="mt-2 text-[11px] text-muted">
+        Offline backtest na 9 271 zápasech se zavíracími kurzy: náš model 1.024, trh 0.976
+        a plochá sázka podle modelu skončila na −5 až −10 % ROI (interval spolehlivosti
+        nulu neobsahuje). Predikce jsou tu od toho, aby zápas vysvětlily — ne aby se podle
+        nich sázelo.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * CLV = posun linie od našeho snímku kurzu k zavření. Je to **jediný ukazatel hrany
+ * viditelný hned**, zatímco na verdikt z výsledků jsou potřeba stovky zápasů (fotbal je
+ * z valné části náhoda). Kladné CLV je nutná podmínka dlouhodobě ziskového sázení.
+ */
+function ClvPanel({ clv }: { clv: ClvSummary }) {
+  const pb = clv.avgClv * 100;
+  const good = pb > 0;
+  return (
+    <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Pohyb linie po našem tipu (CLV)
+        </p>
+        <span className="text-[11px] text-muted">{clv.n} tipů</span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <div className={`rounded-xl p-2.5 ${good ? "bg-positive/10 ring-1 ring-positive/30" : "bg-background"}`}>
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {pb > 0 ? "+" : ""}
+            {pb.toFixed(2)}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">⌀ posun (p.b.)</div>
+        </div>
+        <div className="rounded-xl bg-background p-2.5">
+          <div className="text-2xl font-bold tabular-nums text-foreground">
+            {Math.round(clv.beatRate * 100)} %
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted">tipů před trhem</div>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-muted">
+        Kladné číslo znamená, že se trh po našem tipu pohnul <em>naším směrem</em> — to je
+        známka hrany dřív, než ji potvrdí výsledky. Náhodné tipy dají kolem 0 a 50 %.
+        {clv.n < 100 && " Malý vzorek – orientační."}
       </p>
     </section>
   );
@@ -701,8 +752,11 @@ function RuleControls({
       </div>
 
       <div className="mt-3 space-y-2 border-t border-border pt-3">
-        {/* Value filtr: ponechá jen tipy, kde má model výhodu nad kurzem sázkovky
-            (edge > 0). Kurzy se plní jen klubovým ligám blízko výkopu → mimo to prázdno. */}
+        {/* Filtr neshody s trhem: ponechá jen zápasy, kde je naše pravděpodobnost vyšší
+            než FÉROVÁ (odmaržovaná) cena. Vědomě se to nejmenuje „value": měření ukázalo,
+            že model trh neporazí a že větší neshoda vede k HORŠÍMU výsledku – je to tedy
+            vodítko k prozkoumání, ne tip s hranou. Kurzy jsou jen u klubových lig blízko
+            výkopu → mimo to prázdno. */}
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -711,7 +765,8 @@ function RuleControls({
             className="h-4 w-4 rounded border-border"
           />
           <span className="text-sm font-medium text-foreground">
-            Jen value tipy <span className="font-normal text-muted">(kurz výhodný, edge &gt; 0)</span>
+            Jen kde se lišíme od trhu{" "}
+            <span className="font-normal text-muted">(nad férovou cenou, bez marže)</span>
           </span>
         </label>
         {/* Readiness gate: skryje tipy s tenkým vzorkem (start sezóny). Default ON. */}

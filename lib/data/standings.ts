@@ -169,6 +169,15 @@ export function computeLeagueBaseline(
   };
 }
 
+/**
+ * Odehrála se v této tabulce vůbec nějaká utkání? Předsezónní tabulka existuje, ale je
+ * celá na nulách a `rank` v ní znamená jen pořadí, ve kterém ji API vrátilo (typicky
+ * abecedně) – všechno odvozené (pozice, zóny, měřítka) je z ní nesmysl.
+ */
+export function hasPlayedMatches(standings: ApiStandingRow[]): boolean {
+  return standings.reduce((s, r) => s + (r.all?.played ?? 0), 0) > 0;
+}
+
 /** Průměr vstřelených a obdržených gólů na zápas přes celou ligu (z cachované tabulky). */
 export function computeLeagueGoalsAvg(standings: ApiStandingRow[]): LeagueGoalsAvg | null {
   const totalPlayed = standings.reduce((s, r) => s + (r.all?.played ?? 0), 0);

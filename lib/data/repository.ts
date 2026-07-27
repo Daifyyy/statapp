@@ -33,7 +33,11 @@ import {
 } from "./predictionStore";
 import { summarizeSettled } from "@/lib/picks/results";
 import { getLeagueTransfers, getClubBalances } from "./transferStore";
-import { isProgramClubLeague } from "./catalog";
+import {
+  ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
+  PROGRAM_CLUB_LEAGUE_IDS,
+  isProgramClubLeague,
+} from "./catalog";
 import * as real from "./realRepository";
 
 /**
@@ -77,9 +81,10 @@ export async function getTeamsByLeague(
 export async function getCompareTeam(
   teamId: number,
   leagueId: number,
-  includeEuro = false
+  includeEuro = false,
+  meta?: real.ClubMeta
 ): Promise<Team | null> {
-  if (useReal) return real.getCompareTeam(teamId, leagueId, includeEuro);
+  if (useReal) return real.getCompareTeam(teamId, leagueId, includeEuro, meta);
   return allMockTeams().find((t) => t.id === teamId) ?? null;
 }
 
@@ -191,10 +196,19 @@ export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
  * jen to, co appka nabízí v Programu (jinak by tam prosakovaly ligy, které Program
  * vůbec neukazuje – nekonzistentní řádek bez odpovídajícího zápasu v Programu).
  * Reprezentace filtr neřeší (jiný seznam, `ALL_NATIONAL_PREDICTION_LEAGUE_IDS`).
+ *
+ * Filtr jde **do dotazu** (`leagueIds`), ne až nad načtenými řádky – limit v DB by jinak
+ * padl na nejnovější zápasy napříč všemi 18 ligami a ve dnech menších lig by ze záložky
+ * zbylo pár řádků. Filtr níže zůstává jako pojistka (a kvůli mock větvi).
  */
 export async function getRecentResults(): Promise<SettledMatch[]> {
   const rows = useReal
-    ? await getRecentSettledPredictions()
+    ? await getRecentSettledPredictions({
+        leagueIds: [
+          ...PROGRAM_CLUB_LEAGUE_IDS,
+          ...ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
+        ],
+      })
     : mockSettledPredictions();
   const matches = summarizeSettled(rows).filter(
     (m) => m.compareMode === "NATIONAL" || isProgramClubLeague(m.leagueId)

@@ -31,6 +31,13 @@ export type PredictionUpsert = Omit<
   | "oddsAway"
   | "oddsOver25"
   | "oddsBtts"
+  | "oddsUnder25"
+  | "oddsBttsNo"
+  | "oddsCloseHome"
+  | "oddsCloseDraw"
+  | "oddsCloseAway"
+  | "oddsCloseOver25"
+  | "oddsCloseUnder25"
 > & { kickoff: string };
 
 function toRow(p: FixturePrediction): PredictionRow {
@@ -73,6 +80,13 @@ function toRow(p: FixturePrediction): PredictionRow {
     oddsAway: p.oddsAway,
     oddsOver25: p.oddsOver25,
     oddsBtts: p.oddsBtts,
+    oddsUnder25: p.oddsUnder25,
+    oddsBttsNo: p.oddsBttsNo,
+    oddsCloseHome: p.oddsCloseHome,
+    oddsCloseDraw: p.oddsCloseDraw,
+    oddsCloseAway: p.oddsCloseAway,
+    oddsCloseOver25: p.oddsCloseOver25,
+    oddsCloseUnder25: p.oddsCloseUnder25,
   };
 }
 
@@ -146,15 +160,18 @@ export async function saveBenchmark(
 }
 
 /**
- * Jsou už uložené kurzy pro tento zápas? Drží pravidlo „fetch 1×/zápas" (kurzy
- * tahneme jednou blízko výkopu, kdy jsou actionable – viz `runPredictUpcoming`).
+ * Které snímky kurzu už zápas má. Pipeline podle toho pozná, jestli má vzít **první**
+ * snímek (cena, kterou bychom dostali), **zavírací** (nejlepší odhad trhu), nebo nic –
+ * viz `runPredictUpcoming`. Každý snímek se bere právě jednou.
  */
-export async function hasOdds(fixtureId: number): Promise<boolean> {
+export async function oddsSnapshotState(
+  fixtureId: number
+): Promise<{ hasOpen: boolean; hasClose: boolean }> {
   const row = await prisma.fixturePrediction.findUnique({
     where: { fixtureId },
-    select: { oddsFetchedAt: true },
+    select: { oddsFetchedAt: true, oddsCloseAt: true },
   });
-  return row?.oddsFetchedAt != null;
+  return { hasOpen: row?.oddsFetchedAt != null, hasClose: row?.oddsCloseAt != null };
 }
 
 /**
@@ -170,6 +187,8 @@ export async function saveOdds(
     away: number | null;
     over25: number | null;
     btts: number | null;
+    under25?: number | null;
+    bttsNo?: number | null;
   }
 ): Promise<void> {
   await prisma.fixturePrediction.update({
@@ -181,7 +200,38 @@ export async function saveOdds(
       oddsAway: odds.away,
       oddsOver25: odds.over25,
       oddsBtts: odds.btts,
+      // Protistrany: bez nich nejde odmaržovat Over/BTTS (viz komentář ve schématu).
+      oddsUnder25: odds.under25 ?? null,
+      oddsBttsNo: odds.bttsNo ?? null,
       oddsFetchedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Uloží **zavírací** snímek kurzu (druhý a poslední). BTTS se sem neukládá – zavírací
+ * linii sledujeme jen u trhů, kde má CLV smysl počítat (1X2 a total), a BTTS je trh,
+ * kde model prokazatelně nemá signál.
+ */
+export async function saveClosingOdds(
+  fixtureId: number,
+  odds: {
+    home: number | null;
+    draw: number | null;
+    away: number | null;
+    over25: number | null;
+    under25?: number | null;
+  }
+): Promise<void> {
+  await prisma.fixturePrediction.update({
+    where: { fixtureId },
+    data: {
+      oddsCloseHome: odds.home,
+      oddsCloseDraw: odds.draw,
+      oddsCloseAway: odds.away,
+      oddsCloseOver25: odds.over25,
+      oddsCloseUnder25: odds.under25 ?? null,
+      oddsCloseAt: new Date(),
     },
   });
 }
@@ -243,9 +293,18 @@ export async function getSettledPredictions(
 /**
  * Nedávno odehrané predikce pro záložku „Výsledky" (poslední `days` dní, max
  * `limit`). Nenačítá celou historii – seznam je jen UI pohled na čerstvé výsledky.
+ *
+ * `leagueIds` **musí filtrovat už v dotazu**, ne až nad výsledkem: predikce se počítají
+ * nad širší množinou soutěží než kolik jich appka denně nabízí, takže `take: limit` přes
+ * všechny ligy vrátí okno, které může být z valné části tvořené ligami, jež volající
+ * stejně zahodí – a záložka se pak smrskne nebo vyprázdní ve dnech, kdy hrají hlavně ony.
  */
 export async function getRecentSettledPredictions(
-  { days = 14, limit = 40 }: { days?: number; limit?: number } = {}
+  {
+    days = 14,
+    limit = 40,
+    leagueIds,
+  }: { days?: number; limit?: number; leagueIds?: number[] } = {}
 ): Promise<PredictionRow[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
   const rows = await prisma.fixturePrediction.findMany({
@@ -253,6 +312,7 @@ export async function getRecentSettledPredictions(
       status: { in: [...FINISHED_STATUSES] },
       homeGoals: { not: null },
       kickoff: { gte: since },
+      ...(leagueIds ? { leagueId: { in: leagueIds } } : {}),
     },
     orderBy: { kickoff: "desc" },
     take: limit,

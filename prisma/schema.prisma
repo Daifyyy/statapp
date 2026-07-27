@@ -58,7 +58,8 @@ model MatchStatCache {
   opponentId       Int?
   opponentName     String?
   opponentLogo     String?
-  /// Verze sady metrik; starší řádky se ignorují a dotáhnou znovu (viz cache.ts).
+  /// Verze sady metrik. Čte se vše od `MIN_READABLE_CACHE_VERSION` výš; řádky pod prahem
+  /// se ignorují a dotáhnou znovu (viz cache.ts).
   schemaVersion    Int      @default(1)
   cachedAt         DateTime @default(now())
 
@@ -206,7 +207,22 @@ model FixturePrediction {
   oddsAway      Float?
   oddsOver25    Float?
   oddsBtts      Float?
+  // Protistrany dvoustranných trhů. `fetchOdds` je stahoval odjakživa, ale zahazovaly se –
+  // a bez nich NELZE odmaržovat, takže u Over 2.5 a BTTS nešlo spočítat férovou cenu ani
+  // market benchmark. 0 volání API navíc (jsou v téže odpovědi).
+  oddsUnder25   Float?
+  oddsBttsNo    Float?
   oddsFetchedAt DateTime?
+  // DRUHÝ snímek: zavírací linie (těsně před výkopem). Rozdíl proti prvnímu snímku je CLV
+  // = jediný ukazatel hrany viditelný hned po výkopu, ne až po stovkách výsledků. Jeden
+  // snímek to změřit neumí – nešlo by odlišit „model měl pravdu" od „chytili jsme starší
+  // linii". Chybí u zápasů, které cron mezi prvním snímkem a výkopem už nezastihl.
+  oddsCloseHome    Float?
+  oddsCloseDraw    Float?
+  oddsCloseAway    Float?
+  oddsCloseOver25  Float?
+  oddsCloseUnder25 Float?
+  oddsCloseAt      DateTime?
 
   @@index([leagueId, kickoff])
   @@index([status, kickoff])

@@ -593,6 +593,21 @@ export interface PredictionRow {
   oddsAway: number | null;
   oddsOver25: number | null;
   oddsBtts: number | null;
+  /**
+   * Protistrany dvoustranných trhů – bez nich nejde odmaržovat, takže u Over 2.5 a BTTS
+   * nelze spočítat férovou cenu. Starší řádky (před 26. 7. 2026) je mají `null`.
+   */
+  oddsUnder25: number | null;
+  oddsBttsNo: number | null;
+  /**
+   * Zavírací snímek kurzu (druhý). Rozdíl proti prvnímu snímku = CLV (`lib/picks/clv.ts`).
+   * `null` u zápasů, které cron mezi prvním snímkem a výkopem už nezastihl.
+   */
+  oddsCloseHome: number | null;
+  oddsCloseDraw: number | null;
+  oddsCloseAway: number | null;
+  oddsCloseOver25: number | null;
+  oddsCloseUnder25: number | null;
 }
 
 /** Trh, na který pravidlo cílí. */
@@ -633,11 +648,19 @@ export interface MatchPick {
   /** Pravděpodobnost relevantní pro pravidlo (0–1). */
   prob: number;
   /**
-   * Hodnotová analýza tipu vůči kurzu sázkovky (kurz, implikovaná pravděpodobnost,
-   * edge = prob×kurz−1). `null`, když kurz nebyl dotažen. Tvar odpovídá `ValueEstimate`
-   * (`lib/picks/value.ts`) – zde inline, aby `types.ts` nezáviselo na `value.ts`.
+   * Rozdíl tipu proti trhu. `edge` je EV proti **vyplácenému** kurzu (nese marži),
+   * `edgeFair` je rozdíl proti **odmaržované** ceně – jen to druhé má vypovídací hodnotu
+   * (a i tak jde o „kde se lišíme", ne o příslib zisku; viz měření v CLAUDE.md).
+   * `null`, když kurz nebyl dotažen. Tvar odpovídá `ValueEstimate` (`lib/picks/value.ts`) –
+   * zde inline, aby `types.ts` nezáviselo na `value.ts`.
    */
-  value: { odds: number; impliedProb: number; edge: number } | null;
+  value: {
+    odds: number;
+    impliedProb: number;
+    edge: number;
+    fairProb: number | null;
+    edgeFair: number | null;
+  } | null;
   /** Krátké vysvětlení (z uložených hodnot). */
   explanation: string;
   /** Mód cílového Porovnání (klub vs. reprezentace) – pro deep-link prokliku. */

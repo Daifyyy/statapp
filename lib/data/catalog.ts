@@ -26,6 +26,32 @@ export function transferWindowStart(now: Date = new Date()): Date {
 /** Evropské poháry (TOP-3) pro cross-country kontext: UCL, UEL, UECL. */
 export const EURO_LEAGUE_IDS = [2, 3, 848];
 
+/**
+ * Pořadí soutěží pro dávkové běhy, **pootočené podle dne** (`dayOfYear`).
+ *
+ * Proč: predikční cron jede ligy sekvenčně a má strop běhu (`maxDuration`). Při pevném
+ * pořadí se stihne vždy jen začátek seznamu a konec **nedostane predikci nikdy** – ne
+ * občas, ale systematicky, protože pořadí i místo doběhnutí jsou stejné každý den.
+ * (Změřeno 26. 7. 2026: běh umřel po 8 z 18 lig, poslední ligy neměly v DB ani řádek.)
+ * Rotace to mění na „každý den se začne jinde", takže i při zkráceném běhu se za pár dní
+ * pokryjí všechny – a jakmile je cache teplá a běh doběhne celý, rotace nedělá nic.
+ *
+ * Čistá funkce (bez DB i bez `Date`) → testovatelná a bez skrytého stavu; kurzor v DB by
+ * na tohle byl zbytečně těžký.
+ */
+export function rotateLeagues<T>(ids: readonly T[], dayOfYear: number): T[] {
+  if (ids.length === 0) return [];
+  const offset = ((dayOfYear % ids.length) + ids.length) % ids.length;
+  return [...ids.slice(offset), ...ids.slice(0, offset)];
+}
+
+/** Den v roce (1–366) v UTC – vstup pro `rotateLeagues`. */
+export function dayOfYear(now: Date = new Date()): number {
+  const start = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.floor((today - start) / 86_400_000) + 1;
+}
+
 const leagueLogo = (id: number) =>
   `https://media.api-sports.io/football/leagues/${id}.png`;
 

@@ -43,6 +43,13 @@ function row(over: Partial<PredictionRow> = {}): PredictionRow {
     oddsAway: 4.0,
     oddsOver25: null,
     oddsBtts: null,
+    oddsUnder25: null,
+    oddsBttsNo: null,
+    oddsCloseHome: null,
+    oddsCloseDraw: null,
+    oddsCloseAway: null,
+    oddsCloseOver25: null,
+    oddsCloseUnder25: null,
     ...over,
   };
 }

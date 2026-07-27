@@ -90,23 +90,50 @@ function ReadinessTag({
   );
 }
 
-/** Kurz + edge vůči trhu. Kladný edge zvýrazněn (value), záporný tlumený. */
+/**
+ * Kurz + o kolik se model liší od trhu.
+ *
+ * Ukazuje se **rozdíl proti férové (odmaržované) ceně**, ne EV proti vyplácenému kurzu:
+ * v kurzu je marže 3–4 %, takže „edge +3 %" znamená ve skutečnosti nulu. Odznak proto
+ * není příslib zisku (backtest ukázal, že model trh neporazí) – je to informace
+ * „tady se s trhem rozcházíme".
+ */
 function ValueBadge({
   value,
 }: {
-  value: { odds: number; impliedProb: number; edge: number };
+  value: {
+    odds: number;
+    impliedProb: number;
+    edge: number;
+    fairProb: number | null;
+    edgeFair: number | null;
+  };
 }) {
-  const pos = value.edge > 0;
-  const edgePct = Math.round(value.edge * 100);
+  // Bez protistrany trhu (starší řádky) férovou cenu neznáme → jen kurz, žádné procento.
+  const diff = value.edgeFair;
+  const pct = diff == null ? null : Math.round(diff * 100);
+  const pos = pct != null && pct > 0;
+  const marketPct = Math.round((value.fairProb ?? value.impliedProb) * 100);
   return (
     <span
       className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
         pos ? "bg-positive/10 text-positive" : "bg-background text-muted"
       }`}
-      title={`Kurz ${value.odds.toFixed(2)} · trh ${Math.round(value.impliedProb * 100)} % · edge ${edgePct > 0 ? "+" : ""}${edgePct} %`}
+      title={
+        `Kurz ${value.odds.toFixed(2)} · trh ${marketPct} %` +
+        (pct == null
+          ? " (férovou cenu neznáme – chybí protistrana trhu)"
+          : ` · lišíme se o ${pct > 0 ? "+" : ""}${pct} p.b. proti férové ceně`)
+      }
     >
-      {value.odds.toFixed(2)} · {edgePct > 0 ? "+" : ""}
-      {edgePct} %
+      {value.odds.toFixed(2)}
+      {pct != null && (
+        <>
+          {" · "}
+          {pct > 0 ? "+" : ""}
+          {pct} p.b.
+        </>
+      )}
     </span>
   );
 }

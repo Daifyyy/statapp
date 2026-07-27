@@ -40,7 +40,7 @@ import {
   cachedJsonMemo,
   getCachedMatchStats,
   saveMatchStats,
-  CURRENT_CACHE_VERSION,
+  MIN_READABLE_CACHE_VERSION,
   type MatchContext,
 } from "./cache";
 import { prisma } from "@/lib/db";
@@ -49,6 +49,7 @@ import {
   computeLeagueBaseline,
   computeLeagueGoalsAvg,
   deriveLeagueAccess,
+  hasPlayedMatches,
   normalizeLeagueTable,
   pickTeamStanding,
 } from "./standings";
@@ -92,8 +93,13 @@ const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
 const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
 const NATIONAL_LAST = 25;
+/** Kolik posledních zápasů napříč soutěžemi vzít klubu bez historie v dané lize. */
+const CLUB_FALLBACK_LAST = 20;
 
 type TeamLite = Pick<Team, "id" | "name" | "logoUrl" | "country" | "entityType">;
+
+/** Název/logo klubu, když ho nelze dohledat v seznamu týmů ligy (nováček, nová sezóna). */
+export type ClubMeta = Pick<Team, "name" | "logoUrl" | "country">;
 
 // ---- Veřejné API repository ----
 
@@ -199,12 +205,13 @@ export async function getTeamsByLeague(leagueId: number): Promise<TeamLite[]> {
 export async function getCompareTeam(
   teamId: number,
   leagueId: number,
-  includeEuro = false
+  includeEuro = false,
+  meta?: ClubMeta
 ): Promise<Team | null> {
   if (isNationalLeague(leagueId)) {
     return buildNationalTeam(teamId, leagueId);
   }
-  return buildClubTeam(teamId, leagueId, includeEuro);
+  return buildClubTeam(teamId, leagueId, includeEuro, meta);
 }
 
 /**
@@ -263,7 +270,16 @@ export async function getLeagueBaseline(
 ): Promise<LeagueBaseline | null> {
   if (isNationalLeague(leagueId)) return null;
   try {
-    return computeLeagueBaseline(await cachedLeagueStandings(leagueId));
+    const current = computeLeagueBaseline(await cachedLeagueStandings(leagueId));
+    if (current) return current;
+    // Rozjezd sezóny: tabulka ještě nemá dost zápasů. Loňské měřítko té samé ligy je
+    // pořád mnohem blíž pravdě než `DEFAULT_BASELINE` (1.5/1.2) – ten je průměrem přes
+    // ligy a nízkoskórovým soutěžím (Řecko, Turecko, ČR) systematicky nadsazuje góly,
+    // takže by prvních pár kol tlačil Over 2.5 i BTTS nahoru. Klíč `standings:<liga>:<sezóna>`
+    // je sdílený s ostatními záložkami → typicky 0 volání navíc.
+    return computeLeagueBaseline(
+      await cachedLeagueStandingsFor(leagueId, PREVIOUS_SEASON)
+    );
   } catch {
     return null;
   }
@@ -389,7 +405,7 @@ async function computeLeagueRatings(
       where: {
         teamId: { in: teams.map((t) => t.id) },
         context: "league",
-        schemaVersion: CURRENT_CACHE_VERSION,
+        schemaVersion: { gte: MIN_READABLE_CACHE_VERSION },
         date: { gte: since },
       },
       select: {
@@ -459,8 +475,7 @@ export async function getLeagueGameTeams(
   let raw = await cachedLeagueStandings(leagueId);
   // Mezisezóna: aktuální tabulka je prázdná (0 odehraných) → ratingy by byly všechny
   // stejné (ligový průměr). Spadni na PŘEDCHOZÍ sezónu, ať mají týmy reálné síly.
-  const totalPlayed = raw.reduce((s, r) => s + (r.all?.played ?? 0), 0);
-  if (totalPlayed === 0) {
+  if (!hasPlayedMatches(raw)) {
     const prev = await cachedLeagueStandingsFor(leagueId, PREVIOUS_SEASON).catch(
       () => [] as ApiStandingRow[]
     );
@@ -567,7 +582,14 @@ export async function getLeagueAssists(
 
 /** Kolik zápasů zpět/dopředu stahovat, než se dogroupují na jedno kolo (viz `pickRound`). */
 const ROUND_FETCH_SIZE = 15;
-const ROUND_TTL = 60 * 30; // 30 min – výsledky/rozpis kola se mění častěji než tabulka
+/**
+ * TTL kola. Bylo 30 min „protože se mění častěji než tabulka" – jenže se plní z týchž
+ * zápasů jako tabulka (STANDINGS_TTL 6 h), takže kratší TTL nepřineslo čerstvější obsah,
+ * jen 12× víc volání: **2 volání na ligu za okno** spouštěná jediným klepnutím v pásku
+ * 18 lig (nejhorší případ ~1 700 volání/den z jedné záložky). Živé skóre má vlastní,
+ * skutečně krátkou cestu (`/api/fixtures/live`, 90 s) – tohle je přehled kola.
+ */
+const ROUND_TTL = 60 * 60 * 6;
 
 /**
  * Poslední odehrané + nejbližší nadcházející kolo vybrané ligy (záložka Tabulky).
@@ -615,7 +637,11 @@ export async function getRanks(
   );
   for (const t of teams) {
     if (t.national) continue;
-    const row = byLeague.get(t.leagueId)?.find((r) => r.team.id === t.id);
+    const table = byLeague.get(t.leagueId);
+    // Předsezónní tabulka (0 odehraných) má `rank` daný jen tím, jak ji API seřadilo
+    // (často abecedně) → pozice by nic neznamenala. Radši žádný odznak než falešný.
+    if (!table || !hasPlayedMatches(table)) continue;
+    const row = table.find((r) => r.team.id === t.id);
     if (row) map.set(t.id, row.rank);
   }
   return map;
@@ -785,11 +811,17 @@ async function buildNationalTeam(
 async function buildClubTeam(
   teamId: number,
   leagueId: number,
-  includeEuro: boolean
+  includeEuro: boolean,
+  metaOverride?: ClubMeta
 ): Promise<Team | null> {
-  // Název + logo z (cachovaného) seznamu týmů ligy.
-  const teams = await getTeamsByLeague(leagueId);
-  const meta = teams.find((t) => t.id === teamId);
+  // Název + logo z (cachovaného) seznamu týmů ligy; na startu sezóny ale seznam pro
+  // novou sezónu ještě nemusí být publikovaný (a nováček v něm chybí i tak) → volající
+  // může meta poslat rovnou z fixture, stejně jako to dělá reprezentační větev.
+  let meta: ClubMeta | undefined = metaOverride;
+  if (!meta) {
+    const teams = await getTeamsByLeague(leagueId);
+    meta = teams.find((t) => t.id === teamId);
+  }
   if (!meta) return null;
 
   // „Minulá sezóna" (baseline) = nejnovější DOKONČENÁ sezóna.
@@ -811,14 +843,33 @@ async function buildClubTeam(
     baselinePool = previousFinished;
   }
 
+  // Nováček z nižší soutěže nemá v TÉTO lize žádnou historii (ani loni, ani letos) →
+  // obě okna by zůstala prázdná, všechny metriky `null` a predikce by se uložila jako
+  // `available: false` s nulami. To potká v 1. kole ~3 kluby v každé lize, a je to horší
+  // než přiznaně nepřesný odhad. Vezmeme proto formu **napříč soutěžemi** (`fetchLastFixtures`
+  // – tentýž zdroj, ze kterého staví formu reprezentace): zápasy z druhé ligy a poháru.
+  // Měřítko soupeřů je jiné, ale zápasy nováčka do ligových ratingů stejně nespadnou
+  // (není v jejich mapě → λ se počítá okenním modelem), takže jde o čistý zisk oproti
+  // prázdnu. Přátelák se do soutěžních čísel nepřimíchá (`competitive` dole).
+  if (formPool.length === 0) {
+    const recent = onlyFinished(
+      await cachedJson(`fixlast:${teamId}`, LIST_TTL, () =>
+        fetchLastFixtures(teamId, CLUB_FALLBACK_LAST)
+      )
+    );
+    formPool = recent;
+    baselinePool = recent;
+  }
+
   // LAST10/5 = nejnovější zápasy; SEASON = reprezentativní vzorek baseline sezóny.
   const leagueFixtures = dedupeFixtures([
     ...byDateDescFx(formPool).slice(0, FORM_FIXTURES),
     ...spreadSample(baselinePool, BASELINE_SAMPLE),
   ]);
   const leagueMatches = tagBaseline(
-    await assemble(teamId, "league", leagueFixtures, () => ({
-      competitive: true,
+    await assemble(teamId, "league", leagueFixtures, (f) => ({
+      // Ligové zápasy jsou soutěžní vždy; přátelák se sem dostane jen přes fallback výše.
+      competitive: !isFriendly(f.league.name),
       isNeutral: false,
     })),
     baselineSeason

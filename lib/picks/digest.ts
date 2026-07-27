@@ -3,10 +3,14 @@ import { buildPick } from "./rules";
 import { rowValue } from "./value";
 
 /**
- * Týdenní digest = nejhodnotnější tipy nejbližších dní napříč trhy (1X2 výhra, Over 2.5,
- * BTTS). Pro každý zápas se vybere **nejlepší edge** (kde má model největší výhodu nad
- * kurzem) a vyberou se zápasy s kladnou hranou, seřazené sestupně dle edge. Čistá funkce
- * nad uloženými `PredictionRow` – žádná data ani síť (kurzy už jsou na řádku z pipeline).
+ * Týdenní digest = zápasy, kde se model nejvíc rozchází s trhem (1X2 výhra, Over 2.5,
+ * BTTS). Pro každý zápas se vybere trh s **největším rozdílem proti férové (odmaržované)
+ * ceně**, vyberou se kladné rozdíly a seřadí se sestupně. Čistá funkce nad uloženými
+ * `PredictionRow` – žádná data ani síť (kurzy už jsou na řádku z pipeline).
+ *
+ * **Není to seznam ziskových sázek.** Backtest (26. 7. 2026) ukázal, že model trh
+ * neporazí a že větší rozdíl proti trhu koreluje s **horším** výsledkem, ne lepším.
+ * Digest je tedy přehled „kde stojí za to se podívat, proč se lišíme", ne tipovací služba.
  */
 
 const DEFAULT_DAYS = 7;
@@ -20,7 +24,11 @@ const CANDIDATES: { market: MatchPick["market"]; side: "home" | "away" | null }[
   { market: "btts", side: null },
 ];
 
-/** Nejlepší value nabídka zápasu (trh s nejvyšším kladným edge), nebo null. */
+/**
+ * Trh s největším kladným rozdílem proti férové ceně, nebo null.
+ * Fallback na syrový `edge` je pro **starší řádky**, které ještě nemají uloženou
+ * protistranu trhu (a tedy ani férovou cenu) – jinak by z digestu vypadly úplně.
+ */
 function bestValue(row: PredictionRow): {
   market: MatchPick["market"];
   side: "home" | "away" | null;
@@ -30,9 +38,11 @@ function bestValue(row: PredictionRow): {
   let best: { market: MatchPick["market"]; side: "home" | "away" | null; prob: number; edge: number } | null = null;
   for (const c of CANDIDATES) {
     const v = rowValue(row, c.market, c.side);
-    if (!v || v.edge <= 0) continue;
-    if (!best || v.edge > best.edge) {
-      best = { market: c.market, side: c.side, prob: v.prob, edge: v.edge };
+    if (!v) continue;
+    const score = v.edgeFair ?? v.edge;
+    if (score <= 0) continue;
+    if (!best || score > best.edge) {
+      best = { market: c.market, side: c.side, prob: v.prob, edge: score };
     }
   }
   return best;

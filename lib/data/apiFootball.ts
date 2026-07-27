@@ -293,9 +293,17 @@ const predictionsSchema = z.array(predictionItemSchema);
 // Kurzy sázkovek (/odds). Bereme jen tři trhy: Match Winner (bet 1), Goals
 // Over/Under (bet 5 → „Over 2.5"), Both Teams Score (bet 8 → „Yes"). Tolerantní –
 // chybějící sázkovka/trh/hodnota = null. `odd` jsou řetězce desetinného kurzu („1.90").
+// POZOR: `value` NENÍ vždy řetězec. U 1X2 přijde „Home"/„Draw"/„Away", ale u trhů jako
+// „Exact Score" nebo handicapy vrací API **číslo** (1, 2, …). Zod odmítne celou odpověď,
+// takže jediný takový trh shodil parsování VŠECH sázkovek – a protože je fetch kurzů
+// best-effort (`catch` v pipeline i v Tipovačce), selhání bylo tiché: v produkci nebyl
+// za celou dobu uložený ani jeden kurz. Přijímáme obojí a normalizujeme na řetězec.
+const oddsText = z
+  .union([z.string(), z.number()])
+  .transform((v) => String(v));
 const oddsValueSchema = z.object({
-  value: z.string(),
-  odd: z.string(),
+  value: oddsText,
+  odd: oddsText,
 });
 const oddsBetSchema = z.object({
   id: z.number(),
@@ -310,7 +318,8 @@ const oddsBookmakerSchema = z.object({
 const oddsItemSchema = z.object({
   bookmakers: z.array(oddsBookmakerSchema).default([]),
 });
-const oddsSchema = z.array(oddsItemSchema);
+/** Exportováno kvůli testu, který hlídá numerické `value` u exotických trhů. */
+export const oddsSchema = z.array(oddsItemSchema);
 
 export type ApiTeam = z.infer<typeof teamItemSchema>;
 export type ApiFixture = z.infer<typeof fixtureItemSchema>;
@@ -455,9 +464,10 @@ export interface MatchOdds {
   away: number | null;
   over25: number | null;
   btts: number | null;
-  // Opačné strany over/under a BTTS – pro ROI deník tipovačky (0 volání navíc, jen
-  // druhá hodnota z už stažené odpovědi). Predikční pipeline je nepoužívá (ukládá jen
-  // Over 2.5 / BTTS Yes), proto volitelné.
+  // Opačné strany over/under a BTTS (0 volání navíc, jen druhá hodnota z už stažené
+  // odpovědi). Kromě ROI deníku tipovačky je **nutná podmínka odmaržování**: bez
+  // protistrany nejde z kurzu oddělit marži, takže by u Over 2.5 a BTTS nešla spočítat
+  // férová cena ani férová hrana (`rowValue` v `lib/picks/value.ts`).
   under25?: number | null;
   bttsNo?: number | null;
 }

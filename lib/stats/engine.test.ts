@@ -112,20 +112,37 @@ describe("computeMetricValue", () => {
   });
 
   it("lowConfidence a sampleSize používají stejný (zaokrouhlený) práh", () => {
-    // 1 klubový zápas se započte v LAST10 i LAST5 → effectiveSample 2 < 4.
+    // Vzorek = kolik zápasů za hodnotou stojí. Jeden zápas je jeden, i když spadne
+    // do LAST10 i LAST5 zároveň (okna se překrývají).
     const one = computeMetricValue([clubMatch(1, 5)], "GOALS_FOR", "TOTAL", "CLUB", NOW);
-    expect(one.sampleSize).toBe(2);
+    expect(one.sampleSize).toBe(1);
     expect(one.lowConfidence).toBe(true);
-    // 2 zápasy → effectiveSample 4 → už není nízká spolehlivost.
-    const two = computeMetricValue(
-      [clubMatch(1, 5), clubMatch(2, 12)],
+    // 4 zápasy → dosažen práh LOW_CONFIDENCE_SAMPLE.
+    const four = computeMetricValue(
+      [clubMatch(1, 5), clubMatch(2, 12), clubMatch(3, 19), clubMatch(4, 26)],
       "GOALS_FOR",
       "TOTAL",
       "CLUB",
       NOW
     );
-    expect(two.sampleSize).toBe(4);
-    expect(two.lowConfidence).toBe(false);
+    expect(four.sampleSize).toBe(4);
+    expect(four.lowConfidence).toBe(false);
+  });
+
+  it("zápas ve VÍCE oknech se do vzorku počítá jen jednou", () => {
+    // Start sezóny: tytéž loňské zápasy tvoří SEASON i LAST10/LAST5. Sečtený vzorek
+    // by hlásil trojnásobek a readiness by tvrdilo „dost dat" o predikci, která stojí
+    // výhradně na minulé sezóně.
+    const preseason = [
+      clubMatch(1, 40, { isBaseline: true }),
+      clubMatch(2, 47, { isBaseline: true }),
+      clubMatch(3, 54, { isBaseline: true }),
+    ];
+    const v = computeMetricValue(preseason, "GOALS_FOR", "TOTAL", "CLUB", NOW);
+    expect(v.sampleSize).toBe(3);
+    expect(v.lowConfidence).toBe(true);
+    // Hodnota sama se nemění – dedup se týká jen vzorku, ne váženého průměru.
+    expect(v.value).toBe(2);
   });
 });
 

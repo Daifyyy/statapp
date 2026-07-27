@@ -236,6 +236,25 @@ describe("pickRound", () => {
     expect(out.map((f) => f.fixtureId)).toEqual([1]);
   });
 
+  it("next: odložený zápas s minulým výkopem nevyhraje výběr", () => {
+    // `PST` si drží původní datum, takže by tvořil skupinu s nejstarším průměrem
+    // a Tabulky by jako „nejbližší kolo" ukázaly jediný zápas, který se nehraje.
+    const raw = [
+      roundFx(9, "Regular Season - 1", "PST", "2026-06-01T18:00:00+00:00"),
+      roundFx(1, "Regular Season - 3", "NS", "2026-06-15T18:00:00+00:00"),
+      roundFx(2, "Regular Season - 3", "NS", "2026-06-15T20:00:00+00:00"),
+    ];
+    expect(pickRound(raw, "next").map((f) => f.fixtureId)).toEqual([1, 2]);
+  });
+
+  it("next: dohraný zápas se do nadcházejícího kola nepočítá", () => {
+    const raw = [
+      roundFx(5, "Regular Season - 2", "FT", "2026-06-08T18:00:00+00:00", { home: 1, away: 0 }),
+      roundFx(6, "Regular Season - 3", "NS", "2026-06-15T18:00:00+00:00"),
+    ];
+    expect(pickRound(raw, "next").map((f) => f.fixtureId)).toEqual([6]);
+  });
+
   it("prázdný vstup vrátí prázdné pole", () => {
     expect(pickRound([], "last")).toEqual([]);
     expect(pickRound([], "next")).toEqual([]);

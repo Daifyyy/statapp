@@ -7,10 +7,13 @@ import { publicCache } from "@/lib/cacheHeaders";
  * Poslední odehrané + nejbližší nadcházející kolo vybrané ligy (záložka Tabulky, FREE –
  * veřejná statistika, bez auth gate). Samostatná routa (ne rozšíření `/api/standings/table`),
  * aby se neovlivnila latence/chybovost stávajících konzumentů tabulky (Porovnání, Hra).
- * Sdílí rate-limit vzor s `/api/standings`; reprezentace/nedostupná liga → `{ round: null }`.
+ * Sdílí rate-limit vzor s `/api/standings`, ale **vlastní bucket**: Tabulky posílají na
+ * přepnutí ligy tři requesty naráz (tabulka + kolo + střelci), takže proklikání ligového
+ * pásku by ve společném bucketu vyčerpalo limit i pro Porovnání. Reprezentace/nedostupná
+ * liga → `{ round: null }`.
  */
 export async function GET(req: Request) {
-  if (!allowRequest(`standings:${clientKey(req)}`, 60, 60_000)) return tooMany();
+  if (!allowRequest(`standings-round:${clientKey(req)}`, 60, 60_000)) return tooMany();
 
   const leagueId = Number(new URL(req.url).searchParams.get("league"));
   if (!Number.isFinite(leagueId)) {

@@ -30,7 +30,7 @@ async function enrichNationalLeagues(picks: MatchPick[]): Promise<MatchPick[]> {
   );
 }
 
-// Týdenní digest = top value tipy nejbližších dní (PRO). Čte PŘEDPOČÍTANÉ predikce z DB
+// Týdenní digest = zápasy s největší neshodou s trhem (PRO). Čte PŘEDPOČÍTANÉ predikce z DB
 // (vč. kurzů z pipeline) a vybere nejvyšší edge napříč trhy. Nepočítá živě → levné.
 // FREE/anonym → { locked: true } (UI ukáže ProLock).
 export async function GET(req: Request) {

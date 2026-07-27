@@ -12,6 +12,7 @@ import {
   type RatingOptions,
   type TeamStrength,
 } from "@/lib/stats/ratings";
+import type { MatchOddsRecord } from "./oddsDataset";
 
 /**
  * Offline backtest: přehraje historické zápasy **stejným jádrem** (`compareTeams` →
@@ -50,6 +51,12 @@ export interface HistoryMatch {
    */
   homeMetrics?: Partial<Record<Metric, number>>;
   awayMetrics?: Partial<Record<Metric, number>>;
+  /**
+   * Zavírací kurzy z football-data.co.uk – doplní `npm run import-odds` (0 volání API).
+   * Teprve s nimi jde na historii spočítat, jestli model **porazí trh**; bez nich měří
+   * backtest jen to, jestli je lepší než hádání.
+   */
+  odds?: MatchOddsRecord;
 }
 
 /**
@@ -279,15 +286,53 @@ export function backtest(
       benchHomeWin: null,
       benchDraw: null,
       benchAwayWin: null,
+      // Zavírací kurzy (`npm run import-odds`). Preferuje se sharp linie (Pinnacle),
+      // protože benchmark má měřit „porazíme nejlepší odhad trhu", ne „porazíme
+      // nejhorší sázkovku". Průměr trhu je fallback pro zápasy, kde Pinnacle chybí.
+      ...oddsColumns(m.odds),
+      // BTTS football-data nenabízí (a měření ukázalo, že na něm model stejně nemá signál).
+      oddsBtts: null,
+      oddsBttsNo: null,
+      oddsCloseHome: null,
+      oddsCloseDraw: null,
+      oddsCloseAway: null,
+      oddsCloseOver25: null,
+      oddsCloseUnder25: null,
+    });
+  }
+  return rows;
+}
+
+/** Zavírací kurzy do sloupců `PredictionRow` (sharp linie, fallback průměr trhu). */
+function oddsColumns(o: MatchOddsRecord | undefined): {
+  oddsBookmaker: string | null;
+  oddsHome: number | null;
+  oddsDraw: number | null;
+  oddsAway: number | null;
+  oddsOver25: number | null;
+  oddsUnder25: number | null;
+} {
+  const t = o?.pinnacle ?? o?.average;
+  const ou = o?.ou25?.pinnacle ?? o?.ou25?.average;
+  if (!t && !ou) {
+    return {
       oddsBookmaker: null,
       oddsHome: null,
       oddsDraw: null,
       oddsAway: null,
       oddsOver25: null,
-      oddsBtts: null,
-    });
+      oddsUnder25: null,
+    };
   }
-  return rows;
+  return {
+    oddsBookmaker: o?.pinnacle ? "Pinnacle (close)" : "Market avg (close)",
+    oddsHome: t?.home ?? null,
+    oddsDraw: t?.draw ?? null,
+    oddsAway: t?.away ?? null,
+    // Obě strany totalu → jde spočítat férová cena Over 2.5 (`rowValue`).
+    oddsOver25: ou?.over ?? null,
+    oddsUnder25: ou?.under ?? null,
+  };
 }
 
 /**

@@ -1,7 +1,11 @@
-// Úklid zbytkových/testovacích řádků v `FixturePrediction`: smaže predikce lig,
-// které NEJSOU v `ALL_PREDICTION_LEAGUES` (např. norská Eliteserien = 103, natažená
-// při testu). Tyhle řádky se jinak drží v záložce (čtení nefiltruje podle ligy) a
-// po settle by kazily i track-record.
+// Úklid zbytkových řádků v `FixturePrediction`: smaže predikce lig, které UŽ NEJSOU
+// v `ALL_PREDICTION_LEAGUES`. Tyhle řádky se jinak drží v záložce (čtení nefiltruje
+// podle ligy) a po settle by kazily i track-record.
+//
+// Typický důvod, proč liga ze seznamu zmizí: měřením se ukázalo, že tam model nemá skill
+// (`NO_SKILL_LEAGUES` v `predictions.ts` – dnes Polsko 106 a Švýcarsko 207). Pozor, že tím
+// smažeš i **odehrané** řádky té ligy; když je chceš nechat jako historii měření, skript
+// nespouštěj – seznam tipů si ligu stejně nevybere, protože nové predikce už nevznikají.
 //
 // Spuštění (dry-run, jen vypíše): node --env-file=.env --import tsx scripts/cleanupPredictions.ts
 // Skutečné smazání:                node --env-file=.env --import tsx scripts/cleanupPredictions.ts --apply

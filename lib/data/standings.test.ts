@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  computeLeagueBaseline,
   deriveLeagueAccess,
+  hasPlayedMatches,
   normalizeLeagueTable,
   pickTeamStanding,
   zoneFromDescription,
@@ -265,5 +267,42 @@ describe("deriveLeagueAccess", () => {
       slots: [{ rank: 1, spot: "UCL" }],
       relegBottom: null,
     });
+  });
+});
+
+/** Prázdná (předsezónní) tabulka: řádky existují, ale všechno je na nule. */
+function emptyRow(id: number, rank: number): ApiStandingRow {
+  return row(id, rank, {
+    points: 0,
+    goalsDiff: 0,
+    form: null,
+    all: { played: 0, win: 0, draw: 0, lose: 0, goals: { for: 0, against: 0 } },
+    home: { played: 0, win: 0, draw: 0, lose: 0, goals: { for: 0, against: 0 } },
+    away: { played: 0, win: 0, draw: 0, lose: 0, goals: { for: 0, against: 0 } },
+  });
+}
+
+describe("hasPlayedMatches", () => {
+  it("předsezónní tabulka (0 odehraných) → false", () => {
+    expect(hasPlayedMatches([emptyRow(1, 1), emptyRow(2, 2)])).toBe(false);
+    expect(hasPlayedMatches([])).toBe(false);
+  });
+
+  it("rozehraná tabulka → true", () => {
+    expect(hasPlayedMatches([emptyRow(1, 1), row(2, 2)])).toBe(true);
+  });
+});
+
+describe("computeLeagueBaseline", () => {
+  it("tenká sezóna → null (volající spadne na loňskou tabulku)", () => {
+    expect(computeLeagueBaseline([emptyRow(1, 1), emptyRow(2, 2)])).toBeNull();
+    // 3 týmy × 5 domácích zápasů = 15 < 20 → pořád málo.
+    expect(computeLeagueBaseline([row(1, 1), row(2, 2), row(3, 3)])).toBeNull();
+  });
+
+  it("dost zápasů → góly průměrného domácího a hostujícího týmu", () => {
+    const table = Array.from({ length: 5 }, (_, i) => row(i + 1, i + 1));
+    // 5 týmů × 5 zápasů = 25 doma i venku; 12 gólů doma, 6 venku na tým.
+    expect(computeLeagueBaseline(table)).toEqual({ home: 12 / 5, away: 6 / 5 });
   });
 });

@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/authUser";
 import type { SessionUser } from "../_components/sessionUser";
 
 export const metadata = {
-  title: "Value tipy týdne — Predictapp",
+  title: "Kde se lišíme od trhu — Predictapp",
   description: "Nejvýhodnější tipy nejbližších dní – největší hrana nad kurzem sázkovky (PRO).",
 };
 

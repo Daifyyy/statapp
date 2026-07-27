@@ -20,7 +20,11 @@ export const ruleSchema = z.object({
   market: z.enum(["win", "over25", "btts"]).default("win"),
   venue: z.enum(["home", "away", "any"]).default("home"),
   minProb: z.coerce.number().min(0).max(1).default(0.65),
-  // Volitelný práh edge (value betting). Vynechán → kurzy se ignorují (chování jako dnes).
+  /**
+   * Volitelný práh rozdílu proti **férové (odmaržované)** ceně trhu, tedy „jak moc se
+   * lišíme od názoru trhu". Vynechán → kurzy se ignorují. Pozn.: není to práh ziskovosti –
+   * ta se měří přes `edge` (p × kurz − 1), který je přísnější o marži.
+   */
   minEdge: z.coerce.number().optional(),
   // Volitelný práh připravenosti (efektivní vzorek λ). Vynechán → readiness se nehlídá.
   // Slouží jako gate „nevydat tip pod N zápasů" (ochrana na startu sezóny).
@@ -39,8 +43,13 @@ export interface RuleMatch {
   ok: boolean;
   prob: number;
   side: "home" | "away" | null;
-  /** Edge nad kurzem sázkovky (prob×kurz−1); null = kurz nedotažen. */
+  /** Edge nad **vyplácenou** cenou (prob×kurz−1); null = kurz nedotažen. */
   edge: number | null;
+  /**
+   * Rozdíl proti **férové** ceně (prob − p_trh). `null`, když protistranu trhu neznáme
+   * (starší řádky bez `oddsUnder25`/`oddsBttsNo`). Podle tohohle se filtruje.
+   */
+  edgeFair: number | null;
 }
 
 /** Pravděpodobnost a strana relevantní pro trh pravidla (bez posouzení prahů). */
@@ -59,22 +68,28 @@ function targetOf(
 }
 
 /**
- * Posoudí, zda predikce splňuje pravidlo, a vrátí relevantní pravděpodobnost + edge.
- * Práh `minProb` platí vždy; je-li navíc nastaven `minEdge`, tip projde jen se známým
- * kurzem a dostatečnou hranou nad trhem (value betting). Bez `minEdge` se kurz ignoruje.
+ * Posoudí, zda predikce splňuje pravidlo, a vrátí relevantní pravděpodobnost + hranu.
+ * Práh `minProb` platí vždy; je-li navíc nastaven `minEdge`, tip projde jen tehdy, když
+ * známe **celý trh** (aby šla marže oddělit) a rozdíl proti férové ceně dosáhne prahu.
+ *
+ * Filtruje se podle `edgeFair` (neshoda s trhem), protože záložka je dnes analytická,
+ * ne tipovací – viz přejmenování v UI. Kdo by chtěl filtr „vydělá to", musí použít `edge`.
  */
 export function evaluateRule(row: PredictionRow, rule: PickRule): RuleMatch {
-  if (!row.available) return { ok: false, prob: 0, side: null, edge: null };
+  if (!row.available)
+    return { ok: false, prob: 0, side: null, edge: null, edgeFair: null };
 
   const { prob, side } = targetOf(row, rule);
-  const edge = rowValue(row, rule.market, side)?.edge ?? null;
+  const value = rowValue(row, rule.market, side);
+  const edge = value?.edge ?? null;
+  const edgeFair = value?.edgeFair ?? null;
 
   let ok = prob >= rule.minProb;
-  if (rule.minEdge != null) ok = ok && edge != null && edge >= rule.minEdge;
+  if (rule.minEdge != null) ok = ok && edgeFair != null && edgeFair >= rule.minEdge;
   // Readiness gate: pod prahem efektivního vzorku λ tip nevydáme (málo dat).
   if (rule.minReadiness != null) ok = ok && row.readinessSample >= rule.minReadiness;
 
-  return { ok, prob, side, edge };
+  return { ok, prob, side, edge, edgeFair };
 }
 
 function predictionOf(row: PredictionRow): MatchPrediction {
