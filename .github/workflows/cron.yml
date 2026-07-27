@@ -49,13 +49,22 @@ jobs:
       - name: Zvol endpoint podle času spuštění
         id: pick
         env:
+          EVENT: ${{ github.event_name }}
           SCHEDULE: ${{ github.event.schedule }}
           MANUAL: ${{ inputs.job }}
         run: |
-          case "${MANUAL:-}" in
-            "") ;;                       # není ruční běh → rozhodne rozvrh
-            *) echo "path=${MANUAL}" >> "$GITHUB_OUTPUT"; exit 0 ;;
-          esac
+          # O větvi rozhoduje TYP UDÁLOSTI, ne prázdnost `inputs`. Ruční spuštění má
+          # u `job` default `snapshot-odds`, takže kdyby se `inputs` naplnily i při
+          # plánovaném běhu, spadly by do snapshot-odds VŠECHNY rozvrhy a denní úlohy
+          # by nikdy neběžely – a job by přitom svítil zeleně.
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -z "${MANUAL:-}" ]; then
+              echo "Ruční běh bez zvolené úlohy." >&2
+              exit 1
+            fi
+            echo "path=${MANUAL}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$SCHEDULE" in
             "0 */3 * * *")  path="snapshot-odds" ;;
             "0 4 * * *")    path="warm" ;;
@@ -63,9 +72,12 @@ jobs:
             "0 5 * * *")    path="refresh-transfers" ;;
             "0 6 * * *")    path="settle-results" ;;
             "15 6 * * *")   path="settle-tips" ;;
-            *) echo "Neznámý rozvrh: $SCHEDULE" >&2; exit 1 ;;
+            # Neznámý rozvrh = někdo přidal `- cron:` a zapomněl na větev tady.
+            # Radši hlasitě spadnout než tiše zavolat špatný endpoint.
+            *) echo "Neznámý rozvrh: '$SCHEDULE' (událost: $EVENT)" >&2; exit 1 ;;
           esac
           echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "Rozvrh '$SCHEDULE' → úloha $path"
 
       - name: Zavolej endpoint
         env:
