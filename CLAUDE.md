@@ -33,8 +33,11 @@ npm run backtest -- --leagues=39,140 --seasons=2024,2025 --minMatches=5 --refres
 npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky přidávají)
 npm run backtest -- --no-odds       # bez sekce „vs. TRH" (jen kvalita modelu)
 npm run backtest -- --corners       # MODEL ROHŮ: úroveň λ, overdisperze, kalibrace po liniích
-                     # --corners-grid = fit shrinkage × útlum součtu; --corners-tune=6,0.3
-                     # Data zdarma z import-odds (HC/AC); rohy jedou MIMO produkční predikci.
+                     # --corners-grid = fit shrinkage × útlum součtu
+                     # --corners-grid-nb = fit útlum × overdisperze (negativně binomické)
+                     # --corners-tune=6,0.3,1.2 = konkrétní k,t,v (fit na jedné sezóně,
+                     #   ověření na druhé). Data zdarma z import-odds (HC/AC);
+                     #   rohy jedou MIMO produkční predikci.
 npm run import-odds  # ZAVÍRACÍ KURZY z football-data.co.uk → .cache/backtest (0 volání API).
                      # Bez nich backtest neumí měřit hranu proti trhu ani ROI.
                      # --leagues=39,140 --seasons=2024,2025
@@ -597,9 +600,17 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     vždy ligový průměr"), a ta dá **0.6665** vs. **0.6640** v optimu vs. **0.6705** globální
     konstanta. Čili z 0.0065 nad konstantou dělá **0.0040 samotná znalost ligy** a jen **0.0025**
     informace o týmech. Signál existuje, ale je malý — velikostí srovnatelný s Over 2.5 u gólů.
-  - **Známé omezení: rohy jsou overdisperzní** (Var/⌀ = **1.17**, nezávisle na sezóně).
-    Poisson tvrdí 1.0, takže **podstřeluje chvosty** — a nejhorší ECE má právě krajní linie 12.5.
-    První kandidát na zlepšení je negativně-binomické rozdělení místo Poissonu, ne další ladění λ.
+  - **Rohy jsou overdisperzní → jede se na NEGATIVNĚ BINOMICKÉM rozdělení** (`varianceRatio
+    = 1.2`, `overProbNegBin`), ne na Poissonu. Poisson tvrdí `rozptyl = průměr`; u rohů je
+    **podmíněná** disperze **1.137** (Pearson `⌀(x−λ)²/λ`, `pearsonDispersion`) → podstřeloval
+    chvosty. **Marginální poměr (1.169) na tohle není správné číslo** — je nafouknutý
+    o rozptyl λ mezi zápasy, který s tvarem rozdělení nesouvisí; proto se `v` fituje gridem,
+    ne dosazením. Grid je **2D společně s `totalSpread`** (obojí hýbe šířkou pravděpodobnosti
+    → fitovat zvlášť by dalo falešné optimum). Hold-out 2025 (grid na 2024): NB porazilo
+    Poisson na **všech pěti liniích** a přesně v chvostech — ECE na 12.5 **0.0215 → 0.0046**
+    (4.7×), na 11.5 0.0138 → 0.0059; jediné zhoršení je ECE na 8.5 (0.0206 → 0.0228).
+    Na skillu je to málo (+0.0024 součtem), na **kalibraci krajních linií hodně** — a ty
+    trh nabízí nejšířeji (10.25 / 10.5 / 11.5).
   - **Co tohle NEŘÍKÁ: že se na rozích vydělá.** Měří se kvalita modelu, ne cena — historické
     kurzy na rohy zdroj nemá (chodí jen živě z API, marže **5–9 %** = násobek 1X2). Skill
     0.0025–0.0074 log-lossu je proti takové marži hodně málo. Další krok je snímat živé kurzy
@@ -1275,9 +1286,10 @@ sloupce jsou nullable a aditivní, ale Neon je sdílená s produkcí, takže **k
    včetně Pinnacle, pozor na **různé linie** (10.25 vs 10.5) mezi knihami; (b) měřit
    **CLV**, ne ROI — na verdikt z výsledků by při téhle velikosti signálu byly potřeba
    tisíce sázek; (c) teprve při kladném CLV řešit sázení.
-   **Nejlepší jednotlivé zlepšení modelu není další ladění λ, ale tvar rozdělení:** rohy
-   jsou overdisperzní (Var/⌀ = 1.17), takže Poisson podstřeluje chvosty — negativně
-   binomické rozdělení je první věc k vyzkoušení, a je opět zdarma a offline.
+   **HOTOVO i tvar rozdělení:** negativně binomické místo Poissonu (`varianceRatio = 1.2`)
+   — overdisperze byla skutečná (podmíněný Pearson 1.137) a NB opravilo hlavně chvosty
+   (ECE na linii 12.5 z 0.0215 na 0.0046). Další ladění λ už smysl nemá; příští informace
+   musí přijít **zvenčí** (živé kurzy na rohy), ne z dalšího přeskládání týchž dat.
 4. **Týmové totaly** (`Total - Home`/`Total - Away`, bet 16/17) – marginály naší mřížky
    je dávají zadarmo, žádný nový model. Levné rozšíření, nezměřené.
 5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior

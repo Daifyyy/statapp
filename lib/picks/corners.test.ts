@@ -8,6 +8,8 @@ import {
   dispersion,
   expectedCorners,
   overProb,
+  overProbNegBin,
+  pearsonDispersion,
   predictCorners,
   DEFAULT_CORNER_TUNING,
   type CornerBaseline,
@@ -60,6 +62,95 @@ describe("overProb", () => {
       expect(p).toBeGreaterThan(0);
       expect(p).toBeLessThan(1);
     }
+  });
+});
+
+describe("overProbNegBin", () => {
+  it("v ≤ 1 je PŘESNĚ Poisson (no-op)", () => {
+    for (const v of [1, 0.9, 0]) {
+      expect(overProbNegBin(9.8, 10.5, v)).toBe(overProb(9.8, 10.5));
+    }
+  });
+
+  it("drží celkovou pravděpodobnost mezi 0 a 1", () => {
+    for (const line of [0.5, 8.5, 12.5, 25.5]) {
+      const p = overProbNegBin(9.8, line, 1.15);
+      expect(p).toBeGreaterThan(0);
+      expect(p).toBeLessThan(1);
+    }
+  });
+
+  it("má TĚŽŠÍ chvosty než Poisson na obou stranách", () => {
+    const mu = 9.8;
+    // Vysoko nad průměrem: NB dá víc (Poisson chvost podstřeluje).
+    expect(overProbNegBin(mu, 15.5, 1.2)).toBeGreaterThan(overProb(mu, 15.5));
+    // Hluboko pod průměrem: „přes" je skoro jisté, NB tam ubere (víc hmoty dole).
+    expect(overProbNegBin(mu, 3.5, 1.2)).toBeLessThan(overProb(mu, 3.5));
+  });
+
+  it("silnější overdisperze posouvá chvost monotónně", () => {
+    const p1 = overProbNegBin(9.8, 15.5, 1.05);
+    const p2 = overProbNegBin(9.8, 15.5, 1.15);
+    const p3 = overProbNegBin(9.8, 15.5, 1.3);
+    expect(p2).toBeGreaterThan(p1);
+    expect(p3).toBeGreaterThan(p2);
+  });
+
+  it("odpovídá zadanému rozptylu (Var = μ × v)", () => {
+    // Kontrola parametrizace přes momenty: sečti k a k² přes celou distribuci.
+    const mu = 9.8;
+    const v = 1.2;
+    const r = mu / (v - 1);
+    const q = mu / (r + mu);
+    let term = Math.pow(r / (r + mu), r);
+    let sum = term;
+    let mean = 0;
+    let sq = 0;
+    for (let k = 1; k <= 200; k++) {
+      term = (term * (k - 1 + r) * q) / k;
+      sum += term;
+      mean += k * term;
+      sq += k * k * term;
+    }
+    expect(sum).toBeCloseTo(1, 6);
+    expect(mean).toBeCloseTo(mu, 4);
+    expect(sq - mean * mean).toBeCloseTo(mu * v, 3);
+  });
+});
+
+describe("pearsonDispersion", () => {
+  const row = (lambdaTotal: number, actualTotal: number) => ({
+    fixtureId: 1,
+    leagueId: 39,
+    season: 2024,
+    kickoff: "2024-01-01T00:00:00Z",
+    homeName: "A",
+    awayName: "B",
+    lambdaHome: lambdaTotal / 2,
+    lambdaAway: lambdaTotal / 2,
+    lambdaTotal,
+    varianceRatio: 1,
+    actualHome: actualTotal,
+    actualAway: 0,
+    actualTotal,
+  });
+
+  it("měří rozptyl kolem VLASTNÍ λ, ne kolem průměru datasetu", () => {
+    // Dvě skupiny s velmi rozdílnou λ, ale každá přesně na své λ → marginální
+    // rozptyl je obrovský, podmíněný nulový. Přesně tenhle rozdíl je celý smysl.
+    const rows = [row(5, 5), row(5, 5), row(20, 20), row(20, 20)];
+    expect(pearsonDispersion(rows)).toBeCloseTo(0, 9);
+    expect(dispersion(rows).ratio).toBeGreaterThan(1);
+  });
+
+  it("Poissonovský rozptyl kolem λ dá ≈ 1", () => {
+    // Odchylky ±√λ kolem λ = 9 → (±3)²/9 = 1.
+    const rows = [row(9, 12), row(9, 6), row(9, 12), row(9, 6)];
+    expect(pearsonDispersion(rows)).toBeCloseTo(1, 6);
+  });
+
+  it("prázdný vstup nespadne", () => {
+    expect(pearsonDispersion([])).toBe(0);
   });
 });
 
@@ -239,7 +330,7 @@ describe("cornerBaselineFor", () => {
 });
 
 describe("cornerCalibration", () => {
-  const row = (lambdaTotal: number, actualTotal: number) => ({
+  const row = (lambdaTotal: number, actualTotal: number, varianceRatio = 1) => ({
     fixtureId: 1,
     leagueId: 39,
     season: 2024,
@@ -249,6 +340,7 @@ describe("cornerCalibration", () => {
     lambdaHome: lambdaTotal / 2,
     lambdaAway: lambdaTotal / 2,
     lambdaTotal,
+    varianceRatio,
     actualHome: actualTotal,
     actualAway: 0,
     actualTotal,
@@ -299,6 +391,7 @@ describe("dispersion", () => {
       lambdaHome: 2,
       lambdaAway: 2,
       lambdaTotal: 4,
+      varianceRatio: 1,
       actualHome: t,
       actualAway: 0,
       actualTotal: t,
@@ -314,6 +407,12 @@ describe("dispersion", () => {
 });
 
 describe("DEFAULT_CORNER_TUNING", () => {
+  it("používá negativně binomické rozdělení, ne Poisson", () => {
+    // Návrat na 1.0 (Poisson) by zhoršil kalibraci krajních linií (12.5: ECE
+    // 0.0046 → 0.0215), což je právě to, na co se u rohů sází.
+    expect(DEFAULT_CORNER_TUNING.varianceRatio).toBe(1.2);
+  });
+
   it("tlumí součet λ silněji než gólový model (fitnuto backtestem)", () => {
     // Bez útlumu byl model na rozích horší než konstanta na VŠECH liniích. Kdyby se
     // někdo vrátil k `1`, tenhle test to chytí dřív, než se to projeví v predikcích.
@@ -326,7 +425,7 @@ describe("DEFAULT_CORNER_TUNING", () => {
     const weak = values({ CORNERS: 3, CORNERS_AGAINST: 3 });
     const damped = predictCorners(strong, weak, BASE, DEFAULT_CORNER_TUNING);
     const raw = predictCorners(strong, weak, BASE, {
-      base: DEFAULT_CORNER_TUNING.base,
+      ...DEFAULT_CORNER_TUNING,
       totalSpread: 1,
     });
     const ref = BASE.home + BASE.away;

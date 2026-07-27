@@ -38,6 +38,7 @@ import {
   backtestCorners,
   cornerCalibration,
   dispersion,
+  pearsonDispersion,
   DEFAULT_CORNER_TUNING,
   type CornerRow,
 } from "../lib/picks/corners.ts";
@@ -360,9 +361,14 @@ async function main() {
       ? {
           base: { ...DEFAULT_TUNING, shrinkMatches: nums(ct)[0] },
           totalSpread: nums(ct)[1],
+          varianceRatio: nums(ct)[2] ?? DEFAULT_CORNER_TUNING.varianceRatio,
         }
       : DEFAULT_CORNER_TUNING;
-    if (ct) console.log(`Ladění rohů: k=${cTuning.base.shrinkMatches}, t=${cTuning.totalSpread}`);
+    if (ct)
+      console.log(
+        `Ladění rohů: k=${cTuning.base.shrinkMatches}, t=${cTuning.totalSpread}, ` +
+          `v=${cTuning.varianceRatio}`
+      );
     const cRows = backtestCorners(history, { seasons, minMatches, tuning: cTuning });
     console.log("\n=== MODEL ROHŮ ===");
     if (cRows.length === 0) {
@@ -395,15 +401,23 @@ async function main() {
     // 2) Platí vůbec Poissonův předpoklad? Var/⌀ > 1 = overdisperze → Poisson podstřelí
     //    chvosty, tedy přesně ty pravděpodobnosti, na které se sází.
     const d = dispersion(cRows);
+    const pear = pearsonDispersion(cRows);
     console.log("\n--- Tvar rozdělení (test předpokladu Poissonu) ---");
     console.log(
-      `⌀ ${d.mean.toFixed(2)}  rozptyl ${d.variance.toFixed(2)}  → Var/⌀ = ${d.ratio.toFixed(3)}  ` +
-        (d.ratio > 1.15
-          ? "⚠ OVERDISPERZE (Poisson podstřelí chvosty)"
-          : d.ratio < 0.85
+      `marginálně:  ⌀ ${d.mean.toFixed(2)}  rozptyl ${d.variance.toFixed(2)}  ` +
+        `→ Var/⌀ = ${d.ratio.toFixed(3)}`
+    );
+    // Rozhodující je PODMÍNĚNÁ disperze: marginální poměr nafukuje i rozptyl λ mezi
+    // zápasy, který s tvarem rozdělení nesouvisí a NB ho neopravuje.
+    console.log(
+      `podmíněně:   Pearson ⌀(x−λ)²/λ = ${pear.toFixed(3)}  ` +
+        (pear > 1.05
+          ? "⚠ OVERDISPERZE (Poisson podstřelí chvosty → zkus NB)"
+          : pear < 0.95
             ? "⚠ underdisperze"
             : "✅ Poisson sedí")
     );
+    console.log(`rozdělení v tomto běhu: ${cTuning.varianceRatio === 1 ? "Poisson" : `NB (v=${cTuning.varianceRatio})`}`);
 
     // 3) Kalibrace a log-loss po liniích – laťkou je konstanta „vždy základní míra".
     console.log("\n--- Linie Over/Under (log-loss, nižší = lepší) ---");
@@ -464,6 +478,7 @@ async function main() {
           tuning: {
             base: { ...DEFAULT_TUNING, shrinkMatches: k },
             totalSpread: t,
+            varianceRatio: DEFAULT_CORNER_TUNING.varianceRatio,
           },
         });
         const c = cornerCalibration(r, 10.5);
@@ -478,6 +493,47 @@ async function main() {
     console.log(
       `(nižší = lepší; laťka = konstanta ${base.baseLogloss.toFixed(4)}, ` +
         `dnes k=${DEFAULT_CORNER_TUNING.base.shrinkMatches}/t=${DEFAULT_CORNER_TUNING.totalSpread})`
+    );
+    return;
+  }
+
+  // Grid negativně binomického rozdělení (`--corners-grid-nb`): útlum součtu λ × podmíněná
+  // overdisperze. Grid je **dvourozměrný schválně** – obojí zužuje/rozšiřuje výslednou
+  // pravděpodobnost, takže se můžou navzájem zastupovat a fitovat je zvlášť by dalo
+  // falešné optimum. Kritérium je **součet zlepšení nad konstantou přes všech 5 linií**:
+  // NB má opravovat hlavně chvosty (8.5, 12.5), což by jediná linie 10.5 neukázala.
+  if (process.argv.includes("--corners-grid-nb")) {
+    const LINES = [8.5, 9.5, 10.5, 11.5, 12.5];
+    const skill = (rows: ReturnType<typeof backtestCorners>) => {
+      let sum = 0;
+      let ece = 0;
+      for (const line of LINES) {
+        const c = cornerCalibration(rows, line);
+        sum += c.baseLogloss - c.logloss;
+        ece += (c.ece ?? 0) / LINES.length;
+      }
+      return { sum, ece };
+    };
+    const ts = [0.5, 0.3, 0.15];
+    const vs = [1.0, 1.05, 1.1, 1.15, 1.2, 1.3];
+    console.log("\n=== Grid NB (Σ zlepšení nad konstantou přes 5 linií / ⌀ ECE) ===");
+    console.log("t\\v   " + vs.map((v) => v.toFixed(2).padStart(15)).join(""));
+    for (const t of ts) {
+      const cells: string[] = [];
+      for (const v of vs) {
+        const r = backtestCorners(history, {
+          seasons,
+          minMatches,
+          tuning: { base: DEFAULT_TUNING, totalSpread: t, varianceRatio: v },
+        });
+        const s = skill(r);
+        cells.push(`${s.sum >= 0 ? "+" : ""}${s.sum.toFixed(4)}/${s.ece.toFixed(3)}`.padStart(15));
+      }
+      console.log(`${t.toFixed(2).padEnd(6)}${cells.join("")}`);
+    }
+    console.log(
+      "(VYŠŠÍ součet = lepší, nižší ECE = lepší; v=1.00 je Poisson = dnešní stav.\n" +
+        " Podmíněnou disperzi vytiskne `--corners`; dosazovat ji rovnou ale nejde – tohle je fit.)"
     );
     return;
   }

@@ -128,6 +128,12 @@ export interface CornerTuning {
   base: PredictTuning;
   /** Útlum rozptylu součtu λ (viz `dampenCornerTotal`). `1` = vypnuto. */
   totalSpread: number;
+  /**
+   * Podmíněná overdisperze pro negativně binomické rozdělení (`Var = μ × v`).
+   * `1` = přesný Poisson. Fituje se `--corners-grid-nb`, ne dosazením naměřeného
+   * poměru – viz `overProbNegBin` a `pearsonDispersion`.
+   */
+  varianceRatio: number;
 }
 
 /**
@@ -145,10 +151,28 @@ export interface CornerTuning {
  * **hůř** než 0.6640 v optimu. To je důkaz, že týmový signál v rohách existuje – ale je
  * malý: z celkových 0.0065 nad globální konstantou dělá **0.0040 samotná znalost ligy**
  * a jen **0.0025 informace o týmech**.
+ *
+ * `varianceRatio = 1.2` = **negativně binomické rozdělení** místo Poissonu, fitnuto
+ * `--corners-grid-nb` (2D grid společně s `totalSpread` – obojí hýbe šířkou výsledné
+ * pravděpodobnosti, takže fitovat je zvlášť by dalo falešné optimum). Sedí k naměřené
+ * **podmíněné** disperzi (Pearson **1.137**, `pearsonDispersion`; marginální 1.169 je
+ * nadhodnocená o rozptyl λ mezi zápasy). Hold-out 2025 (grid běžel na 2024) – NB porazilo
+ * Poisson na **všech pěti liniích**, a přesně tam, kde mělo, tedy v **chvostech**:
+ *
+ *   linie   log-loss nad konstantou    ECE
+ *   8.5     +0.0076 → +0.0082          0.0206 → 0.0228   (jediné zhoršení)
+ *   9.5     +0.0066 → +0.0068          0.0154 → 0.0118
+ *   10.5    +0.0074 → +0.0076          0.0154 → 0.0129
+ *   11.5    +0.0059 → +0.0063          0.0138 → 0.0059
+ *   12.5    +0.0032 → +0.0042          0.0215 → 0.0046   (4.7× lepší)
+ *
+ * Na skillu je to málo (+0.0024 součtem přes linie), na **kalibraci krajních linií hodně** –
+ * a krajní linie jsou u rohů právě to, co trh nabízí nejšířeji (10.25 vs 10.5 vs 11.5).
  */
 export const DEFAULT_CORNER_TUNING: CornerTuning = {
   base: DEFAULT_TUNING,
   totalSpread: 0.3,
+  varianceRatio: 1.2,
 };
 
 /** Predikce rohů z už spočítaných hodnot metrik obou týmů. Čistá funkce. */
@@ -196,6 +220,41 @@ export function overProb(lambdaTotal: number, line: number): number {
   return clamp(1 - cdf, 1e-6, 1 - 1e-6);
 }
 
+/**
+ * Totéž **negativně binomickým rozdělením** – Poisson s „rozmazaným" λ (Poisson–Gamma směs).
+ *
+ * Proč: Poisson tvrdí `rozptyl = průměr`, ale u rohů je poměr **1.17** (změřeno, stabilní
+ * napříč sezónami). Zápas s očekávanými 10 rohy jich reálně dá 4 i 18 častěji, než Poisson
+ * připouští → **podstřelené chvosty**, a to jsou přesně krajní linie (8.5, 12.5), kde je
+ * u sázení nejvíc prostoru. NB tuhle extra variabilitu má přímo v parametrizaci.
+ *
+ * `varianceRatio` (v) = kolikrát je rozptyl větší než průměr; `v ≤ 1` vrací **přesně** Poisson
+ * (no-op, žádná ztráta přesnosti). Vnitřně `Var = μ + μ²/r` → velikost `r = μ/(v−1)`, takže
+ * `Var = μ·v`. Počítá se rekurentně (`P(k) = P(k−1) × (k−1+r)/k × q`) → žádné gamma funkce
+ * a žádná ztráta přesnosti pro velká `r`.
+ *
+ * Pozor na interpretaci: `v` tu je **podmíněná** overdisperze (rozptyl kolem λ *jednoho*
+ * zápasu), ne ta, co vyleze z `dispersion()` přes celý dataset – v té je navíc rozptyl
+ * λ mezi zápasy. Proto se fituje gridem, ne dosazením naměřeného čísla (viz `pearsonDispersion`).
+ */
+export function overProbNegBin(
+  mu: number,
+  line: number,
+  varianceRatio: number
+): number {
+  if (varianceRatio <= 1) return overProb(mu, line);
+  const r = mu / (varianceRatio - 1); // Var = μ + μ²/r = μ·v
+  const q = mu / (r + mu);
+  const need = Math.floor(line) + 1;
+  let term = Math.pow(r / (r + mu), r); // P(0)
+  let cdf = term;
+  for (let k = 1; k < need; k++) {
+    term = (term * (k - 1 + r) * q) / k;
+    cdf += term;
+  }
+  return clamp(1 - cdf, 1e-6, 1 - 1e-6);
+}
+
 /** Řádek backtestu rohů: predikce + skutečnost (protějšek `PredictionRow`). */
 export interface CornerRow {
   fixtureId: number;
@@ -207,6 +266,12 @@ export interface CornerRow {
   lambdaHome: number;
   lambdaAway: number;
   lambdaTotal: number;
+  /**
+   * Čím se z λ počítaly pravděpodobnosti (`1` = Poisson). Nese se na řádku ze stejného
+   * důvodu jako `rho`/`sharpen` na `PredictionRow`: aby šlo poznat, jakým rozdělením
+   * byl řádek vyhodnocen, a nemíchat v jednom měření dvě různá.
+   */
+  varianceRatio: number;
   /** Skutečné rohy (z football-data, sloupce `HC`/`AC`). */
   actualHome: number;
   actualAway: number;
@@ -307,6 +372,7 @@ export function backtestCorners(
       lambdaHome: p.lambdaHome,
       lambdaAway: p.lambdaAway,
       lambdaTotal: p.lambdaTotal,
+      varianceRatio: tuning.varianceRatio,
       actualHome,
       actualAway,
       actualTotal: actualHome + actualAway,
@@ -359,7 +425,9 @@ const BIN_EDGES = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
  */
 export function cornerCalibration(rows: CornerRow[], line: number): CornerCalibration {
   const points = rows.map((r) => ({
-    p: overProb(r.lambdaTotal, line),
+    // Rozdělení bere z řádku, ne z globální konstanty → v jednom měření se nemůžou
+    // potkat Poissonovy a NB řádky vyhodnocené jinak, než jak vznikly.
+    p: overProbNegBin(r.lambdaTotal, line, r.varianceRatio),
     hit: r.actualTotal > line,
   }));
   const n = points.length;
@@ -401,6 +469,24 @@ export function cornerCalibration(rows: CornerRow[], line: number): CornerCalibr
  * Bez tohohle čísla se kalibrace špatně interpretuje (nevíš, jestli je chyba v λ, nebo
  * v tvaru rozdělení).
  */
+/**
+ * **Podmíněná** overdisperze (Pearsonova statistika): `⌀ (skutečnost − λ)² / λ`.
+ *
+ * Proč nestačí `dispersion()`: ta měří rozptyl přes celý dataset, do kterého se počítá
+ * i **rozptyl λ mezi zápasy** (`Var_marg = ⌀λ + Var(λ)`). Kdyby model rozlišoval zápasy
+ * hodně, vyšel by poměr > 1, i kdyby byl každý jednotlivý zápas dokonale Poissonův.
+ * Tahle statistika dělí odchylku vlastní λ toho zápasu, takže měří **jen** to, co
+ * negativně binomické rozdělení opravuje. `≈ 1` = Poisson stačí, `> 1` = NB má co dělat.
+ */
+export function pearsonDispersion(rows: CornerRow[]): number {
+  const usable = rows.filter((r) => r.lambdaTotal > 0);
+  if (usable.length === 0) return 0;
+  return (
+    usable.reduce((a, r) => a + (r.actualTotal - r.lambdaTotal) ** 2 / r.lambdaTotal, 0) /
+    usable.length
+  );
+}
+
 export function dispersion(rows: CornerRow[]): { mean: number; variance: number; ratio: number } {
   const n = rows.length;
   if (n === 0) return { mean: 0, variance: 0, ratio: 0 };
