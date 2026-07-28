@@ -231,6 +231,19 @@ model FixturePrediction {
   oddsCloseOver25  Float?
   oddsCloseUnder25 Float?
   oddsCloseAt      DateTime?
+  /// ČASOVÁ ŘADA kurzů (`lib/picks/oddsSeries.ts`): jak se linie hýbala od otevření
+  /// k výkopu. Dva snímky výše řeknou *kolik* se hnula, řada *kdy* – a „hnulo se to
+  /// hodinu před výkopem" (peníze) je něco jiného než „hned po otevření" (dorovnání).
+  /// Slouží ke steamu, k robustnímu odhadu zavření a jako kontext k tipu.
+  ///
+  /// Ukládá se KOMPAKTNÍ bod (sharp kniha + nejlepší cena + O/U, ~100 B), NE celé knihy:
+  /// plný snímek každou hodinu po 72 h by dal 2.8 GB/rok proti 500 MB na Neon free tier.
+  /// Takhle to vyjde na ~12 MB/rok. Plné knihy zůstávají u dvou snímků, na kterých stojí
+  /// EV a CLV. Kadence se zužuje k výkopu (12 h → 3 h → 1 h), délka je stropovaná.
+  oddsSeries   Json?
+  /// Kdy do řady naposled přibyl bod – řídí kadenci (`seriesDue`). Bez toho by se
+  /// interval musel dopočítávat z JSON pole při každém běhu cronu.
+  oddsSeriesAt DateTime?
 
   @@index([leagueId, kickoff])
   @@index([status, kickoff])

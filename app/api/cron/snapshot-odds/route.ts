@@ -4,16 +4,18 @@ import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
 
-// Snímky kurzů (otevírací + zavírací) pro CLV. Běží **hodinově**, na rozdíl od
-// ostatních cronů – a je to nutnost, ne ladění:
+// Snímky kurzů pro CLV: otevírací, zavírací a body ČASOVÉ ŘADY. Běží **hodinově**,
+// na rozdíl od ostatních cronů – a je to nutnost, ne ladění:
 //
-// Predikční cron jede 1×/den ve 04:30 UTC. Zavírací okno je 12 h před výkopem, takže
-// večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 ještě 15 h daleko → mimo okno,
-// a další běh přijde až po výkopu. Zavírací snímek by tedy dostávaly **jen zápasy
-// s výkopem mezi 04:30 a 16:30 UTC** a CLV by se počítalo z vychýlené menšiny.
+// Predikční cron jede 1×/den ve 04:30 UTC. Zavírací okno je 3 h před výkopem, takže
+// večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 daleko mimo okno a další běh by
+// přišel až po výkopu. Zavírací snímek by tedy dostávaly jen zápasy s výkopem dopoledne
+// a CLV by se počítalo z vychýlené menšiny.
 //
-// Kvótu to nezdraží: každý zápas dostane nejvýš dva snímky za život (guard v DB),
-// častější běh jen mění, KDY se ta dvě volání provedou. Výběr zápasů je čistě DB dotaz.
+// Otevírací a zavírací snímek zůstávají **jeden za život** (guard v DB). Navíc přibývá
+// časová řada s kadencí, která se zužuje k výkopu (12 h → 3 h → 1 h) – ta stojí ~340
+// volání/den a je to jediná položka, která proti dřívějšku kvótu zdražila. Výběr zápasů
+// je čistě DB dotaz; co se s nimi stane, rozhoduje čistá `snapshotPlan`.
 //
 // 60 s = strop Vercel Hobby plánu (vyšší hodnota se ignoruje). Proto je i default
 // `SNAPSHOT_LIMIT` malý – radši víc krátkých běhů než jeden zabitý timeoutem.

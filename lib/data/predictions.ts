@@ -34,8 +34,15 @@ import {
   saveBenchmark,
   saveOdds,
   saveClosingOdds,
+  saveOddsSeries,
   fixturesNeedingOdds,
 } from "./predictionStore";
+import {
+  appendPoint,
+  parseSeries,
+  seriesPointFrom,
+  snapshotPlan,
+} from "@/lib/picks/oddsSeries";
 import { logError } from "@/lib/logError";
 
 /**
@@ -301,13 +308,26 @@ export async function runPredictUpcoming(
  * na zápas), takže 40 se pohodlně vejde. Zbytek dobere další běh – fronta se nikam
  * neztratí, `fixturesNeedingOdds` ji spočítá znovu.
  */
-const SNAPSHOT_LIMIT = 40;
+/**
+ * Kolik zápasů se v jednom běhu vůbec **zváží** (ne kolik se jich stáhne).
+ *
+ * Od zavedení časové řady filtruje limit **kandidáty**, ne potřeby: většina zápasů
+ * v okně nepotřebuje nic a `snapshotPlan` je zahodí bez volání API. Zvýšení je proto
+ * skoro zadarmo (pár desítek malých řádků ze selectu) a chrání před tím, aby při
+ * nabitém víkendu zůstal konec seznamu bez prvního snímku. Reálně je „due" ~16/hod.
+ */
+const SNAPSHOT_LIMIT = 120;
 
 /**
- * **Snímky kurzů** – oba (otevírací + zavírací) pro zápasy v okně před výkopem.
+ * **Snímky kurzů** – otevírací, zavírací a body **časové řady** pro zápasy v okně.
+ *
+ * Všechny tři účely obsluhuje **jeden fetch**: `/odds` vrací všechno naráz, takže když
+ * zápas potřebuje třeba jen bod řady, stojí to stejně jedno volání – a když zrovna padne
+ * i zavírací okno, uloží se z téže odpovědi obojí. Co se má stát, rozhoduje čistá
+ * `snapshotPlan` (`lib/picks/oddsSeries.ts`), takže je to testovatelné bez DB.
  *
  * Proč vlastní cron a ne součást `runPredictUpcoming`: predikční cron běží 1×/den ve
- * 04:30 UTC, takže by zavírací snímek (okno 12 h) dostaly **jen zápasy s výkopem mezi
+ * 04:30 UTC, takže by zavírací snímek dostaly **jen zápasy s výkopem mezi
  * 04:30 a 16:30 UTC** – večerní zápasy, tedy většina, nikdy. CLV by pak stálo na
  * vychýlené menšině. Tenhle běh je proti tomu levný (jen `/odds`, žádné `compareTeams`)
  * a jezdí **hodinově**.
@@ -326,44 +346,69 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
   due: number;
   open: number;
   close: number;
+  /** Kolik zápasů dostalo nový bod časové řady. */
+  series: number;
   empty: number;
   errors: number;
 }> {
-  const due = await fixturesNeedingOdds({
+  const now = new Date();
+  const candidates = await fixturesNeedingOdds({
     // Jen klubové ligy: reprezentace kurzy prakticky nemají a napříč konfederacemi
     // by stejně nebyly srovnatelné (týž důvod jako u benchmarku).
     leagueIds: PREDICTION_LEAGUES,
-    now: new Date(),
+    now,
     lookaheadHours: ODDS_LOOKAHEAD_HOURS,
-    closingHours: ODDS_CLOSING_HOURS,
     limit,
   });
 
   let open = 0;
   let close = 0;
+  let series = 0;
   let empty = 0;
   let errors = 0;
-  for (const item of due) {
+  let due = 0;
+
+  for (const item of candidates) {
+    // Čisté rozhodnutí: co se má z tohohle zápasu udělat. Zápas, který nepotřebuje nic,
+    // se kvóty ani nedotkne.
+    const plan = snapshotPlan(item, now, ODDS_CLOSING_HOURS);
+    if (!plan.fetch) continue;
+    due++;
     try {
+      // JEDEN fetch pro všechny tři účely – `/odds` vrací všechno naráz, takže
+      // otevírací snímek, zavírací snímek i bod řady stojí dohromady jedno volání.
       const odds = await fetchOdds(item.fixtureId);
       if (!odds) {
         // API pro zápas kurzy nemá (běžné daleko před výkopem i u menších lig).
         empty++;
         continue;
       }
-      if (item.need === "open") {
+      if (plan.open) {
         await saveOdds(item.fixtureId, odds);
         open++;
-      } else {
+      }
+      if (plan.close) {
         await saveClosingOdds(item.fixtureId, odds);
         close++;
       }
+      if (plan.series) {
+        const minutesToKickoff = (item.kickoff.getTime() - now.getTime()) / 60_000;
+        const point = seriesPointFrom(odds.books ?? [], minutesToKickoff);
+        if (point) {
+          await saveOddsSeries(
+            item.fixtureId,
+            appendPoint(parseSeries(item.oddsSeries), point),
+            now
+          );
+          series++;
+        }
+      }
     } catch (e) {
       errors++;
-      logError("snapshot-odds", e, { fixtureId: item.fixtureId, need: item.need });
+      logError("snapshot-odds", e, { fixtureId: item.fixtureId, plan });
     }
   }
-  return { due: due.length, open, close, empty, errors };
+  return { due, open, close, series, empty, errors };
 }
 
 /** Dotáhne výsledky u predikcí, jejichž zápas už proběhl (batch po 20 ID). */

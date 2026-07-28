@@ -674,6 +674,29 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   drží dva snímky na zápas za život, častější běh mění jen *kdy*. Běh **vrací
   `errors`** místo tichého `catch` — přesně tahle tichost stála rok bez jediného kurzu.
   `runPredictUpcoming` kurzy **záměrně nebere** (jeden vlastník zápisu).
+- **ČASOVÁ ŘADA KURZŮ** (`lib/picks/oddsSeries.ts`, čisté + testy; sloupce `oddsSeries`
+  /`oddsSeriesAt`) – dva snímky řeknou *kolik* se linie hnula, řada *kdy*. A „hnulo se to
+  hodinu před výkopem" (peníze, sestavy) je něco jiného než „hned po otevření" (dorovnání
+  otevírací chyby). Slouží ke **steamu**, k **robustnímu odhadu zavření** (poslední bod
+  nezávisí na tom, jestli cron stihl okno) a jako kontext k tipu.
+  - **Ukládá se KOMPAKTNÍ bod, ne celé knihy** – rozhodnutí o životaschopnosti, ne
+    o eleganci. Spočítáno: plný snímek 13 knih × všechny trhy (~5 kB) každou hodinu po
+    72 h = **2.8 GB/rok** proti **500 MB** na Neon free tier. Kompaktní bod (sharp kniha
+    + nejlepší cena + O/U, ~100 B) se zužující se kadencí = **12 MB/rok**. Plné knihy
+    zůstávají u dvou snímků, na kterých stojí EV a CLV.
+  - **Kadence se zužuje k výkopu** (`snapshotIntervalMinutes`): > 24 h po 12 h, 6–24 h
+    po 3 h, < 6 h hodinově → ~16 bodů na zápas. Daleko od výkopu se linie hýbe pomalu
+    a hustý sběr by platil kvótou za šum. **Cena: ~340 volání/den** (jediná položka,
+    která proti dřívějšku kvótu zdražila; celkem stále ~2 100 ze 7 500).
+  - **Jeden fetch pro tři účely.** `snapshotPlan` (čistá, testovaná bez DB) rozhodne, jestli
+    z odpovědi udělat otevírací snímek, zavírací snímek, bod řady, nebo víc z toho naráz.
+    Otevírací a zavírací zůstávají **jeden za život** – řada je navíc, ne místo nich.
+  - Ukládají se **syrové kurzy**, ne odmaržované pravděpodobnosti (táž zásada jako
+    u `oddsHome`): de-vig metodu jde změnit bez nového fetche.
+  - Čtení: `seriesDrift` (posun strany + `maxStep`, který odliší **skok** od plynulého
+    driftu), `lateMove` (pohyb v posledních N hodinách = steam), `closingPoint`.
+  - **Zatím se nikde nezobrazuje ani nevstupuje do CLV** – sběr běží, konzumenti přijdou
+    až na datech. Měnit `rowClv` teď by rozmazalo měření, které v září stojí za verdiktem.
 - **CLV (`lib/picks/clv.ts`, čisté + testy) = jediná zpětná vazba, která přijde HNED.**
   Na verdikt „má tip hranu?" z výsledků jsou potřeba stovky sázek (fotbal je z valné části
   náhoda); posun **zavírací linie** od našeho snímku je vidět po každém zápase. Kladné CLV
@@ -1529,6 +1552,10 @@ rekreační kniha do linie často nedává. To je jediný trh, kde nemáme jen l
 průměry. Zároveň je tam nejvyšší marže (5–9 %), takže verdikt stejně padne až z CLV.
 
 ### Hotovo 28. 7. (vše nasazené)
+- **Zavírací linie je konečně zavírací**: okno 12 h → **3 h**, cron **hodinově**
+  (`20 * * * *`). Dřív padal „zavírací" snímek 9–12 h před výkopem. 0 volání navíc.
+- **Časová řada kurzů** (`oddsSeries`) – kompaktní bod, kadence se zužuje k výkopu.
+  Jediná změna, která zdražila kvótu (~340 volání/den; celkem ~2 100 ze 7 500).
 - **AH diagnostika** (`lib/picks/asianHandicap.ts`) → **gólové trhy jsou uzavřené.**
   β₂ = 0.007 ± 0.039, po ligách nic. Padá s tím i „model jako korekce trhu".
 - **MODEL KARET** (`lib/picks/cards.ts`) – nejlepší změřený trh: +0.011…+0.024 na hold-outu,

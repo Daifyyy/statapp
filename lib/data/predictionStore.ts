@@ -161,50 +161,56 @@ export async function saveBenchmark(
   });
 }
 
-/** Zápas, kterému chybí snímek kurzu, a který z nich. */
-export interface OddsSnapshotNeed {
+/** Stav snímků jednoho zápasu – vstup pro čistou `snapshotPlan`. */
+export interface OddsSnapshotCandidate {
   fixtureId: number;
   kickoff: Date;
-  need: "open" | "close";
+  oddsFetchedAt: Date | null;
+  oddsCloseAt: Date | null;
+  oddsSeriesAt: Date | null;
+  /** Dosavadní časová řada (JSON sloupec) – parsuje ji `parseSeries`. */
+  oddsSeries: unknown;
 }
 
 /**
- * Zápasy, kterým chybí některý ze **dvou snímků kurzu** – vstup pro
+ * Zápasy v kurzovém okně i s tím, které snímky už mají – vstup pro
  * `/api/cron/snapshot-odds`.
  *
  * Řadí se podle výkopu vzestupně, protože **zavírací snímek je časově neopakovatelný**:
- * okno je 12 h a po výkopu už ho nic nedožene, kdežto otevírací má 60 h rezervy. Když
- * dojde rozpočet, mají tedy přednost ty nejbližší.
+ * po výkopu už ho nic nedožene, kdežto otevírací má desítky hodin rezervy. Když dojde
+ * limit, mají tedy přednost ty nejbližší.
  *
- * Čte jen DB (žádné volání API) → zápasy, které snímek už mají, se ani nedotknou kvóty.
+ * Čte jen DB (žádné volání API). Rozhodnutí „co s tímhle řádkem" dělá čistá `snapshotPlan`
+ * v `lib/picks/oddsSeries.ts` – zápas, který nic nepotřebuje, se kvóty ani nedotkne.
  */
 export async function fixturesNeedingOdds(opts: {
   leagueIds: number[];
   now: Date;
   lookaheadHours: number;
-  closingHours: number;
   limit: number;
-}): Promise<OddsSnapshotNeed[]> {
+}): Promise<OddsSnapshotCandidate[]> {
   const lookahead = new Date(opts.now.getTime() + opts.lookaheadHours * 3_600_000);
-  const closing = new Date(opts.now.getTime() + opts.closingHours * 3_600_000);
+  // Filtruje se JEN podle okna a výkopu; co se s řádkem má stát, rozhoduje čistá
+  // `snapshotPlan`. Kadence řady závisí na tom, jak daleko je výkop, a to se v Prisma
+  // `where` vyjádřit nedá – řádků je ale řádově desítky, takže rozhodnutí v paměti
+  // nic nestojí a je testovatelné bez DB.
   const rows = await prisma.fixturePrediction.findMany({
     where: {
       leagueId: { in: opts.leagueIds },
       kickoff: { gt: opts.now, lte: lookahead },
-      OR: [
-        { oddsFetchedAt: null },
-        { AND: [{ oddsCloseAt: null }, { kickoff: { lte: closing } }] },
-      ],
     },
-    select: { fixtureId: true, kickoff: true, oddsFetchedAt: true },
+    select: {
+      fixtureId: true,
+      kickoff: true,
+      oddsFetchedAt: true,
+      oddsCloseAt: true,
+      oddsSeriesAt: true,
+      oddsSeries: true,
+    },
     orderBy: { kickoff: "asc" },
     take: opts.limit,
   });
-  return rows.map((r) => ({
-    fixtureId: r.fixtureId,
-    kickoff: r.kickoff,
-    need: r.oddsFetchedAt == null ? "open" : "close",
-  }));
+  return rows;
 }
 
 /**
@@ -358,4 +364,23 @@ export async function getRecentSettledPredictions(
     take: limit,
   });
   return rows.map(toRow);
+}
+
+/**
+ * Uloží celou časovou řadu kurzů (skládá ji čistá `appendPoint`) a razítko posledního
+ * bodu. Píše se **celé pole**, ne přírůstek – JSON sloupec jinak neumí a řada je malá
+ * (~16 bodů × ~100 B). `oddsSeriesAt` řídí kadenci dalšího bodu.
+ */
+export async function saveOddsSeries(
+  fixtureId: number,
+  series: unknown,
+  takenAt: Date
+): Promise<void> {
+  await prisma.fixturePrediction.update({
+    where: { fixtureId },
+    data: {
+      oddsSeries: series as Prisma.InputJsonValue,
+      oddsSeriesAt: takenAt,
+    },
+  });
 }
