@@ -136,7 +136,20 @@ describe("verdikt", () => {
     const r = buildMatchReport(DOMINANT_HOME, DOMINATED_AWAY, TEAMS, { home: 0, away: 1 });
     expect(r.verdict).toContain("Sparta");
     expect(r.verdict).toContain("Slavia");
-    expect(r.verdict).toMatch(/neodpovídá průběhu|ovládli/);
+    expect(r.verdict).toContain("neodpovídá průběhu");
+  });
+
+  it("nemluví o „ovládnutí“ zápasu – verdikt stojí na nebezpečnosti, ne na držení", () => {
+    // Tým s třetinou míče, který si vytvořil dvakrát víc (reálný případ: Bournemouth
+    // 33 % držení, xG 1.78 vs 0.78). „Ovládli zápas“ by si odporovalo s Kontrolou hry.
+    const r = buildMatchReport(
+      { POSSESSION: 33, XG: 1.78 },
+      { POSSESSION: 67, XG: 0.78 },
+      TEAMS,
+      { home: 0, away: 1 }
+    );
+    expect(r.verdict).not.toContain("ovládli");
+    expect(r.verdict).toContain("vytvořili");
   });
 
   it("zasloužená výhra se pozná", () => {

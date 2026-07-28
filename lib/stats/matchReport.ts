@@ -336,8 +336,11 @@ function verdictOf(
   if (winner == null) {
     return `${better} si vytvořili víc, ale na výhru to nestačilo.`;
   }
+  // Záměrně **ne** „ovládli zápas": verdikt stojí na NEBEZPEČNOSTI, ne na držení míče.
+  // Tým si může vytvořit mnohem víc s třetinou míče (Bournemouth 33 % držení, xG 1.78
+  // vs 0.78) – a „ovládli" by si přímo odporovalo s pruhem Kontroly hry hned pod tím.
   return strong
-    ? `${better} zápas ovládli, ale body bere ${winner} – výsledek neodpovídá průběhu.`
+    ? `${better} si vytvořili mnohem víc, ale body bere ${winner} – výsledek neodpovídá průběhu.`
     : `${better} byli mírně lepší, přesto vyhráli ${winner}.`;
 }
 
