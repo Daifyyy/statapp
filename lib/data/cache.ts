@@ -146,6 +146,22 @@ export async function getCachedMatchStats(
   return new Map(rows.map((r) => [r.fixtureId, rowToMatchStat(r)]));
 }
 
+/**
+ * Metriky **jednoho zápasu** pro oba týmy z trvalé cache – klíčem je `fixtureId`, ne tým.
+ *
+ * `getCachedMatchStats` na to použít nejde: ta načte VŠECHNY zápasy jednoho týmu (stovky
+ * řádků), což je pro přehled jednoho zápasu zbytečně drahé. Vrací mapu `teamId → metriky`;
+ * prázdná mapa = zápas v cache není a volající si ho musí dotáhnout.
+ */
+export async function getCachedFixtureStats(
+  fixtureId: number
+): Promise<Map<number, MatchStat>> {
+  const rows = await prisma.matchStatCache.findMany({
+    where: { fixtureId, schemaVersion: { gte: MIN_READABLE_CACHE_VERSION } },
+  });
+  return new Map(rows.map((r) => [r.teamId, rowToMatchStat(r)]));
+}
+
 function toRow(teamId: number, context: MatchContext, ms: MatchStat) {
   return {
     teamId,

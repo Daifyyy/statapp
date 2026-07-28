@@ -12,7 +12,7 @@ import {
   refereeFactor,
   refereeSpread,
   DEFAULT_CARD_TUNING,
-  type CardBaseline,
+  type CardBaselines,
   type CardRow,
   type RefereeMatch,
 } from "./cards";
@@ -40,7 +40,10 @@ function values(
   return out;
 }
 
-const BASE: CardBaseline = { home: 2.0, away: 2.4 };
+const BASE: CardBaselines = {
+  cards: { home: 2.0, away: 2.4 },
+  fouls: { home: 10.8, away: 11.3 },
+};
 
 describe("cardCount", () => {
   it("sečte žluté a červené", () => {
@@ -130,7 +133,10 @@ describe("expectedCards", () => {
   it("průměrný tým proti průměrnému dá ligové měřítko", () => {
     // Baseline bez home/away rozpadu – `values()` dává stejné číslo do všech variant,
     // takže „průměrný tým" znamená jen tady rovnost s ligou na obou stranách.
-    const flat: CardBaseline = { home: 2.2, away: 2.2 };
+    const flat: CardBaselines = {
+      cards: { home: 2.2, away: 2.2 },
+      fouls: { home: 11, away: 11 },
+    };
     const avg = values({ CARDS: 2.2, CARDS_AGAINST: 2.2 });
     expect(expectedCards(avg, avg, true, flat)!).toBeCloseTo(2.2, 5);
     expect(expectedCards(avg, avg, false, flat)!).toBeCloseTo(2.2, 5);
@@ -166,19 +172,19 @@ describe("expectedCards", () => {
 
 describe("dampenCardTotal", () => {
   it("t = 1 je přesný no-op", () => {
-    expect(dampenCardTotal(3, 2, BASE, 1)).toEqual([3, 2]);
+    expect(dampenCardTotal(3, 2, BASE.cards, 1)).toEqual([3, 2]);
   });
 
   it("drží ROZDÍL a stlačuje SOUČET k ligovému průměru", () => {
-    const [h, a] = dampenCardTotal(4, 2, BASE, 0.5);
+    const [h, a] = dampenCardTotal(4, 2, BASE.cards, 0.5);
     expect(h - a).toBeCloseTo(2, 10); // rozdíl beze změny
-    const ref = BASE.home + BASE.away;
+    const ref = BASE.cards.home + BASE.cards.away;
     expect(h + a).toBeCloseTo(ref + (6 - ref) * 0.5, 10);
   });
 
   it("t = 0 predikuje přesně ligový průměr (při nulovém rozdílu)", () => {
-    const [h, a] = dampenCardTotal(3, 3, BASE, 0);
-    expect(h + a).toBeCloseTo(BASE.home + BASE.away, 10);
+    const [h, a] = dampenCardTotal(3, 3, BASE.cards, 0);
+    expect(h + a).toBeCloseTo(BASE.cards.home + BASE.cards.away, 10);
   });
 });
 
@@ -197,7 +203,7 @@ describe("predictCards", () => {
     // Při t = 0 je týmová část přesně ligový průměr; faktor sudího ho musí pořád zvednout.
     const tuning = { ...DEFAULT_CARD_TUNING, totalSpread: 0 };
     const p = predictCards(avg, avg, { factor: 1.3, sample: 50 }, BASE, tuning);
-    expect(p.lambdaTotal).toBeCloseTo((BASE.home + BASE.away) * 1.3, 6);
+    expect(p.lambdaTotal).toBeCloseTo((BASE.cards.home + BASE.cards.away) * 1.3, 6);
   });
 
   it("bez dat vrací available:false", () => {
@@ -333,12 +339,12 @@ describe("buildRefereeIndex", () => {
 describe("cardBaselineFor", () => {
   it("bere PŘEDCHOZÍ sezónu, aby do predikce neprotekl hodnocený ročník", () => {
     const b = cardBaselineFor(history(), 39, 2024);
-    expect(b.home).toBeCloseTo(2, 6);
-    expect(b.away).toBeCloseTo(3, 6);
+    expect(b.cards.home).toBeCloseTo(2, 6);
+    expect(b.cards.away).toBeCloseTo(3, 6);
   });
 
   it("bez dost historie spadne na default", () => {
-    expect(cardBaselineFor([], 39, 2024)).toEqual({ home: 1.9, away: 2.2 });
+    expect(cardBaselineFor([], 39, 2024).cards).toEqual({ home: 1.9, away: 2.2 });
   });
 });
 

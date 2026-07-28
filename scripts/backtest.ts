@@ -204,6 +204,12 @@ function attachOdds(history: HistoryMatch[], league: number, season: number): vo
       m.homeMetrics = { ...m.homeMetrics, CARDS: cardCount(c.homeYellow, c.homeRed) };
       m.awayMetrics = { ...m.awayMetrics, CARDS: cardCount(c.awayYellow, c.awayRed) };
     }
+    // Fauly – vstup do modelu karet vedle karet samotných (jich je ~11 na tým a zápas
+    // proti ~2 kartám, takže nesou tutéž informaci s menším šumem).
+    if (o.facts?.fouls) {
+      m.homeMetrics = { ...m.homeMetrics, FOULS: o.facts.fouls.home };
+      m.awayMetrics = { ...m.awayMetrics, FOULS: o.facts.fouls.away };
+    }
     // Jen jako ZÁLOHA: primární zdroj jmen sudích je `/fixtures` (viz `loadSeason`),
     // který pokrývá skoro vše. Jména se stejně sjednocují `normalizeRefereeName`,
     // takže se dva zdroje nemůžou rozejít na dvě identity téhož rozhodčího.
@@ -593,12 +599,14 @@ async function main() {
           varianceRatio: nums(kt)[2] ?? DEFAULT_CARD_TUNING.varianceRatio,
           refShrink: nums(kt)[3] ?? DEFAULT_CARD_TUNING.refShrink,
           refereeWeight: nums(kt)[4] ?? DEFAULT_CARD_TUNING.refereeWeight,
+          foulWeight: nums(kt)[5] ?? DEFAULT_CARD_TUNING.foulWeight,
         }
       : DEFAULT_CARD_TUNING;
     if (kt)
       console.log(
         `Ladění karet: k=${kTuning.base.shrinkMatches}, t=${kTuning.totalSpread}, ` +
-          `v=${kTuning.varianceRatio}, refK=${kTuning.refShrink}, refW=${kTuning.refereeWeight}`
+          `v=${kTuning.varianceRatio}, refK=${kTuning.refShrink}, ` +
+          `refW=${kTuning.refereeWeight}, foulW=${kTuning.foulWeight}`
       );
 
     const kRows = backtestCards(history, { seasons, minMatches, tuning: kTuning });
@@ -805,6 +813,35 @@ async function main() {
       console.log(`${r.label.padEnd(7)}${cells.join("")}`);
     }
     console.log("(log-loss/ECE, nižší = lepší; první řádek = model BEZ rozhodčího)");
+    return;
+  }
+
+  // Grid váhy FAULŮ (`--cards-grid-fouls`): pomůžou data ze zápasu modelu karet?
+  // Faulů je ~11 na tým a zápas proti ~2 kartám → měly by být méně zašuměný odhad téhož
+  // („jak tvrdě strana hraje"), přesně jako xG proti gólům. Grid jde od 0 (jen karty)
+  // do 1 (jen fauly) – obě degenerace, takže je vidět, jestli je optimum vnitřní.
+  // Měří se přes VŠECHNY linie, ne jen hlavní: u overdisperze rozhoduje chvost.
+  if (process.argv.includes("--cards-grid-fouls")) {
+    const CARD_LINES = [2.5, 3.5, 4.5, 5.5, 6.5];
+    console.log("\n=== Grid váhy faulů v modelu karet ===");
+    console.log("foulW   " + CARD_LINES.map((l) => l.toFixed(1).padStart(9)).join("") + "     Σ skill");
+    for (const w of [0, 0.15, 0.3, 0.5, 0.7, 1.0]) {
+      const rows = backtestCards(history, {
+        seasons,
+        minMatches,
+        tuning: { ...DEFAULT_CARD_TUNING, foulWeight: w },
+      });
+      const cells: string[] = [];
+      let sum = 0;
+      for (const line of CARD_LINES) {
+        const c = cardCalibration(rows, line);
+        const gain = c.baseLogloss - c.logloss;
+        sum += gain;
+        cells.push(((gain >= 0 ? "+" : "") + gain.toFixed(4)).padStart(9));
+      }
+      console.log(`${w.toFixed(2).padEnd(8)}${cells.join("")}   ${sum.toFixed(4)}`);
+    }
+    console.log("(zisk log-lossu nad konstantou po liniích; vyšší = lepší. 0 = jen karty, 1 = jen fauly)");
     return;
   }
 

@@ -283,6 +283,26 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   (skóre + predikovaná strana 1X2 + `outcomeHit`, sdílí `argmaxOutcome`/`actualOutcome` s
   `trackRecord.ts`). **FREE** (jen historie, žádný budoucí tip). Reprezentačním řádkům dohledá
   konfederace (`getNationalConfedMap`). Mock: `mockSettledPredictions` → funguje bez DB/API.
+- **Přehled zápasu ve Výsledcích** (`lib/stats/matchReport.ts` – čisté + testy, endpoint
+  `/api/match-report`, UI `MatchReportPanel.tsx`): po rozkliknutí řádku **kategorický obraz
+  odehraného zápasu** místo devatenácti řádků syrových čísel – verdikt jednou větou, chipy
+  povahy zápasu (otevřený/uzavřený, jednostranný/vyrovnaný, ostrý/klidný), čtyři rozměry
+  jako protilehlé pruhy (**Kontrola hry / Nebezpečnost / Proměňování / Důraz**) a 2–4
+  konkrétní pozorování.
+  - **Rozměry jsou PODÍL, ne absolutní výkon** (součet obou stran je vždy 10, kryto testem;
+    druhá strana se dopočítá až ze zaokrouhlené první, jinak dá 6.4 + 3.7 = 10.1).
+  - **Vyrovnanost se čte z nebezpečnosti, ne z výsledku** – smysl celé věci je pojmenovat
+    rozpor mezi hrou a skóre („ovládli zápas, ale body bere soupeř"), což je přesně to,
+    co se ze syrové tabulky čte nejhůř.
+  - **Proměňování bez xG NENÍ dostupné** – „efektivita" bez očekávání je jen skóre.
+    Každý rozměr degraduje sám za sebe (`available`), nikdy se nic nedopočítává odhadem;
+    bez držení míče spadne Kontrola na přesné přihrávky, bez xG jede Nebezpečnost ze střel.
+  - **Líné a FREE**: statistiky se tahají až na vyžádání (`getMatchStatsPair`, 1 volání,
+    vrací obě strany). **Čte, ale NEZAPISUJE do `MatchStatCache`** – zápis potřebuje
+    `season`/`isNeutral`/`competitive`, které tahle cesta nezná, a špatná `season` by tiše
+    otrávila okna, na kterých stojí λ predikcí. Repeat views pokrývá CDN cache routy
+    (1 h / 24 h stale) a většina prokliknutých zápasů v cache už je (dotáhlo je Porovnání).
+  - Tlačítko je **mimo `Link`** řádku – uvnitř by klik navigoval do Porovnání.
 - **Deep-link target (klub i reprezentace):** `compareMode` + `home/awayCompareLeagueId`
   (na `UpcomingFixture`, `MatchPick` i `SettledMatch`). Klub → CLUB mód, „liga" = `leagueId`
   u obou. Reprezentace → **NATIONAL mód, kde „ligou" každého týmu je jeho konfederace** – tu
@@ -767,8 +787,8 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     bereme rozpisy → **0 volání navíc** při běžném provozu). Jména se sjednocují
     `normalizeRefereeName` – API píše „R. Jones", football-data „R Jones", a bez toho by
     se týž sudí rozpadl na dvě identity s půlkou vzorku každá.
-  - **Skill nad konstantou (hold-out 2025, fit běžel jen na 2024): +0.0100 … +0.0230** na
-    liniích 2.5–6.5, ECE 0.011–0.027. Na plném vzorku +0.0147…+0.0265. To je **3–8× víc
+  - **Skill nad konstantou (hold-out 2025, fit běžel jen na 2024): +0.0108 … +0.0242** na
+    liniích 2.5–6.5, ECE 0.011–0.027. Na plném vzorku +0.0153…+0.0272. To je **3–8× víc
     než rohy** (+0.003…+0.008) a srovnatelné až lepší než týmové totaly (+0.013…+0.027).
     Úroveň λ sedí (4.30 vs. 4.23 skutečnost, mírné nadsazení ~1.5 %).
   - **Overdisperzní jako rohy** → negativně binomické (`varianceRatio = 1.2`, Pearson
@@ -790,6 +810,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
        kdyby o sudím nevěděl vůbec** (−0.0152). Optimum je ploché mezi ~25 a ~100,
        mimo ten pás rychle padá. **Syrový průměr rozhodčího škodí** – tohle je hlavní
        poučení a platí obecně pro každý vstup s malým vzorkem na kategorii.
+  - **Fauly ze zápasu model zlepšují, ale málo** (`foulWeight = 0.3`, `--cards-grid-fouls`).
+    Hypotéza byla, že budou přesnější než karty (~11 na tým a zápas proti ~2 → menší
+    vzorkový šum, jako xG proti gólům). **Potvrdila se jen zčásti:** samotné fauly jsou
+    zřetelně **horší** než samotné karty (`foulWeight = 1` → Σ skill 0.0906 vs 0.0935),
+    protože nesou jen část informace – rozhodčí kartuje i za protesty, zdržování a fauly
+    na poslední obránci. Přimíchat se ale vyplatí: hold-out 2025 dá **+0.0050** Σ skillu
+    proti nule, a to **na všech pěti liniích**. Pořadí přínosů: **rozhodčí (+0.0114) ≫
+    fauly (+0.0050)**. Míchá se **vlastní funkcí, ne `blend` z `predict.ts`** – ta bere
+    `ref` z prvního argumentu a při chybějící první straně by λ postavila na faulovém
+    měřítku (~11 místo ~2) a nic by nespadlo.
   - **Kurzy na karty se od 28. 7. 2026 SNÍMAJÍ** (`BookOdds.cards`, `LineMarket` `"cards"`,
     CLV strany `cardsOver`/`cardsUnder`). **0 volání navíc** – jsou v téže odpovědi
     `/odds`, a `saveOdds`/`saveClosingOdds` ukládají `books` jako JSON vcelku, takže se
@@ -1476,7 +1506,7 @@ Otevřená zůstává jediná větev: **trhy, kde model něco umí a kde jsme je
 | trh | skill nad konstantou | kurzy | ověřeno proti ceně |
 |---|---|---|---|
 | 1X2 | +0.053 | ✅ | **ANO — prohráváme** |
-| **Karty** | **+0.010…+0.023** (hold-out; z toho sudí +0.011) | ✅ od 28. 7. | ne |
+| **Karty** | **+0.011…+0.024** (hold-out; sudí +0.011, fauly +0.005) | ✅ od 28. 7. | ne |
 | **Týmové totaly** | **+0.013…+0.027** (nejlíp linie 1.5) | ✅ od 27. 7. | ne |
 | Over 2.5 | +0.009 | ✅ | částečně (ROI −1.8 %, CI přes nulu) |
 | Rohy | +0.003…+0.008 | ✅ od 27. 7. | ne |

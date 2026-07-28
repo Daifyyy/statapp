@@ -38,6 +38,7 @@ import { normalizeUpcomingFixtures, pickRound } from "./fixtures";
 import {
   cachedJson,
   cachedJsonMemo,
+  getCachedFixtureStats,
   getCachedMatchStats,
   saveMatchStats,
   MIN_READABLE_CACHE_VERSION,
@@ -1113,4 +1114,47 @@ async function mapLimit<T>(
     }
   });
   await Promise.all(workers);
+}
+
+/**
+ * Metriky obou stran jednoho odehraného zápasu – vstup pro `buildMatchReport`.
+ *
+ * **Líné a trvale cachované**, stejnou cestou jako porovnání týmů: nejdřív se sáhne do
+ * `MatchStatCache` (klíč `fixtureId`), a teprve když tam zápas není, zavolá se
+ * `/fixtures/statistics` = **1 volání, které vrací OBĚ strany**. Odpověď se uloží pro
+ * oba týmy naráz – stejný důvod jako v `assemble`: zahodit druhou půlku znamená stáhnout
+ * týž zápas podruhé.
+ *
+ * **Čte, ale NEZAPISUJE do `MatchStatCache`** – a je to vědomé. Zápis potřebuje `season`,
+ * `isNeutral` a `competitive`, které tahle cesta spolehlivě nezná (má jen fixtureId a
+ * týmy). Špatná `season` by přitom tiše otrávila okna, na kterých stojí λ predikcí –
+ * což je řádově horší než občasné volání navíc. Zápasy, které si uživatel prokliká,
+ * navíc většinou v cache **už jsou** (dotáhlo je porovnání týmů), a opakované zobrazení
+ * pokryje CDN cache routy (1 h / 24 h stale).
+ *
+ * Vrací `null`, když statistiky nejsou (API je nemá u ~třetiny reprezentačních zápasů
+ * a u čerstvě dohraných zápasů chvíli trvá, než dorazí) → UI ukáže prázdný stav.
+ */
+export async function getMatchStatsPair(
+  fixtureId: number,
+  homeId: number,
+  awayId: number
+): Promise<{ home: Partial<Record<Metric, number>>; away: Partial<Record<Metric, number>> } | null> {
+  const cached = await getCachedFixtureStats(fixtureId);
+  const fromCache = (id: number) => cached.get(id)?.metrics;
+  if (fromCache(homeId) && fromCache(awayId)) {
+    return { home: fromCache(homeId)!, away: fromCache(awayId)! };
+  }
+
+  let stats: ApiFixtureStats;
+  try {
+    stats = await fetchFixtureStatistics(fixtureId);
+  } catch {
+    return null;
+  }
+  const teamStats = (id: number) => stats.find((s) => s.team.id === id) ?? null;
+  const home = statsToMetrics(teamStats(homeId));
+  const away = statsToMetrics(teamStats(awayId));
+  if (Object.keys(home).length === 0 && Object.keys(away).length === 0) return null;
+  return { home, away };
 }

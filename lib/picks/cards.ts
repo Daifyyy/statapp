@@ -50,7 +50,12 @@ import { overProbNegBin } from "./corners";
  */
 
 /** Metriky, které model karet potřebuje (protějšek `CORNER_METRICS`). */
-export const CARD_METRICS = ["CARDS", "CARDS_AGAINST"] as const satisfies readonly Metric[];
+export const CARD_METRICS = [
+  "CARDS",
+  "CARDS_AGAINST",
+  "FOULS",
+  "FOULS_AGAINST",
+] as const satisfies readonly Metric[];
 
 /**
  * Meze λ karet na jednu stranu. Karet je zhruba jako gólů + trochu (⌀ ~2 na tým), ale
@@ -70,8 +75,26 @@ const MAX_REF_FACTOR = 1.5;
  */
 export type CardBaseline = LeagueBaseline;
 
+/**
+ * Ligová měřítka, která model potřebuje. **Fauly mají vlastní**, protože jsou o řád
+ * jinde (~11 na tým a zápas proti ~2 kartám) – kdyby se poměr faulů dělil kartovým
+ * měřítkem, λ by vyšla pětinásobná.
+ */
+export interface CardBaselines {
+  cards: CardBaseline;
+  fouls: CardBaseline;
+}
+
 /** Fallback, když ligový průměr neznáme (⌀ napříč ligami: ~1.9 domácí, ~2.2 hosté). */
 export const DEFAULT_CARD_BASELINE: CardBaseline = { home: 1.9, away: 2.2 };
+
+/** Fallback pro fauly (⌀ napříč ligami ~11 na tým a zápas; hosté faulují o chlup víc). */
+export const DEFAULT_FOUL_BASELINE: CardBaseline = { home: 10.8, away: 11.3 };
+
+export const DEFAULT_CARD_BASELINES: CardBaselines = {
+  cards: DEFAULT_CARD_BASELINE,
+  fouls: DEFAULT_FOUL_BASELINE,
+};
 
 /**
  * Karty jedné strany jedním číslem. Váha červené je parametr, ne konstanta – viz
@@ -105,27 +128,58 @@ export function expectedCards(
   team: MetricValue[],
   opponent: MetricValue[],
   isHome: boolean,
-  baseline: CardBaseline,
-  tuning: PredictTuning = DEFAULT_TUNING
+  baselines: CardBaselines,
+  tuning: PredictTuning = DEFAULT_TUNING,
+  foulWeight = 0
 ): number | null {
   const attackVenue = isHome ? "HOME" : "AWAY";
   const defenseVenue = isHome ? "AWAY" : "HOME";
-  const venueRef = isHome ? baseline.home : baseline.away;
-  const totalRef = (baseline.home + baseline.away) / 2;
+  const cardRef = isHome ? baselines.cards.home : baselines.cards.away;
+  const cardTotalRef = (baselines.cards.home + baselines.cards.away) / 2;
+  const foulRef = isHome ? baselines.fouls.home : baselines.fouls.away;
+  const foulTotalRef = (baselines.fouls.home + baselines.fouls.away) / 2;
 
-  const attack = strengthRatio(team, "CARDS", attackVenue, venueRef, totalRef, tuning);
-  const defense = strengthRatio(
-    opponent,
-    "CARDS_AGAINST",
-    defenseVenue,
-    venueRef,
-    totalRef,
-    tuning
+  // Karty a fauly měří **totéž** (jak tvrdě strana hraje), jen fauly bez šumu z toho,
+  // jestli za ně rozhodčí sáhl do kapsy – přesně vztah gólů a xG. Míchají se proto na
+  // OBOU stranách: útok = FOULS týmu, obrana = FOULS_AGAINST soupeře (fauly, které
+  // soupeř na ostatních vyprovokuje).
+  const attack = blendCardRatio(
+    strengthRatio(team, "CARDS", attackVenue, cardRef, cardTotalRef, tuning),
+    strengthRatio(team, "FOULS", attackVenue, foulRef, foulTotalRef, tuning),
+    foulWeight,
+    cardRef
+  );
+  const defense = blendCardRatio(
+    strengthRatio(opponent, "CARDS_AGAINST", defenseVenue, cardRef, cardTotalRef, tuning),
+    strengthRatio(opponent, "FOULS_AGAINST", defenseVenue, foulRef, foulTotalRef, tuning),
+    foulWeight,
+    cardRef
   );
   if (attack == null && defense == null) return null;
 
   const ref = attack?.ref ?? defense!.ref;
   return clamp(ref * (attack?.ratio ?? 1) * (defense?.ratio ?? 1), MIN_LAMBDA, MAX_LAMBDA);
+}
+
+/**
+ * Smíchá poměr z karet s poměrem z faulů. **Nejde použít `blend` z `predict.ts`**: ta
+ * bere `ref` z prvního argumentu a když první strana chybí, vrátí `ref` té druhé. U gólů
+ * vs. xG to nevadí (obojí ~1.5), ale fauly jsou ~11 proti ~2 kartám – λ by se postavila
+ * na pětinásobném měřítku a nic by nespadlo. Proto se `ref` **vždy** drží kartový.
+ *
+ * Poměry samotné jsou bezrozměrné (každý vůči svému měřítku), takže míchat je přes
+ * různé veličiny je legitimní – míchá se „o kolik je tým nad ligou", ne absolutní počty.
+ */
+function blendCardRatio(
+  cards: { ratio: number; ref: number } | null,
+  fouls: { ratio: number; ref: number } | null,
+  w: number,
+  fallbackRef: number
+): { ratio: number; ref: number } | null {
+  if (cards == null && fouls == null) return null;
+  if (cards == null) return { ratio: fouls!.ratio, ref: fallbackRef };
+  if (fouls == null || w === 0) return cards;
+  return { ratio: cards.ratio * (1 - w) + fouls.ratio * w, ref: cards.ref };
 }
 
 /**
@@ -245,6 +299,13 @@ export interface CardTuning {
   refShrink: number;
   /** Váha rozhodčího: `0` = model bez něj (ablace), `1` = plný efekt. */
   refereeWeight: number;
+  /**
+   * Váha FAULŮ proti kartám v odhadu síly (0 = jen karty, 1 = jen fauly). Platí na obou
+   * stranách λ: útok = `FOULS`, obrana = `FOULS_AGAINST` soupeře. Přesná analogie
+   * `xgWeight` u gólů – faulů je ~11 na tým a zápas proti ~2 kartám, takže nesou tutéž
+   * informaci s menším vzorkovým šumem. Fit gridem, ne vírou.
+   */
+  foulWeight: number;
 }
 
 /**
@@ -269,10 +330,19 @@ export interface CardTuning {
  * (`refShrink = 0`) je model HORŠÍ, než kdyby o rozhodčím nevěděl vůbec** (−0.0152).
  * Přínos sudího tedy stojí a padá se smrštěním – syrový průměr rozhodčího škodí.
  *
+ * `foulWeight = 0.3` – **fauly ze zápasu modelu pomáhají, ale málo.** Hypotéza byla, že
+ * budou přesnější než karty (11 na tým a zápas proti 2 → menší vzorkový šum, jako xG
+ * proti gólům). Měření ji potvrdilo jen zčásti: **samotné fauly jsou zřetelně HORŠÍ než
+ * samotné karty** (`foulWeight = 1` → Σ skill 0.0906 vs 0.0935 na hold-outu), takže menší
+ * šum nevyváží to, že fauly nesou jen část informace – rozhodčí kartuje i za protesty,
+ * fauly na poslední obránci a zdržování, a ne každý faul je kartový. Přimíchat je se ale
+ * vyplatí: optimum je vnitřní a na hold-outu 2025 dá **+0.0050** Σ skillu proti nule,
+ * a to **na všech pěti liniích**. Fit na 2024 dal 0.30, hold-out to potvrdil (jeho vlastní
+ * optimum je 0.5, ale rozdíl mezi 0.3 a 0.5 je 0.0005 = plochý).
+ *
  * **Hold-out 2025** (3 996 zápasů, fit běžel jen na 2024): skill nad konstantou
- * **+0.0100 až +0.0230** na liniích 2.5–6.5, ECE 0.011–0.027, ablace rozhodčího
- * **+0.0114 kladná na všech pěti liniích**. Na plném vzorku (2024+2025, 8 020 zápasů)
- * skill +0.0147…+0.0265 a ablace +0.0152.
+ * **+0.0108 až +0.0242** na liniích 2.5–6.5, ablace rozhodčího **+0.0114 kladná na všech
+ * pěti liniích**. Pořadí přínosů: **rozhodčí (+0.0114) ≫ fauly (+0.0050)**.
  */
 export const DEFAULT_CARD_TUNING: CardTuning = {
   base: DEFAULT_TUNING,
@@ -280,6 +350,7 @@ export const DEFAULT_CARD_TUNING: CardTuning = {
   varianceRatio: 1.2,
   refShrink: 50,
   refereeWeight: 1,
+  foulWeight: 0.3,
 };
 
 /** Predikce karet z už spočítaných hodnot metrik obou týmů. Čistá funkce. */
@@ -287,11 +358,11 @@ export function predictCards(
   home: MetricValue[],
   away: MetricValue[],
   referee: RefereeEstimate = { factor: 1, sample: 0 },
-  baseline: CardBaseline = DEFAULT_CARD_BASELINE,
+  baselines: CardBaselines = DEFAULT_CARD_BASELINES,
   tuning: CardTuning = DEFAULT_CARD_TUNING
 ): CardPrediction {
-  const rawHome = expectedCards(home, away, true, baseline, tuning.base);
-  const rawAway = expectedCards(away, home, false, baseline, tuning.base);
+  const rawHome = expectedCards(home, away, true, baselines, tuning.base, tuning.foulWeight);
+  const rawAway = expectedCards(away, home, false, baselines, tuning.base, tuning.foulWeight);
   if (rawHome == null || rawAway == null) {
     return {
       available: false,
@@ -310,7 +381,7 @@ export function predictCards(
   const [dampedHome, dampedAway] = dampenCardTotal(
     rawHome,
     rawAway,
-    baseline,
+    baselines.cards,
     tuning.totalSpread
   );
   const lambdaHome = clamp(dampedHome * referee.factor, MIN_LAMBDA, MAX_LAMBDA);
@@ -355,7 +426,7 @@ export function cardBaselineFor(
   history: HistoryMatch[],
   leagueId: number,
   season: number
-): CardBaseline {
+): CardBaselines {
   const prev = history.filter(
     (m) =>
       m.leagueId === leagueId &&
@@ -363,10 +434,24 @@ export function cardBaselineFor(
       m.homeMetrics?.CARDS != null &&
       m.awayMetrics?.CARDS != null
   );
-  if (prev.length < 50) return DEFAULT_CARD_BASELINE;
-  const home = prev.reduce((a, m) => a + m.homeMetrics!.CARDS!, 0) / prev.length;
-  const away = prev.reduce((a, m) => a + m.awayMetrics!.CARDS!, 0) / prev.length;
-  return { home, away };
+  if (prev.length < 50) return DEFAULT_CARD_BASELINES;
+  const avg = (pick: (m: HistoryMatch) => number | undefined): number | null => {
+    const vals = prev.map(pick).filter((v): v is number => v != null);
+    return vals.length >= 50 ? vals.reduce((a, v) => a + v, 0) / vals.length : null;
+  };
+  const foulHome = avg((m) => m.homeMetrics?.FOULS);
+  const foulAway = avg((m) => m.awayMetrics?.FOULS);
+  return {
+    cards: {
+      home: prev.reduce((a, m) => a + m.homeMetrics!.CARDS!, 0) / prev.length,
+      away: prev.reduce((a, m) => a + m.awayMetrics!.CARDS!, 0) / prev.length,
+    },
+    // Fauly můžou chybět i tam, kde karty jsou → vlastní práh a vlastní fallback.
+    fouls:
+      foulHome != null && foulAway != null
+        ? { home: foulHome, away: foulAway }
+        : DEFAULT_FOUL_BASELINE,
+  };
 }
 
 /**
@@ -424,10 +509,10 @@ export function backtestCards(
   const seasons = new Set(opts.seasons);
   const minMatches = opts.minMatches ?? 0;
   const tuning = opts.tuning ?? DEFAULT_CARD_TUNING;
-  const baselines = new Map<string, CardBaseline>();
+  const baselines = new Map<string, CardBaselines>();
   const rows: CardRow[] = [];
 
-  const baselineOf = (leagueId: number, season: number): CardBaseline => {
+  const baselineOf = (leagueId: number, season: number): CardBaselines => {
     const key = `${leagueId}:${season}`;
     let b = baselines.get(key);
     if (!b) {

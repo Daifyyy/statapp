@@ -13,6 +13,7 @@ import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
+import { MatchReportPanel } from "./MatchReportPanel";
 import { buildTipHref } from "./tipHref";
 import { useCurrentUser } from "./useCurrentUser";
 
@@ -835,6 +836,7 @@ const SIDE_LABELS: Record<SettledMatch["predictedSide"], string> = {
 };
 
 function ResultRow({ result }: { result: SettledMatch }) {
+  const [open, setOpen] = useState(false);
   const date = new Date(result.kickoff).toLocaleDateString("cs-CZ", {
     day: "numeric",
     month: "numeric",
@@ -883,7 +885,7 @@ function ResultRow({ result }: { result: SettledMatch }) {
     </>
   );
   return (
-    <li>
+    <li className="space-y-1">
       {href != null ? (
         <Link href={href} className={`${cardClass} transition hover:border-foreground/30`}>
           {inner}
@@ -891,6 +893,17 @@ function ResultRow({ result }: { result: SettledMatch }) {
       ) : (
         <div className={cardClass}>{inner}</div>
       )}
+      {/* Tlačítko je MIMO `Link` schválně – uvnitř by klik navigoval na Porovnání. */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full rounded-lg px-3 py-1 text-left text-[11px] text-muted transition hover:text-foreground"
+      >
+        {open ? "▾" : "▸"} Přehled zápasu
+      </button>
+      {/* Panel se montuje až po otevření → fetch se pustí jen na vyžádání. */}
+      {open && <MatchReportPanel match={result} />}
     </li>
   );
 }

@@ -56,7 +56,14 @@ export type Metric =
    * (tvrdá hra, provokace, tempo). Obranný protějšek `CARDS`, přesně jako
    * `CORNERS_AGAINST` u rohů. Mimo `ALL_METRICS`.
    */
-  | "CARDS_AGAINST";
+  | "CARDS_AGAINST"
+  /**
+   * Fauly, které tým **schytal** (= fauly soupeře v tom zápase). Obranný protějšek
+   * `FOULS`: jak moc tým soupeře provokuje k zákrokům. Model karet (`lib/picks/cards.ts`)
+   * ho míchá k `CARDS_AGAINST` – faulů je ~11 na tým a zápas proti ~2 kartám, takže
+   * nesou tutéž informaci s menším šumem. Mimo `ALL_METRICS`.
+   */
+  | "FOULS_AGAINST";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -158,6 +165,7 @@ export const METRIC_LABELS: Record<Metric, string> = {
   CORNERS_AGAINST: "Inkasované rohy",
   CARDS: "Karty celkem",
   CARDS_AGAINST: "Karty soupeře",
+  FOULS_AGAINST: "Schytané fauly",
 };
 
 /**

@@ -101,6 +101,7 @@ export function matchStatsBefore(
       const xgAgainst = oppStats?.XG;
       const cornersAgainst = oppStats?.CORNERS;
       const cardsAgainst = oppStats?.CARDS;
+      const foulsAgainst = oppStats?.FOULS;
       return {
         fixtureId: m.fixtureId,
         date: m.date,
@@ -114,6 +115,7 @@ export function matchStatsBefore(
           ...(xgAgainst != null ? { XG_AGAINST: xgAgainst } : {}),
           ...(cornersAgainst != null ? { CORNERS_AGAINST: cornersAgainst } : {}),
           ...(cardsAgainst != null ? { CARDS_AGAINST: cardsAgainst } : {}),
+          ...(foulsAgainst != null ? { FOULS_AGAINST: foulsAgainst } : {}),
           GOALS_FOR: gf,
           GOALS_AGAINST: ga,
         },

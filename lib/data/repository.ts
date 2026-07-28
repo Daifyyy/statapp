@@ -17,6 +17,8 @@ import type {
   Team,
   Transfer,
 } from "@/lib/types";
+import type { Metric } from "@/lib/types";
+import { buildMatchReport, type MatchReport } from "@/lib/stats/matchReport";
 import type { LeagueBaseline } from "@/lib/stats/predict";
 import type { TeamStrength } from "@/lib/stats/ratings";
 import { isRealDataConfigured } from "@/lib/db";
@@ -292,6 +294,68 @@ export async function getNationalRatings(): Promise<Map<
 > | null> {
   if (useReal) return real.getNationalRatings();
   return null;
+}
+
+/**
+ * **Kategorický přehled odehraného zápasu** (kdo dominoval, typ zápasu, jak kdo zahrál).
+ *
+ * Líný a na vyžádání: statistiky se tahají až při rozkliknutí (`getMatchStatsPair`,
+ * 1 volání na zápas, pak trvale z `MatchStatCache`). Samotné vyhodnocení je čistá funkce
+ * `buildMatchReport` – tedy stejná dělba jako všude jinde: repozitář dodá data, jádro
+ * rozhoduje. `null` = statistiky nejsou (API je u části zápasů nemá) → UI ukáže prázdno.
+ */
+export async function getMatchReport(input: {
+  fixtureId: number;
+  home: { id: number; name: string };
+  away: { id: number; name: string };
+  goals: { home: number; away: number } | null;
+}): Promise<MatchReport | null> {
+  const stats = useReal
+    ? await real.getMatchStatsPair(input.fixtureId, input.home.id, input.away.id)
+    : mockMatchStats(input.fixtureId);
+  if (!stats) return null;
+  const report = buildMatchReport(
+    stats.home,
+    stats.away,
+    { home: input.home.name, away: input.away.name },
+    input.goals
+  );
+  return report.available ? report : null;
+}
+
+/**
+ * Deterministické mock statistiky odvozené z `fixtureId` – přehled tak funguje bez DB
+ * i bez API a jde na něm ladit UI (různá `fixtureId` dají různě vypadající zápasy).
+ */
+function mockMatchStats(fixtureId: number): {
+  home: Partial<Record<Metric, number>>;
+  away: Partial<Record<Metric, number>>;
+} {
+  const r = (n: number, lo: number, hi: number) =>
+    lo + (((fixtureId * 9301 + n * 49297) % 233280) / 233280) * (hi - lo);
+  const possession = Math.round(r(1, 38, 62));
+  return {
+    home: {
+      POSSESSION: possession,
+      XG: Number(r(2, 0.4, 2.6).toFixed(2)),
+      SHOTS_ON_TARGET: Math.round(r(3, 1, 9)),
+      SHOTS_INSIDE_BOX: Math.round(r(4, 3, 14)),
+      FOULS: Math.round(r(5, 7, 18)),
+      YELLOW_CARDS: Math.round(r(6, 0, 4)),
+      RED_CARDS: r(7, 0, 12) > 11.5 ? 1 : 0,
+      SAVES: Math.round(r(8, 1, 7)),
+    },
+    away: {
+      POSSESSION: 100 - possession,
+      XG: Number(r(9, 0.4, 2.6).toFixed(2)),
+      SHOTS_ON_TARGET: Math.round(r(10, 1, 9)),
+      SHOTS_INSIDE_BOX: Math.round(r(11, 3, 14)),
+      FOULS: Math.round(r(12, 7, 18)),
+      YELLOW_CARDS: Math.round(r(13, 0, 4)),
+      RED_CARDS: 0,
+      SAVES: Math.round(r(14, 1, 7)),
+    },
+  };
 }
 
 /**
