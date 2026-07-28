@@ -33,15 +33,19 @@ export type ClvSide =
   | "under25"
   | "cornersOver"
   | "cornersUnder"
+  | "cardsOver"
+  | "cardsUnder"
   | "totalHomeOver"
   | "totalHomeUnder"
   | "totalAwayOver"
   | "totalAwayUnder";
 
-/** Strany trhů s linkami (rohy, týmové totaly). */
+/** Strany trhů s linkami (rohy, karty, týmové totaly). */
 type LineClvSide =
   | "cornersOver"
   | "cornersUnder"
+  | "cardsOver"
+  | "cardsUnder"
   | "totalHomeOver"
   | "totalHomeUnder"
   | "totalAwayOver"
@@ -54,6 +58,8 @@ type LineClvSide =
 const LINE_SIDES: Record<LineClvSide, { market: LineMarket; side: "over" | "under" }> = {
   cornersOver: { market: "corners", side: "over" },
   cornersUnder: { market: "corners", side: "under" },
+  cardsOver: { market: "cards", side: "over" },
+  cardsUnder: { market: "cards", side: "under" },
   totalHomeOver: { market: "totalHome", side: "over" },
   totalHomeUnder: { market: "totalHome", side: "under" },
   totalAwayOver: { market: "totalAway", side: "over" },

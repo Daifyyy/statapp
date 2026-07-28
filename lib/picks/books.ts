@@ -46,6 +46,7 @@ export function parseBooks(value: unknown): BookOdds[] {
     if (typeof b.name !== "string") continue;
     const num = (k: string) => (typeof b[k] === "number" && b[k] > 1 ? (b[k] as number) : null);
     const corners = parseLines(b.corners);
+    const cards = parseLines(b.cards);
     const totalHome = parseLines(b.totalHome);
     const totalAway = parseLines(b.totalAway);
     out.push({
@@ -59,6 +60,7 @@ export function parseBooks(value: unknown): BookOdds[] {
       btts: num("btts"),
       bttsNo: num("bttsNo"),
       ...(corners.length ? { corners } : {}),
+      ...(cards.length ? { cards } : {}),
       ...(totalHome.length ? { totalHome } : {}),
       ...(totalAway.length ? { totalAway } : {}),
     });
@@ -158,8 +160,11 @@ export function sharpFair(
 // Rohy a týmové totaly sdílejí VŠECHNU logiku, liší se jen tím, ze kterého pole
 // `BookOdds` čtou → jeden parametr `market`, ne dvě sady funkcí.
 
-/** Trh s linkami. `totalHome`/`totalAway` = kolik gólů dá jeden tým. */
-export type LineMarket = "corners" | "totalHome" | "totalAway";
+/**
+ * Trh s linkami. `totalHome`/`totalAway` = kolik gólů dá jeden tým, `cards` = karty
+ * celkem (žluté + červené; booking points ani „jen žluté" se nesnímají – viz `isCardBet`).
+ */
+export type LineMarket = "corners" | "cards" | "totalHome" | "totalAway";
 
 const linesOf = (b: BookOdds, market: LineMarket): LineOdds[] => b[market] ?? [];
 
@@ -239,6 +244,14 @@ export const bestCornerPrice = (books: BookOdds[], line: number, side: "over" | 
   bestLinePrice(books, "corners", line, side);
 export const sharpCornerFair = (books: BookOdds[], line: number) =>
   sharpLineFair(books, "corners", line);
+
+// Totéž pro karty – trh s největším doloženým skillem (viz `lib/picks/cards.ts`).
+export const cardLines = (books: BookOdds[]) => marketLines(books, "cards");
+export const mainCardLine = (books: BookOdds[]) => mainLine(books, "cards");
+export const bestCardPrice = (books: BookOdds[], line: number, side: "over" | "under") =>
+  bestLinePrice(books, "cards", line, side);
+export const sharpCardFair = (books: BookOdds[], line: number) =>
+  sharpLineFair(books, "cards", line);
 
 /**
  * Sharp férová pravděpodobnost **totalu 2.5** (obě strany → jde odmaržovat). Stejná

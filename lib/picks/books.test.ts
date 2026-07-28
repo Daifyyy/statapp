@@ -266,6 +266,55 @@ describe("týmové totaly", () => {
   });
 });
 
+describe("karty jako trh s linkami", () => {
+  // Karty jsou trh s největším doloženým skillem (`lib/picks/cards.ts`) a jedou touž
+  // cestou jako rohy a týmové totaly. Kritické je, že se s nimi NESMÍCHAJÍ – čísla
+  // linií se navíc překrývají s týmovými totaly (obojí 2.5), takže záměna by nebyla
+  // vidět ani na první pohled nesmyslné hodnotě.
+  const CARD_BOOKS = [
+    book("Pinnacle", {
+      cards: [
+        { line: 3.5, over: 1.55, under: 2.45 },
+        { line: 4.5, over: 2.2, under: 1.68 },
+      ],
+      totalHome: [{ line: 2.5, over: 3.6, under: 1.3 }],
+      corners: [{ line: 10.5, over: 2.02, under: 1.85 }],
+    }),
+    book("Akční", {
+      cards: [{ line: 4.5, over: 2.35, under: 1.6 }],
+    }),
+  ];
+
+  it("čte vlastní linie a nemíchá je s rohy ani s týmovým totalem", () => {
+    expect(mainLine(CARD_BOOKS, "cards")).toBe(4.5);
+    expect(marketLines(CARD_BOOKS, "cards").map((l) => l.line).sort()).toEqual([3.5, 4.5]);
+    // Linka 2.5 existuje u týmového totalu, u karet ne – nesmí se propsat.
+    expect(bestLinePrice(CARD_BOOKS, "cards", 2.5, "over")).toBeNull();
+    expect(bestLinePrice(CARD_BOOKS, "cards", 10.5, "over")).toBeNull();
+  });
+
+  it("nejlepší cena se hledá uvnitř linie", () => {
+    const b = bestLinePrice(CARD_BOOKS, "cards", 4.5, "over")!;
+    expect(b.odds).toBe(2.35);
+    expect(b.bookmaker).toBe("Akční");
+    expect(b.books).toBe(2);
+  });
+
+  it("sharp férová cena odmaržuje na součet 1", () => {
+    const f = sharpLineFair(CARD_BOOKS, "cards", 4.5)!;
+    expect(f.over + f.under).toBeCloseTo(1, 9);
+  });
+
+  it("přežije kolečko přes JSON z DB", () => {
+    const parsed = parseBooks(JSON.parse(JSON.stringify(CARD_BOOKS)));
+    expect(mainLine(parsed, "cards")).toBe(4.5);
+    expect(bestLinePrice(parsed, "cards", 3.5, "under")!.odds).toBe(2.45);
+    // Ostatní trhy zůstaly na svém.
+    expect(mainLine(parsed, "corners")).toBe(10.5);
+    expect(mainLine(parsed, "totalHome")).toBe(2.5);
+  });
+});
+
 describe("parseBooks", () => {
   it("přečte platný JSON z DB", () => {
     const parsed = parseBooks([

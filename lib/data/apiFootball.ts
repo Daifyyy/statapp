@@ -489,6 +489,17 @@ export interface BookOdds {
    */
   totalHome?: LineOdds[];
   totalAway?: LineOdds[];
+  /**
+   * **Karty celkem** Over/Under. Trh, kde má model nejvíc doloženého skillu
+   * (`lib/picks/cards.ts`: +0.010…+0.023 log-lossu nad konstantou na hold-outu, z toho
+   * ~polovina z rozhodčího). Tentýž tvar jako rohy – knihy nabízejí různé linie
+   * (3.5 / 4.5 / 5.5), takže párování po lince je povinné.
+   *
+   * **Pozor na jednotku:** ukládá se jen trh počítaný v KARTÁCH (žluté + červené), ne
+   * booking points (ty váží červenou 2–2.5×) a ne „jen žluté" – to jsou jiné veličiny
+   * než λ modelu. Filtruje `isCardBet`.
+   */
+  cards?: LineOdds[];
 }
 
 /** Kurz Over/Under na JEDNÉ konkrétní lince (rohy, týmové totaly…). */
@@ -580,17 +591,20 @@ export async function fetchOdds(
         b.over25 != null ||
         b.btts != null ||
         b.corners?.length ||
+        b.cards?.length ||
         b.totalHome?.length ||
         b.totalAway?.length
     ),
   };
-  // Bez jediného použitelného kurzu nemá smysl řádek ukládat. Rohy a týmové totaly se
-  // počítají taky – jinak by se zahodila odpověď, kde je jediný trh, který nás zajímá.
+  // Bez jediného použitelného kurzu nemá smysl řádek ukládat. Rohy, karty i týmové totaly
+  // se počítají taky – jinak by se zahodila odpověď, kde je jediný trh, který nás zajímá.
   if (
     out.home == null &&
     out.over25 == null &&
     out.btts == null &&
-    !out.books?.some((b) => b.corners?.length || b.totalHome?.length || b.totalAway?.length)
+    !out.books?.some(
+      (b) => b.corners?.length || b.cards?.length || b.totalHome?.length || b.totalAway?.length
+    )
   ) {
     return null;
   }
@@ -604,8 +618,37 @@ export async function fetchOdds(
  * a rok se neuložil ani jeden kurz). Název „…Corners…" je stabilní a ověřitelný
  * (`npm run probe-odds` vypíše všechny trhy zápasu i s id).
  */
-function isCornerBet(bet: { id: number; name?: string }): boolean {
+export function isCornerBet(bet: { id: number; name?: string }): boolean {
   return bet.name != null && /corner/i.test(bet.name);
+}
+
+/**
+ * Je to trh na **karty celkem v zápase**, počítaný v KARTÁCH?
+ *
+ * Přísnější než ostatní matchery, a to schválně – u karet je jednotka past. Nabídka
+ * obsahuje několik trhů se slovem „card", které měří **jinou veličinu** než λ našeho
+ * modelu (`cardCount` = žluté + červené):
+ *  - **booking points** (žlutá 10, červená 25) – jiná stupnice, ne počet karet;
+ *  - **jen žluté** nebo **jen červené** – jiná veličina;
+ *  - **týmové karty** („Home Team Total Cards") – ne total zápasu;
+ *  - **poločasové / první karta / čas karty** – jiný jev.
+ * Kdyby některý z nich prošel, model by porovnával svou λ v kartách s cenou na booking
+ * points a **nic by nekřičelo** – přesně ten typ tiché chyby, který u kurzů už jednou
+ * stál rok dat. Radši se sem nedostane trh, který by patřil, než naopak.
+ *
+ * Hledá se podle **názvu, ne podle id** (id se mezi knihami liší); ověření reálné nabídky
+ * dělá `npm run probe-odds -- <fixtureId> --markets`.
+ */
+export function isCardBet(bet: { id: number; name?: string }): boolean {
+  const n = bet.name;
+  if (!n) return false;
+  if (!/card/i.test(n)) return false;
+  if (/booking|point/i.test(n)) return false; // jiná stupnice
+  if (/yellow|red/i.test(n)) return false; // jen jedna barva = jiná veličina
+  if (/home|away|team/i.test(n)) return false; // týmové, ne total zápasu
+  if (/half|first|last|time|minute/i.test(n)) return false; // jiný jev než počet za zápas
+  if (/corner|goal|shot|foul|offside|throw/i.test(n)) return false; // pojistka proti překryvu
+  return true;
 }
 
 /**
@@ -616,7 +659,7 @@ function isCornerBet(bet: { id: number; name?: string }): boolean {
  * veličiny odfiltrují jmenovitě dřív, než se hledá strana. Kdyby to spadlo do jednoho
  * pytle, model by porovnával svoji gólovou λ s kurzem na rohy – a nic by nekřičelo.
  */
-function teamTotalSide(bet: { name?: string }): "home" | "away" | null {
+export function teamTotalSide(bet: { name?: string }): "home" | "away" | null {
   const n = bet.name;
   if (!n) return null;
   if (/corner|card|booking|offside|foul|shot|throw/i.test(n)) return null;
@@ -663,8 +706,12 @@ function lineOddsOf(
   return [...byLine.values()].sort((a, b) => a.line - b.line);
 }
 
-/** Jedna sázkovka z odpovědi `/odds` na náš tvar (1X2 + total 2.5 + BTTS + rohy). */
-function bookOddsOf(book: {
+/**
+ * Jedna sázkovka z odpovědi `/odds` na náš tvar (1X2 + total 2.5 + BTTS + rohy + karty
+ * + týmové totaly). **Exportováno pro testy** – je to jediné místo, kde se trhy podle
+ * názvu překlápějí do struktury, kterou pak celý zbytek bere jako danou.
+ */
+export function bookOddsOf(book: {
   id: number;
   name: string;
   bets: { id: number; name?: string; values: { value: string; odd: string }[] }[];
@@ -675,6 +722,7 @@ function bookOddsOf(book: {
   const goals = betValues(5);
   const btts = betValues(8);
   const corners = lineOddsOf(book.bets, isCornerBet);
+  const cards = lineOddsOf(book.bets, isCardBet);
   const totalHome = lineOddsOf(book.bets, (b) => teamTotalSide(b) === "home");
   const totalAway = lineOddsOf(book.bets, (b) => teamTotalSide(b) === "away");
   return {
@@ -688,6 +736,7 @@ function bookOddsOf(book: {
     btts: oddOf(btts, "Yes"),
     bttsNo: oddOf(btts, "No"),
     ...(corners.length ? { corners } : {}),
+    ...(cards.length ? { cards } : {}),
     ...(totalHome.length ? { totalHome } : {}),
     ...(totalAway.length ? { totalAway } : {}),
   };

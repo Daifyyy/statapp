@@ -790,13 +790,25 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
        kdyby o sudím nevěděl vůbec** (−0.0152). Optimum je ploché mezi ~25 a ~100,
        mimo ten pás rychle padá. **Syrový průměr rozhodčího škodí** – tohle je hlavní
        poučení a platí obecně pro každý vstup s malým vzorkem na kategorii.
+  - **Kurzy na karty se od 28. 7. 2026 SNÍMAJÍ** (`BookOdds.cards`, `LineMarket` `"cards"`,
+    CLV strany `cardsOver`/`cardsUnder`). **0 volání navíc** – jsou v téže odpovědi
+    `/odds`, a `saveOdds`/`saveClosingOdds` ukládají `books` jako JSON vcelku, takže se
+    pipeline nemusela měnit vůbec. Čte se přes tytéž `marketLines`/`mainLine`/
+    `bestLinePrice`/`sharpLineFair` jako rohy a týmové totaly (zkratky `cardLines`&spol.),
+    tedy **párování po lince je povinné**.
+  - **JEDNOTKA JE U KARET PAST** – větší než u rohů. `isCardBet` proto snímá **jen trh
+    počítaný v kartách** a jmenovitě odmítá: **booking points** (žlutá 10, červená 25 =
+    jiná stupnice), **„jen žluté"/„jen červené"** (jiná veličina než `cardCount`),
+    **týmové karty** a **poločasové / „první karta"**. Kdyby některý prošel, model by
+    porovnával λ v kartách s cenou v bodech a **nic by nekřičelo**. Kryto testem, který
+    hlídá i to, že se `isCornerBet`/`isCardBet`/`teamTotalSide` **vzájemně vylučují**.
+    Sonda `npm run probe-odds -- <fixtureId> --markets` značí trhy **skutečnými matchery**
+    (ne jejich kopií) a zvlášť vypíše trhy s kartami, které se vědomě nesnímají.
+    Zbývá ověřit **pravidla vypořádání konkrétní knihy** (počítá druhou žlutou jako
+    jednu kartu, nebo dvě?) – to z názvu trhu poznat nejde.
   - **Co tohle NEŘÍKÁ: že se na kartách vydělá.** Měří se kvalita modelu, ne cena.
     Historické kurzy na karty zdroj nemá, marže je 5–9 % (násobek 1X2) a skill +0.02
-    log-lossu je proti ní pořád málo. Další krok je **snímat živé kurzy a měřit CLV**,
-    ne sázet. Pozor taky na **konvenci počítání** (viz `cardCount`): model počítá
-    „žluté + červené", ale booking points váží červenou 2–2.5× a druhá žlutá se někde
-    počítá dvakrát – **ověř pravidla vypořádání konkrétní knihy**, než se model přiloží
-    k lince. A matchery trhů se musí vzájemně vylučovat („Total Cards" vs. „Total Corners").
+    log-lossu je proti ní pořád málo. Další krok je **měřit CLV**, ne sázet.
 - **Offline backtest** (`lib/picks/backtest.ts` + `npm run backtest`, čisté + testy): přehraje
   historii klubových lig **stejným jádrem** (`compareTeams`) a vydá `PredictionRow[]` → jde rovnou
   do `computeTrackRecord`/`computeReliability`/`fit.ts`. **Point-in-time** (`matchStatsBefore` bere
@@ -1464,7 +1476,7 @@ Otevřená zůstává jediná větev: **trhy, kde model něco umí a kde jsme je
 | trh | skill nad konstantou | kurzy | ověřeno proti ceně |
 |---|---|---|---|
 | 1X2 | +0.053 | ✅ | **ANO — prohráváme** |
-| **Karty** | **+0.010…+0.023** (hold-out; z toho sudí +0.011) | ještě nesnímáme | ne |
+| **Karty** | **+0.010…+0.023** (hold-out; z toho sudí +0.011) | ✅ od 28. 7. | ne |
 | **Týmové totaly** | **+0.013…+0.027** (nejlíp linie 1.5) | ✅ od 27. 7. | ne |
 | Over 2.5 | +0.009 | ✅ | částečně (ROI −1.8 %, CI přes nulu) |
 | Rohy | +0.003…+0.008 | ✅ od 27. 7. | ne |
@@ -1501,13 +1513,18 @@ průměry. Zároveň je tam nejvyšší marže (5–9 %), takže verdikt stejně
 **Nezvyšovat zpátky bez Pro plánu.** Detaily v sekci „Plánované úlohy".
 
 ### ⚠ NEOVĚŘENO proti živému API (udělej to hned, jak bude první zápas s kurzy)
-Parsování **rohů i týmových totalů** vzniklo v mezisezóně, kdy `/odds` nevrací nic.
+Parsování **rohů, KARET i týmových totalů** vzniklo v mezisezóně, kdy `/odds` nevrací nic.
 Je psané obranně (hledá trh podle **názvu**, ne podle uhodnutého id; nesmysl → prázdno
-místo pádu), ale **žádný test ho nedrží proti realitě**:
+místo pádu) a matchery jsou kryté testy včetně vzájemné výlučnosti, ale **žádný test je
+nedrží proti reálným názvům trhů**:
 ```
 npm run probe-odds -- <fixtureId> --markets
 ```
-Vypíše linie všech tří trhů zvlášť a v seznamu označí `← ROHY` / `← TÝMOVÝ TOTAL`.
+Vypíše linie všech čtyř trhů zvlášť a v seznamu označí `← ROHY` / `← KARTY` /
+`← TÝMOVÝ TOTAL` — **skutečnými matchery z `apiFootball.ts`**, ne jejich kopií, takže
+sonda ověřuje tu logiku, která data opravdu plní. U karet navíc vypíše trhy se slovem
+„card", které se **vědomě nesnímají** (booking points, „jen žluté") — tam zkontroluj,
+že mezi nimi není ten, který jsme chtěli.
 
 ### Co zbývá — A) po startu lig 7. 8. (jen ověřit, nic nestavět)
 1. **Parsování rohů a týmových totalů** proti živému API — `npm run probe-odds --
@@ -1528,10 +1545,12 @@ Vypíše linie všech tří trhů zvlášť a v seznamu označí `← ROHY` / `�
    zvenčí** (sestavy, shot-level xG, rozhodčí u karet), ne z přeskládání téhož.
 6. ~~**MODEL KARET**~~ **HOTOVO 28. 7. 2026** — postavený, fitnutý a ověřený hold-outem
    (viz „MODEL KARET" výše). Nejlepší změřený trh: +0.009…+0.021 nad konstantou, z toho
-   ~polovina z **rozhodčího**. **Zbývá na něm jen to, co potřebuje živou sezónu:**
-   a) **snímat kurzy na karty** (v odds feedu prokazatelně jsou — `teamTotalSide` je
-      jmenovitě odfiltrovává; ověř `npm run probe-odds -- <fixtureId> --markets`),
-   b) **ověřit konvenci vypořádání** konkrétní knihy (žluté+červené vs. booking points),
+   ~polovina z **rozhodčího**. Snímání kurzů je **taky hotové** (0 volání navíc).
+   **Zbývá na něm jen to, co potřebuje živou sezónu:**
+   a) **ověřit parsování proti živému API** — `npm run probe-odds -- <fixtureId> --markets`
+      (vzniklo v mezisezóně, kdy `/odds` nevrací nic),
+   b) **ověřit konvenci vypořádání** konkrétní knihy — počítá druhou žlutou jako jednu
+      kartu, nebo dvě? Z názvu trhu to poznat nejde a model počítá žluté + červené,
    c) **měřit CLV**, ne ROI.
    Pokrytí rozhodčích je **100 %** (bereme je z `/fixtures` API-Footballu, viz výše),
    takže model platí pro všechny ligy včetně Fortuna ligy.
