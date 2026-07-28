@@ -256,6 +256,17 @@ export function overProbNegBin(
   return clamp(1 - cdf, 1e-6, 1 - 1e-6);
 }
 
+/**
+ * Minimum, které potřebují statistiky rozdělení (`dispersion`, `pearsonDispersion`):
+ * predikovaná a skutečná hodnota počtu. Je to **strukturální** typ schválně – tytéž
+ * statistiky platí pro rohy i karty a nemá smysl je psát dvakrát. `CornerRow` i `CardRow`
+ * ho splňují bez explicitní deklarace.
+ */
+export interface CountRow {
+  lambdaTotal: number;
+  actualTotal: number;
+}
+
 /** Řádek backtestu rohů: predikce + skutečnost (protějšek `PredictionRow`). */
 export interface CornerRow {
   fixtureId: number;
@@ -426,7 +437,7 @@ export function cornerCalibration(rows: CornerRow[], line: number): BinaryCalibr
  * Tahle statistika dělí odchylku vlastní λ toho zápasu, takže měří **jen** to, co
  * negativně binomické rozdělení opravuje. `≈ 1` = Poisson stačí, `> 1` = NB má co dělat.
  */
-export function pearsonDispersion(rows: CornerRow[]): number {
+export function pearsonDispersion(rows: CountRow[]): number {
   const usable = rows.filter((r) => r.lambdaTotal > 0);
   if (usable.length === 0) return 0;
   return (
@@ -435,7 +446,7 @@ export function pearsonDispersion(rows: CornerRow[]): number {
   );
 }
 
-export function dispersion(rows: CornerRow[]): { mean: number; variance: number; ratio: number } {
+export function dispersion(rows: CountRow[]): { mean: number; variance: number; ratio: number } {
   const n = rows.length;
   if (n === 0) return { mean: 0, variance: 0, ratio: 0 };
   const mean = rows.reduce((a, r) => a + r.actualTotal, 0) / n;

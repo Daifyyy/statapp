@@ -124,6 +124,10 @@ const fixtureItemSchema = z.object({
   fixture: z.object({
     id: z.number(),
     date: z.string(),
+    // Rozhodčí – vstup do modelu karet (`lib/picks/cards.ts`), kde je to zhruba polovina
+    // přínosu. Volitelný: u některých soutěží a u budoucích zápasů chodí `null`. Formát
+    // je „R. Jones" (s tečkou), football-data píše „R Jones" – při párování normalizovat.
+    referee: z.string().nullable().optional(),
     status: z.object({
       short: z.string(),
       // uplynulé minuty (jen u živých zápasů; jinak null/chybí)

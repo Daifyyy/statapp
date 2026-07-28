@@ -34,6 +34,14 @@ npm run backtest -- --no-stats      # bez xG/střel (měření, co statistiky p�
 npm run backtest -- --no-odds       # bez sekce „vs. TRH" (jen kvalita modelu)
 npm run backtest -- --team-totals   # TÝMOVÉ TOTALY (marginály mřížky): úroveň, disperze,
                      # kalibrace na liniích 0.5/1.5/2.5 pro domácí i hosty. 0 nových dat.
+npm run backtest -- --cards         # MODEL KARET: úroveň λ, overdisperze, kalibrace po
+                     # liniích 2.5–6.5, rozptyl mezi rozhodčími + ABLACE (přidává sudí?)
+                     # a sweep jeho shrinkage. --cards-grid = fit útlum × shrinkage sudího
+                     # --cards-tune=6,0.5,1.2,50,1 = k,t,v,refShrink,refWeight
+npm run backtest -- --ah            # ASIJSKÝ HENDIKEP jako MĚŘÍTKO (ne trh k sázení):
+                     # rozloží naši chybu proti trhu na PŘEVAHU (kdo je lepší) a SOUČET
+                     # (kolik padne gólů) a zregresuje skutečnost na tržní odhad + naši
+                     # odchylku → β₂ = kolik z naší odchylky je pravda. Po ligách taky.
 npm run backtest -- --corners       # MODEL ROHŮ: úroveň λ, overdisperze, kalibrace po liniích
                      # --corners-grid = fit shrinkage × útlum součtu
                      # --corners-grid-nb = fit útlum × overdisperze (negativně binomické)
@@ -564,11 +572,62 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   - **Line-shopping je jediná páka, která prokazatelně funguje**: nejlepší cena napříč 13 knihami
     zvedne ROI o ~2 p.b. proti sharp linii a o ~5 p.b. proti průměru trhu (overround nejlepší
     ceny je **0.11 %** vs. 2.99 % u Pinnacle). Sama o sobě ale ze ztráty zisk neudělá.
+- **ASIJSKÝ HENDIKEP JAKO MĚŘÍTKO** (`lib/picks/asianHandicap.ts`, čisté + testy;
+  `npm run backtest -- --ah`) — **nejtvrdší test modelu, jaký máme, a zavírá otázku
+  „model jako korekce trhu".** Není to trh k sázení, je to diagnostika.
+  - **Proč AH, když už máme 1X2 log-loss:** ten řekne jen „ztrácíme 0.048", ne **čím**.
+    AH umí chybu rozložit na **dvě nezávislé osy** — `supremacy` = λ_dom − λ_host (kdo je
+    lepší) a `total` = λ_dom + λ_host (kolik padne gólů). Přesně tak je stavěný i náš model
+    (`dampenTotal` hýbe součtem a rozdíl drží), takže jde adresně říct, která polovina λ je
+    špatně. Navíc: marže ~2 %, **de-vig je u dvoucestného trhu PŘESNÝ** (u AH platí
+    `1/o = p_výhra/(p_výhra+p_prohra)` na obou stranách → dělení overroundem vrátí právě
+    pravděpodobnosti podmíněné „nebyl push", žádná volba metody jako u 1X2) a výstup je
+    **spojitý** → regrese na skutečný rozdíl gólů má řádově větší sílu než měření nad
+    diskrétním V/R/P.
+  - **Inverze trhu:** z Over/Under 2.5 se bisekcí dopočte `total` (součet dvou nezávislých
+    Poissonů je Poisson → žádný předpoklad navíc proti mřížce), z něj + linky + odmaržované
+    ceny AH se bisekcí dopočte `supremacy`. Kryto round-trip testem: `marketView` vrátí λ,
+    ze kterých se cena vyrobila, na 3 desetinná místa; marže výsledkem nehne (je symetrická).
+    Čtvrtinové linky (−0.75) se dělí na dvě poloviční sázky — porovnat cenu na −0.75
+    s modelem pro −0.5 by byla táž chyba, jakou u rohů hlídá párování po lince.
+  - **Hlavní test:** `skutečný rozdíl gólů ~ tržní převaha + (naše převaha − tržní převaha)`.
+    Koeficient β₂ je celá odpověď: kolik z toho, o co se od trhu lišíme, je pravda. Je to
+    zároveň **optimální míra smrštění** pro „model jako korekce trhu".
+  - **VÝSLEDEK (8 021 zápasů 2024+2025 se zavíracím AH i O/U): β₂ = 0.007 ± 0.039 (t = 0.2).**
+    Naše odchylka od trhu je **čirý šum**, a interval je natolik těsný, že vylučuje i malou
+    hranu (95% CI zhruba [−0.07; +0.08]). Na ose součtu gólů β₂ = 0.049 ± 0.074 (t = 0.7) —
+    taky nic, jen s širším intervalem. Kvintily to potvrzují neparametricky: zbytek trhu je
+    napříč koši plochý (−0.063 … −0.004), žádný trend.
+  - **Kontroly, že měří správně:** β₁ trhu = 0.982 ± 0.025 (trh je nevychýlený, jak má být),
+    tržní total 2.786 vs. skutečnost 2.750, tržní převaha +0.311 vs. skutečnost +0.283.
+    Naše **úroveň je taky správně** (převaha +0.287, total 2.787) — nejsme vychýlení, jsme
+    **šumnější**: RMSE převahy 1.6466 vs. 1.5516 u trhu.
+  - **Nejužitečnější detail:** zaostáváme skoro celý na ose **PŘEVAHY** (RMSE +0.095), na ose
+    **SOUČTU jen o 0.032**. Neumíme říct, kdo je lepší; kolik padne gólů odhadujeme skoro
+    stejně dobře jako trh. Sedí to s tím, že naše nejlepší trhy mimo 1X2 (týmové totaly,
+    rohy) stojí na úrovni a ne na poměru sil.
+  - **Po ligách nic** (12 lig, β₂ od −0.184 do +0.136): ani jedna nedosáhne nekorigovaného
+    |t| > 2, natož Bonferroniho prahu 2.807, a znaménka se symetricky střídají kolem nuly =
+    podpis šumu. Hypotéza „v tenkém trhu (Řecko, Skotsko, Turecko) hranu najdeme" **neplatí**.
+  - **Důsledek pro plán:** bod „vzít sharp linii jako prior a posouvat ji naší predikcí"
+    je tímhle **uzavřený na gólových trzích** — optimální posun je 0.7 % naší odchylky, tedy
+    ignorovat model. Zbývají jen trhy, kde jsme cenu ještě neviděli (týmové totaly, rohy,
+    nově karty), a tam rozhodne CLV.
 - **Historické kurzy: `npm run import-odds`** (`lib/picks/oddsDataset.ts`, čisté + testy).
   API-Football historické kurzy **nevrací** (ověřeno `/odds?fixture=<minulý>`, `?date=`,
   `?league=&season=` → shodně 0 výsledků), takže zdrojem je **football-data.co.uk** (zdarma):
   zavírací 1X2 ve třech hladinách (Pinnacle / průměr trhu / nejlepší cena), zavírací Over/Under 2.5
-  a **skutečné počty rohů**. Pokrývá 16 z 18 lig (**Fortuna liga zdroj nemá**). Ukládá se jako
+  a **skutečné počty rohů**. Pokrývá 16 z 18 lig (**Fortuna liga zdroj nemá**).
+  **Od 28. 7. 2026 se z týchž řádků berou i:** zavírací **asijský hendikep** (`AHCh` =
+  ZAVÍRACÍ linka, `AHh` je otevírací — nemíchat; ceny Pinnacle/⌀/max → `MatchOddsRecord.ah`)
+  a `MatchFacts` = **rozhodčí, karty, fauly, střely (celkem i na branku), poločas**.
+  Dřív se 100+ sloupců zahazovalo ve prospěch čtyř; **0 volání API navíc**, jen širší parse
+  téhož souboru. Karty + rozhodčí jsou vstup do modelu karet (rozhodčí je tam dominantní
+  prediktor a rekreační knihy ho do linie často nedávají), AH je vstup do `asianHandicap.ts`.
+  **Pozor na pokrytí:** hendikep, karty a rozhodčí vozí jen soubory **hlavních** lig
+  (`kind: "main"`, 12 z 18) — „extra" ligy (Norsko, Dánsko, Rakousko, Polsko, Švýcarsko)
+  mají v CSV **jen 1X2**. A `Referee` je i mezi hlavními nekonzistentní: Anglie ho má
+  u 100 % zápasů, Řecko u 0 %. Ověřeno na stažených souborech, ne odhadem. Ukládá se jako
   sidecar `.cache/backtest/odds-<liga>-<sezóna>.json` (stejný vzor jako `stats-*.json`),
   **0 volání API**. Párování je přes **datum (±1 den) + skóre + podobnost jmen** — skóre je tvrdý
   kontrolní součet, aby se nemohly podstrčit kurzy jiného zápasu; dnes 99.1 % (13 976/14 097).
@@ -690,6 +749,54 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     kurzy na rohy zdroj nemá (chodí jen živě z API, marže **5–9 %** = násobek 1X2). Skill
     0.0025–0.0074 log-lossu je proti takové marži hodně málo. Další krok je snímat živé kurzy
     na rohy a měřit **CLV**, ne rovnou sázet.
+- **MODEL KARET** (`lib/picks/cards.ts`, čisté + testy; `npm run backtest -- --cards`)
+  — **nejlepší trh, jaký jsme zatím změřili**, a jediný, kde má model vstup, který trh
+  systematicky podvažuje. Zatím jen změřený, **v produkci se nepoužívá** (`compareTeams`
+  se nemění, nic se neukládá, 0 API volání).
+  - **Konstrukce je TÁŽ jako u gólů a rohů**, jen nad jinou metrikou:
+    `λ = ref × (karty týmu / ref) × (karty, které tým vyvolá u soupeřů / ref) × rozhodčí`.
+    Sdílí `strengthRatio`, okna i `PREDICTION_WINDOW_WEIGHTS`, rozdělení počtu událostí
+    (`overProbNegBin`) sdílí s rohy. Nové metriky `CARDS`/`CARDS_AGAINST` jsou mimo
+    `ALL_METRICS` (jako `XG_AGAINST`/`CORNERS_AGAINST`) → 0 API, žádný bump cache.
+  - **Data zdarma a offline:** karty (`HY/AY/HR/AR`) vozí `npm run import-odds`
+    (football-data → `MatchFacts`) – **8 020 zápasů (57 %)**.
+  - **Rozhodčí bereme z API-Football, ne z football-data** (`fixture.referee` v `/fixtures`).
+    Ověřeno živě: je vyplněný i tam, kde football-data jméno nemá vůbec – Řecko, Turecko
+    **i Fortuna liga**. Pokrytí tím šlo z **29 % na 100 %** a stálo to **48 volání**
+    (1 na ligu+sezónu, `npm run backtest -- --refresh`; jde o tutéž odpověď, ze které
+    bereme rozpisy → **0 volání navíc** při běžném provozu). Jména se sjednocují
+    `normalizeRefereeName` – API píše „R. Jones", football-data „R Jones", a bez toho by
+    se týž sudí rozpadl na dvě identity s půlkou vzorku každá.
+  - **Skill nad konstantou (hold-out 2025, fit běžel jen na 2024): +0.0100 … +0.0230** na
+    liniích 2.5–6.5, ECE 0.011–0.027. Na plném vzorku +0.0147…+0.0265. To je **3–8× víc
+    než rohy** (+0.003…+0.008) a srovnatelné až lepší než týmové totaly (+0.013…+0.027).
+    Úroveň λ sedí (4.30 vs. 4.23 skutečnost, mírné nadsazení ~1.5 %).
+  - **Overdisperzní jako rohy** → negativně binomické (`varianceRatio = 1.2`, Pearson
+    1.154–1.173). **Nezvyšovat podle hlavní linie** – na 4.5 vypadá log-loss plochý až do
+    1.4, ale ECE krajní linie 2.5 mezitím jde 0.012 → 0.026 (v=1.5) → 0.045 (v=1.7).
+  - **ROZHODČÍ: přidává +0.0114 (hold-out) až +0.0152 (plný vzorek) log-lossu, kladně na
+    VŠECH pěti liniích – ale JEN když se pořádně smrští.** Dvě chyby, které to nejdřív
+    obrátily do záporu (−0.0024), a obě jsou poučné dál:
+    1. **Jmenovatel musí být λ týmového modelu, ne ligový průměr.** Sudí nedostávají
+       zápasy náhodně – kdo píská derby, ukáže víc karet, i když je průměrný. Proti
+       ligovému průměru vyjde „přísný" a faktor **podruhé započítá to, co už týmová část
+       λ obsahuje**. Proto `backtestCards` běží **dvoufázově**: nejdřív λ bez sudího pro
+       celou historii, teprve z nich se staví index rozhodčích (a je to i **levnější** –
+       fáze 3 už jen násobí faktorem, protože sudí se aplikuje až za útlumem).
+    2. **Pozorované rozpětí mezi sudími je z valné části ŠUM.** Vypadá obrovsky
+       (2.30–6.50 karty = ~99 % průměru), ale při ~58 zápasech na sudího je vzorkovací
+       šum v tom průměru srovnatelný s pozorovaným rozptylem mezi sudími. Proto
+       `refShrink = 50` a proto je model **bez smrštění (`refShrink = 0`) HORŠÍ, než
+       kdyby o sudím nevěděl vůbec** (−0.0152). Optimum je ploché mezi ~25 a ~100,
+       mimo ten pás rychle padá. **Syrový průměr rozhodčího škodí** – tohle je hlavní
+       poučení a platí obecně pro každý vstup s malým vzorkem na kategorii.
+  - **Co tohle NEŘÍKÁ: že se na kartách vydělá.** Měří se kvalita modelu, ne cena.
+    Historické kurzy na karty zdroj nemá, marže je 5–9 % (násobek 1X2) a skill +0.02
+    log-lossu je proti ní pořád málo. Další krok je **snímat živé kurzy a měřit CLV**,
+    ne sázet. Pozor taky na **konvenci počítání** (viz `cardCount`): model počítá
+    „žluté + červené", ale booking points váží červenou 2–2.5× a druhá žlutá se někde
+    počítá dvakrát – **ověř pravidla vypořádání konkrétní knihy**, než se model přiloží
+    k lince. A matchery trhů se musí vzájemně vylučovat („Total Cards" vs. „Total Corners").
 - **Offline backtest** (`lib/picks/backtest.ts` + `npm run backtest`, čisté + testy): přehraje
   historii klubových lig **stejným jádrem** (`compareTeams`) a vydá `PredictionRow[]` → jde rovnou
   do `computeTrackRecord`/`computeReliability`/`fit.ts`. **Point-in-time** (`matchStatsBefore` bere
@@ -1332,7 +1439,7 @@ znaku (https, bez koncového `/`).
 **Pozn. (lokál):** Google token exchange = odchozí TLS → `npm run dev` spouštěj s
 `NODE_OPTIONS=--use-system-ca` (jako probe/prisma). Bez auth env app běží jako anonym (FREE).
 
-## STAV K 27. 7. 2026 — kde jsme skončili a čím pokračovat
+## STAV K 28. 7. 2026 — kde jsme skončili a čím pokračovat
 
 **Všechno je commitnuté, nasazené a ověřené.** Pracovní strom je čistý, `main` je
 odpushovaná, schéma v Neonu sedí, crony běží a endpointy jsou zamčené. Nic nevisí.
@@ -1345,17 +1452,29 @@ to bez čerstvých dat jde; další krok potřebuje živé kurzy, ne další př
 (1X2 log-loss 1.0239 vs. trh 0.9760, ROI −5 až −11 %, a **přísnější práh hrany to
 zhoršuje**). Model má **skill, ale ne hranu**; mezi tím stojí marže. Nezkoušet to znovu
 bez nového vstupu — viz „Co nezkoušet znovu" níže.
+**Od 28. 7. je to doložené i nejtvrdším možným způsobem** (`npm run backtest -- --ah`,
+8 021 zápasů): naše odchylka od sharp linie nese **β₂ = 0.007 ± 0.039** informace, tedy
+nulu — a to i po ligách. Padá tím i „model jako korekce trhu"; optimální posun sharp linie
+naší predikcí je **0 %**. Zaostáváme skoro celý na ose **kdo je lepší**, ne na ose
+**kolik padne gólů** (RMSE +0.095 vs. +0.032).
 Otevřená zůstává jediná větev: **trhy, kde model něco umí a kde jsme ještě neviděli cenu**
-(týmové totaly, rohy). Verdikt o nich přijde z **CLV**, ne z výsledků.
+(týmové totaly, rohy, nově karty). Verdikt o nich přijde z **CLV**, ne z výsledků.
 
 ### Kde má model skill (pořadí = kam se dívat první)
 | trh | skill nad konstantou | kurzy | ověřeno proti ceně |
 |---|---|---|---|
 | 1X2 | +0.053 | ✅ | **ANO — prohráváme** |
+| **Karty** | **+0.010…+0.023** (hold-out; z toho sudí +0.011) | ještě nesnímáme | ne |
 | **Týmové totaly** | **+0.013…+0.027** (nejlíp linie 1.5) | ✅ od 27. 7. | ne |
 | Over 2.5 | +0.009 | ✅ | částečně (ROI −1.8 %, CI přes nulu) |
 | Rohy | +0.003…+0.008 | ✅ od 27. 7. | ne |
 | BTTS | **žádný** | záměrně ne | — |
+
+**Pozor na srovnávání sloupce „skill":** karty a rohy jsou měřené na hold-outu, 1X2
+a totaly na plném vzorku. Hlavní rozdíl ale není velikost čísla, ale **odkud pochází**:
+u karet je zhruba polovina přínosu z **rozhodčího** – informace známé předem, kterou
+rekreační kniha do linie často nedává. To je jediný trh, kde nemáme jen lépe spočítané
+průměry. Zároveň je tam nejvyšší marže (5–9 %), takže verdikt stejně padne až z CLV.
 
 ### Hotovo 26.–27. 7. (vše nasazené)
 - **Sezónní údržba:** rotace + rozpočet predikčního cronu, `MIN_READABLE_CACHE_VERSION`,
@@ -1403,10 +1522,20 @@ Vypíše linie všech tří trhů zvlášť a v seznamu označí `← ROHY` / `�
 4. **Verdikt o týmových totalech a rozích z CLV.** Jediná živá otázka. Pořadí podle skillu:
    **nejdřív týmové totaly** (3–4× lepší než rohy, linie 1.5), pak rohy. **CLV, ne ROI** —
    na verdikt z výsledků by při téhle velikosti signálu byly potřeba tisíce sázek.
-5. **Model jako korekce trhu, ne náhrada.** Vzít odmaržovanou sharp linii jako prior
-   a naší predikcí ji posouvat jen tam, kde máme konkrétní informaci. Jediná varianta,
-   která nevyžaduje být lepší než Pinnacle. Až po bodu 4.
-6. **BRÁNA (drž ji):** do stakingu, bankrollu ani Kelly **neinvestovat**, dokud aspoň
+5. ~~**Model jako korekce trhu, ne náhrada.**~~ **UZAVŘENO 28. 7. 2026** změřením
+   (`--ah`): optimální váha naší odchylky od sharp linie je β₂ = 0.007 ± 0.039 = nula,
+   po ligách taky. Prior z trhu posouvat nemáme čím. **Další informace musí přijít
+   zvenčí** (sestavy, shot-level xG, rozhodčí u karet), ne z přeskládání téhož.
+6. ~~**MODEL KARET**~~ **HOTOVO 28. 7. 2026** — postavený, fitnutý a ověřený hold-outem
+   (viz „MODEL KARET" výše). Nejlepší změřený trh: +0.009…+0.021 nad konstantou, z toho
+   ~polovina z **rozhodčího**. **Zbývá na něm jen to, co potřebuje živou sezónu:**
+   a) **snímat kurzy na karty** (v odds feedu prokazatelně jsou — `teamTotalSide` je
+      jmenovitě odfiltrovává; ověř `npm run probe-odds -- <fixtureId> --markets`),
+   b) **ověřit konvenci vypořádání** konkrétní knihy (žluté+červené vs. booking points),
+   c) **měřit CLV**, ne ROI.
+   Pokrytí rozhodčích je **100 %** (bereme je z `/fixtures` API-Footballu, viz výše),
+   takže model platí pro všechny ligy včetně Fortuna ligy.
+7. **BRÁNA (drž ji):** do stakingu, bankrollu ani Kelly **neinvestovat**, dokud aspoň
    jeden trh nemá kladné CLV nebo ROI s intervalem spolehlivosti mimo nulu. Dnes takový
    trh **není**. Kelly je násobič hrany — na záporné hraně jen zrychluje ztrátu.
 
@@ -1421,6 +1550,11 @@ Vypíše linie všech tří trhů zvlášť a v seznamu označí `← ROHY` / `�
 
 ### Co nezkoušet znovu (změřeno, zamítnuto)
 - Porazit zavírací linii na 1X2 / Over 2.5 / BTTS gólovými průměry, xG a střelami.
+- **„Model jako korekce trhu" na gólových trzích** – změřeno přímo (`--ah`, 8 021 zápasů):
+  optimální váha naší odchylky od sharp linie je **β₂ = 0.007 ± 0.039**, tedy nula, a to
+  s intervalem těsným dost na to, aby vyloučil i malou hranu. Platí i **po ligách** (nic
+  nepřežije ani nekorigovaný |t| > 2) → hypotéza „v tenkém trhu to půjde" je vyvrácená.
+  Naše λ má správnou **úroveň**, jen je **šumnější** než trh; chybí informace, ne kalibrace.
 - Zpřísňovat práh hrany, aby se ROI zlepšilo – **zhoršuje ho** (−7.7 % → −8.9 %).
   Je to podpis modelu bez hrany: kde vidí největší výhodu, tam se nejvíc mýlí.
 - Platt kalibrace (`CALIB_A/B`) – fit skončil na hranici gridu se ziskem 0.0007.

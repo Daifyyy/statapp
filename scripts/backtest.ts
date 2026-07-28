@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { fetchLeagueSeasonFixtures, FINISHED_STATUSES } from "../lib/data/apiFootball.ts";
 import { fullTimeGoals } from "../lib/data/fixtures.ts";
 import { PREDICTION_LEAGUES } from "../lib/data/predictions.ts";
+import { CLUB_LEAGUES } from "../lib/data/catalog.ts";
 import { backtest, NAIVE_PROBS, type HistoryMatch } from "../lib/picks/backtest.ts";
 import { DEFAULT_TUNING, gridProbs, PREDICT_PARAMS } from "../lib/stats/predict.ts";
 import type { PredictionRow } from "../lib/types.ts";
@@ -48,6 +49,20 @@ import {
   teamTotalLevel,
   type TotalSide,
 } from "../lib/picks/teamTotals.ts";
+import {
+  computeSupremacyDiagnostic,
+  marketView,
+  type SupremacyRow,
+} from "../lib/picks/asianHandicap.ts";
+import {
+  backtestCards,
+  cardCalibration,
+  cardCount,
+  refereeSpread,
+  DEFAULT_CARD_TUNING,
+  type CardRow,
+  type CardTuning,
+} from "../lib/picks/cards.ts";
 
 const CACHE_DIR = join(process.cwd(), ".cache", "backtest");
 
@@ -93,6 +108,10 @@ async function loadSeason(league: number, season: number): Promise<HistoryMatch[
       awayLogo: f.teams.away.logo,
       homeGoals: ft.home,
       awayGoals: ft.away,
+      // Rozhodčí přímo z `/fixtures` – **0 volání navíc**, je v téže odpovědi. Pokrytí je
+      // nesrovnatelně lepší než u football-data (~100 % vs 29 %) a hlavně zahrnuje ligy,
+      // které football-data nemá vůbec (včetně Fortuna ligy). Vstup do modelu karet.
+      ...(f.fixture.referee ? { referee: f.fixture.referee } : {}),
     });
   }
   writeFileSync(file, JSON.stringify(rows));
@@ -178,6 +197,17 @@ function attachOdds(history: HistoryMatch[], league: number, season: number): vo
       m.homeMetrics = { ...m.homeMetrics, CORNERS: o.corners.home };
       m.awayMetrics = { ...m.awayMetrics, CORNERS: o.corners.away };
     }
+    // Karty a rozhodčí jsou ze stejného důvodu jako rohy MIMO `noOdds`: jsou to
+    // skutečnosti ze zápasu, ne ceny. `--cards --no-odds` musí měřit normálně.
+    if (o.facts?.cards) {
+      const c = o.facts.cards;
+      m.homeMetrics = { ...m.homeMetrics, CARDS: cardCount(c.homeYellow, c.homeRed) };
+      m.awayMetrics = { ...m.awayMetrics, CARDS: cardCount(c.awayYellow, c.awayRed) };
+    }
+    // Jen jako ZÁLOHA: primární zdroj jmen sudích je `/fixtures` (viz `loadSeason`),
+    // který pokrývá skoro vše. Jména se stejně sjednocují `normalizeRefereeName`,
+    // takže se dva zdroje nemůžou rozejít na dvě identity téhož rozhodčího.
+    if (!m.referee && o.facts?.referee) m.referee = o.facts.referee;
   }
 }
 
@@ -352,6 +382,429 @@ async function main() {
       console.log(`${String(hl).padEnd(8)}${cells.join("")}`);
     }
     console.log("(log-loss/ECE; nižší = lepší. Okenní model: 1.0116/0.008)");
+    return;
+  }
+
+  // ── ASIJSKÝ HENDIKEP (`--ah`) ───────────────────────────────────────────────────
+  // Rozklad naší chyby proti trhu na dvě nezávislé osy: PŘEVAHA (kdo je lepší) a SOUČET
+  // (kolik padne gólů). 1X2 log-loss řekne jen „ztrácíme 0.048", ne čím – a přitom se ty
+  // dvě osy v modelu ladí každá jinak (`dampenTotal` hýbe součtem a rozdíl drží).
+  //
+  // Proč AH: marže ~2 %, de-vig je u dvoucestného trhu přesný (žádná volba metody) a
+  // výstup je SPOJITÝ → regrese na skutečný rozdíl gólů má řádově větší sílu než měření
+  // nad diskrétním V/R/P. Vše offline z `.cache/backtest` (0 volání API).
+  if (process.argv.includes("--ah")) {
+    const rows = backtest(history, { seasons, minMatches }).filter(
+      (r) => r.available && r.homeGoals != null && r.awayGoals != null
+    );
+    const byId = new Map(history.map((m) => [m.fixtureId, m]));
+
+    const sup: SupremacyRow[] = [];
+    const byLeague = new Map<number, SupremacyRow[]>();
+    let sharpPrice = 0;
+    let avgPrice = 0;
+    let missingAh = 0;
+    let missingOu = 0;
+    let inverseFailed = 0;
+
+    for (const r of rows) {
+      const o = byId.get(r.fixtureId)?.odds;
+      // Sharp linie první, průměr trhu jako záloha – a rovnou se počítá, kolik je čeho,
+      // ať se výsledek nedá přečíst bez vědomí, z jaké ceny vznikl.
+      const ah = o?.ah?.pinnacle ?? o?.ah?.average;
+      const ou = o?.ou25?.pinnacle ?? o?.ou25?.average;
+      if (!o?.ah || !ah) {
+        missingAh++;
+        continue;
+      }
+      if (!ou) {
+        missingOu++;
+        continue;
+      }
+      const view = marketView(o.ah.line, ah.home, ah.away, ou.over, ou.under);
+      if (!view) {
+        inverseFailed++;
+        continue;
+      }
+      if (o.ah.pinnacle) sharpPrice++;
+      else avgPrice++;
+      const row: SupremacyRow = {
+        ourSupremacy: r.lambdaHome - r.lambdaAway,
+        ourTotal: r.lambdaHome + r.lambdaAway,
+        marketSupremacy: view.supremacy,
+        marketTotal: view.total,
+        actualDiff: r.homeGoals! - r.awayGoals!,
+        actualTotal: r.homeGoals! + r.awayGoals!,
+      };
+      sup.push(row);
+      const list = byLeague.get(r.leagueId);
+      if (list) list.push(row);
+      else byLeague.set(r.leagueId, [row]);
+    }
+
+    console.log("\n=== ASIJSKÝ HENDIKEP: rozklad naší chyby proti trhu ===");
+    if (sup.length === 0) {
+      console.log(
+        `Žádná data. Predikováno ${rows.length} zápasů, ale bez zavíracího AH ` +
+          `(${missingAh}) nebo bez Over/Under 2.5 (${missingOu}).\n` +
+          "Spusť `npm run import-odds` (AH vozí jen hlavní ligy; Norsko/Dánsko/Rakousko/\n" +
+          "Polsko/Švýcarsko mají ve zdroji jen 1X2). Pozor: `--no-odds` tuhle sekci vypne."
+      );
+      return;
+    }
+    const d = computeSupremacyDiagnostic(sup);
+    console.log(
+      `Pokrytí: ${sup.length} z ${rows.length} predikovaných zápasů ` +
+        `(bez AH ${missingAh}, bez O/U ${missingOu}, inverze selhala ${inverseFailed})`
+    );
+    console.log(
+      `Zdroj ceny: Pinnacle ${sharpPrice} / průměr trhu ${avgPrice}` +
+        (avgPrice > sharpPrice ? "  ⚠ převažuje průměr trhu = zašuměnější linie" : "")
+    );
+
+    // 1) Úroveň. Trh musí vyjít prakticky nevychýlený – když ne, je špatně inverze,
+    //    ne trh. Je to tedy hlavně kontrola tohohle měření samotného.
+    const f3 = (x: number) => (x >= 0 ? "+" : "") + x.toFixed(3);
+    console.log("\n1) Úroveň (kontrola vychýlení – trh má vyjít na skutečnosti)");
+    console.log("                    naše        trh   skutečnost");
+    console.log(
+      `  převaha         ${f3(d.mean.ourSupremacy).padStart(8)}   ` +
+        `${f3(d.mean.marketSupremacy).padStart(8)}     ${f3(d.mean.actualDiff).padStart(8)}`
+    );
+    console.log(
+      `  součet gólů     ${d.mean.ourTotal.toFixed(3).padStart(8)}   ` +
+        `${d.mean.marketTotal.toFixed(3).padStart(8)}     ${d.mean.actualTotal.toFixed(3).padStart(8)}`
+    );
+
+    // 2) Přesnost. RMSE proti skutečnosti je hrubé (rozdíl gólů je z valné části šum),
+    //    ale rozdíl mezi námi a trhem je čitelný.
+    console.log("\n2) Přesnost proti skutečnosti (RMSE, nižší = blíž pravdě)");
+    const gapSup = d.rmse.ourSupremacy - d.rmse.marketSupremacy;
+    const gapTot = d.rmse.ourTotal - d.rmse.marketTotal;
+    console.log(
+      `  převaha       naše ${d.rmse.ourSupremacy.toFixed(4)} | trh ${d.rmse.marketSupremacy.toFixed(4)}` +
+        `  → ${gapSup > 0 ? "trh lepší" : "MY lepší"} o ${Math.abs(gapSup).toFixed(4)}`
+    );
+    console.log(
+      `  součet gólů   naše ${d.rmse.ourTotal.toFixed(4)} | trh ${d.rmse.marketTotal.toFixed(4)}` +
+        `  → ${gapTot > 0 ? "trh lepší" : "MY lepší"} o ${Math.abs(gapTot).toFixed(4)}`
+    );
+
+    // 3) HLAVNÍ TEST. β₂ u naší odchylky od trhu je celá odpověď: kolik z toho, o co se
+    //    lišíme, je pravda. Zároveň je to rovnou optimální míra smrštění (bod 5 v plánu:
+    //    „model jako korekce trhu" = ber trh a posuň ho o β₂ × naši odchylku).
+    const fit = (name: string, f: typeof d.supremacyFit) => {
+      if (!f) {
+        console.log(`  ${name}: regrese neproběhla (málo dat)`);
+        return;
+      }
+      console.log(
+        `  β₁ trh       = ${f.coef[0].toFixed(3)} ± ${f.se[0].toFixed(3)}   (t = ${f.t[0].toFixed(1)})`
+      );
+      console.log(
+        `  β₂ odchylka  = ${f.coef[1].toFixed(3)} ± ${f.se[1].toFixed(3)}   (t = ${f.t[1].toFixed(1)})` +
+          `   ${Math.abs(f.t[1]) < 2 ? "← nevýznamné" : f.t[1] > 0 ? "← NESE INFORMACI" : "← ŠKODÍ"}`
+      );
+      console.log(`  R² = ${f.r2.toFixed(4)}   n = ${f.n}`);
+    };
+    console.log("\n3) HLAVNÍ TEST: skutečný rozdíl gólů ~ tržní převaha + NAŠE ODCHYLKA od ní");
+    fit("převaha", d.supremacyFit);
+    console.log("\n4) Totéž na ose součtu gólů: skutečný součet ~ tržní total + naše odchylka");
+    fit("součet", d.totalFit);
+
+    // 5) Neparametricky – kdyby byl vztah nelineární, regrese by ho podcenila.
+    console.log("\n5) Kvintily naší odchylky (bez předpokladu linearity)");
+    console.log("  kvintil      n   ⌀ odchylka   ⌀ zbytek trhu");
+    d.buckets.forEach((b, i) => {
+      console.log(
+        `  ${String(i + 1).padEnd(7)} ${String(b.n).padStart(6)}   ` +
+          `${f3(b.deviation).padStart(10)}   ${f3(b.residual).padStart(13)}`
+      );
+    });
+    console.log(
+      "  (nese-li odchylka informaci, musí ⌀ zbytek trhu růst shora dolů spolu s odchylkou)"
+    );
+
+    // 6) Po ligách. Hypotéza, kterou to má vyvrátit nebo potvrdit: hranu spíš najdeme
+    //    v TENKÉM trhu (Řecko, Skotsko, Turecko) než v Premier League, kde je sharp
+    //    peněz nejvíc. Pozor na mnohonásobné testování – u 12 lig vyjde jedna „významná"
+    //    náhodou, proto se vedle t tiskne i Bonferroniho práh.
+    // Země samotná nestačí – Anglie má v seznamu Premier League i Championship.
+    const leagueName = (id: number) => {
+      const l = CLUB_LEAGUES.find((x) => x.id === id);
+      return l ? `${l.country} ${l.name}` : String(id);
+    };
+    const entries = [...byLeague.entries()]
+      .map(([id, rows]) => ({ id, rows, d: computeSupremacyDiagnostic(rows) }))
+      .filter((e) => e.d.supremacyFit)
+      .sort((a, b) => (b.d.supremacyFit!.coef[1] ?? 0) - (a.d.supremacyFit!.coef[1] ?? 0));
+    const thr = 2.807; // Bonferroni pro ~12 souběžných testů na 5% hladině
+    console.log("\n6) Po ligách (β₂ = kolik z naší odchylky je pravda)");
+    console.log("  liga                            n        β₂       ±SE      t");
+    for (const e of entries) {
+      const f = e.d.supremacyFit!;
+      const flag = Math.abs(f.t[1]) > thr ? (f.t[1] > 0 ? "  ★ přežije Bonferroni" : "  ✗ škodí") : "";
+      console.log(
+        `  ${leagueName(e.id).padEnd(25)} ${String(e.d.n).padStart(6)}   ` +
+          `${f.coef[1].toFixed(3).padStart(7)}   ${f.se[1].toFixed(3).padStart(6)}   ` +
+          `${f.t[1].toFixed(1).padStart(5)}${flag}`
+      );
+    }
+    console.log(
+      `  (samostatně |t| > 2 = 5 %, ale při ${entries.length} ligách naráz je práh |t| > ${thr})`
+    );
+
+    const b2 = d.supremacyFit?.coef[1] ?? 0;
+    const t2 = d.supremacyFit?.t[1] ?? 0;
+    console.log("\nVERDIKT:");
+    if (Math.abs(t2) < 2) {
+      console.log(
+        "  Naše odchylka od trhu NENÍ statisticky odlišitelná od šumu (|t| < 2).\n" +
+          "  Na téhle ose trhu nic nepřidáváme – 'value' proti zavírací lince je artefakt."
+      );
+    } else if (t2 < 0) {
+      console.log(
+        "  Naše odchylka jde systematicky ŠPATNÝM směrem (β₂ < 0).\n" +
+          "  Kde se od trhu lišíme nejvíc, tam se nejvíc mýlíme – sedí to s tím, že přísnější\n" +
+          "  práh hrany ROI zhoršuje. Sázet podle odchylky by bylo horší než sázet náhodně."
+      );
+    } else {
+      console.log(
+        `  Naše odchylka nese informaci (β₂ = ${b2.toFixed(3)}, t = ${t2.toFixed(1)}).\n` +
+          `  Optimální použití NENÍ sázet podle našeho modelu, ale vzít tržní převahu a posunout\n` +
+          `  ji o ${(b2 * 100).toFixed(0)} % naší odchylky. Zbylých ${((1 - b2) * 100).toFixed(0)} % je šum.\n` +
+          `  Teprve tenhle smrštěný odhad má smysl porovnávat s cenou.`
+      );
+    }
+    return;
+  }
+
+  // ── Model KARET (`--cards`) ─────────────────────────────────────────────────────
+  // Větev otevřená nálezem z `--ah`: na ose „kolik událostí se stane" jsme skoro na
+  // úrovni trhu, a u karet k tomu máme vstup, který rekreační kniha do linie často nedává
+  // vůbec – ROZHODČÍHO. Krok 1 je jako u rohů **kalibrace proti skutečnosti**, ne kurzy.
+  // Data zdarma a offline: football-data `HY/AY/HR/AR` + `Referee` (viz `MatchFacts`).
+  if (process.argv.includes("--cards")) {
+    const kt = arg("cards-tune");
+    const kTuning: CardTuning = kt
+      ? {
+          base: { ...DEFAULT_TUNING, shrinkMatches: nums(kt)[0] },
+          totalSpread: nums(kt)[1],
+          varianceRatio: nums(kt)[2] ?? DEFAULT_CARD_TUNING.varianceRatio,
+          refShrink: nums(kt)[3] ?? DEFAULT_CARD_TUNING.refShrink,
+          refereeWeight: nums(kt)[4] ?? DEFAULT_CARD_TUNING.refereeWeight,
+        }
+      : DEFAULT_CARD_TUNING;
+    if (kt)
+      console.log(
+        `Ladění karet: k=${kTuning.base.shrinkMatches}, t=${kTuning.totalSpread}, ` +
+          `v=${kTuning.varianceRatio}, refK=${kTuning.refShrink}, refW=${kTuning.refereeWeight}`
+      );
+
+    const kRows = backtestCards(history, { seasons, minMatches, tuning: kTuning });
+    console.log("\n=== MODEL KARET ===");
+    if (kRows.length === 0) {
+      console.log(
+        "Žádná data o kartách. Spusť `npm run import-odds` (karty vozí hlavní ligy;\n" +
+          "Norsko/Dánsko/Rakousko/Polsko/Švýcarsko mají ve zdroji jen 1X2)."
+      );
+      return;
+    }
+    const withRef = kRows.filter((r) => r.referee).length;
+    const withRefData = kRows.filter((r) => r.refereeSample > 0).length;
+    console.log(`Predikováno: ${kRows.length} zápasů se skutečnými kartami`);
+    console.log(
+      `Rozhodčí: jméno u ${withRef} (${pct(withRef / kRows.length)}), ` +
+        `z toho s historií ${withRefData} (${pct(withRefData / kRows.length)})`
+    );
+    console.log("Karty = žluté + červené (váha červené 1 – konvence knih se liší, viz cards.ts)");
+
+    // 1) Úroveň λ. Systematické vychýlení se přelije do všech linií naráz.
+    const avgK = (f: (r: CardRow) => number) =>
+      kRows.reduce((a, r) => a + f(r), 0) / kRows.length;
+    console.log("\n--- Úroveň (λ vs. skutečnost) ---");
+    console.log(
+      `⌀ λ celkem:  ${avgK((r) => r.lambdaTotal).toFixed(3)}   ` +
+        `| ⌀ skutečné karty: ${avgK((r) => r.actualTotal).toFixed(3)}`
+    );
+    console.log(
+      `⌀ λ domácí:  ${avgK((r) => r.lambdaHome).toFixed(3)}   ` +
+        `| skutečnost: ${avgK((r) => r.actualHome).toFixed(3)}`
+    );
+    console.log(
+      `⌀ λ hosté:   ${avgK((r) => r.lambdaAway).toFixed(3)}   ` +
+        `| skutečnost: ${avgK((r) => r.actualAway).toFixed(3)}`
+    );
+
+    // 2) Tvar rozdělení – u rohů vyšla overdisperze, u karet ji čekáme taky (červená
+    //    a vyhrocené derby dělají dlouhý chvost).
+    const kd = dispersion(kRows);
+    const kPear = pearsonDispersion(kRows);
+    console.log("\n--- Tvar rozdělení (test předpokladu Poissonu) ---");
+    console.log(
+      `marginálně:  ⌀ ${kd.mean.toFixed(2)}  rozptyl ${kd.variance.toFixed(2)}  ` +
+        `→ Var/⌀ = ${kd.ratio.toFixed(3)}`
+    );
+    console.log(
+      `podmíněně:   Pearson ⌀(x−λ)²/λ = ${kPear.toFixed(3)}  ` +
+        (kPear > 1.05
+          ? "⚠ OVERDISPERZE (Poisson podstřelí chvosty → NB)"
+          : kPear < 0.95
+            ? "⚠ underdisperze"
+            : "✅ Poisson sedí")
+    );
+
+    // 3) ROZPTYL MEZI ROZHODČÍMI – popisné číslo, kvůli kterému tahle větev vznikla.
+    //    Verdikt „přidává to?" ale padne až z ablace v bodě 6, ne odsud.
+    const spread = refereeSpread(kRows);
+    console.log("\n--- Rozhodčí (⌀ karet na zápas, jen sudí s ≥ 20 zápasy) ---");
+    if (spread.count === 0) {
+      console.log("  Žádný rozhodčí s dost zápasy (zdroj jména nemá).");
+    } else {
+      console.log(
+        `  sudích ${spread.count}  |  nejmírnější ${spread.min.toFixed(2)}  ` +
+          `nejpřísnější ${spread.max.toFixed(2)}  |  ⌀ ${spread.overall.toFixed(2)}  ` +
+          `sd mezi sudími ${spread.sd.toFixed(3)}`
+      );
+      console.log(
+        `  rozpětí = ${(spread.max - spread.min).toFixed(2)} karty na zápas ` +
+          `(${pct((spread.max - spread.min) / spread.overall)} průměru)`
+      );
+    }
+
+    // 4) Kalibrace a log-loss po liniích. Laťkou je konstanta „vždy základní míra".
+    const CARD_LINES = [2.5, 3.5, 4.5, 5.5, 6.5];
+    console.log("\n--- Linie Over/Under karet (log-loss, nižší = lepší) ---");
+    console.log("linie   n      model     konstanta   rozdíl     ECE     verdikt");
+    for (const line of CARD_LINES) {
+      const c = cardCalibration(kRows, line);
+      const delta = c.baseLogloss - c.logloss;
+      console.log(
+        `${line.toFixed(1).padEnd(7)} ${String(c.n).padStart(5)}  ` +
+          `${c.logloss.toFixed(4)}    ${c.baseLogloss.toFixed(4)}    ` +
+          `${(delta >= 0 ? "+" : "") + delta.toFixed(4)}   ` +
+          `${(c.ece ?? 0).toFixed(4)}  ` +
+          (delta > 0.002
+            ? `✅ přidává (základ ${pct(c.baseRate)})`
+            : `⚠ nepřidává (základ ${pct(c.baseRate)})`)
+      );
+    }
+
+    // 5) Kalibrační křivka na hlavní linii – tvar chyby.
+    const kMain = cardCalibration(kRows, 4.5);
+    console.log("\n--- Kalibrační křivka, linie 4.5 (predikováno → skutečnost) ---");
+    for (const b of kMain.bins) {
+      if (b.count < 30 || b.avgPredicted == null || b.observed == null) continue;
+      const delta = b.observed - b.avgPredicted;
+      const mark = delta > 0.03 ? " ⬆ podstřeleno" : delta < -0.03 ? " ⬇ přestřeleno" : "";
+      console.log(
+        `  ${pct(b.lower).padStart(6)}–${pct(b.upper).padEnd(6)} ` +
+          `${pct(b.avgPredicted).padStart(7)} → ${pct(b.observed).padStart(7)}  (n=${b.count})${mark}`
+      );
+    }
+
+    // 6) ABLACE ROZHODČÍHO – celá otázka téhle větve. Tentýž model, jen `refereeWeight = 0`
+    //    (= faktor přesně 1). Rozdíl log-lossu je čistý příspěvek informace o sudím.
+    //    Měří se na PODMNOŽINĚ se známým rozhodčím, jinak by se přínos rozředil zápasy,
+    //    kde žádná informace navíc nebyla.
+    const noRefRows = backtestCards(history, {
+      seasons,
+      minMatches,
+      tuning: { ...kTuning, refereeWeight: 0 },
+    });
+    const known = new Set(kRows.filter((r) => r.refereeSample > 0).map((r) => r.fixtureId));
+    const withRefSub = kRows.filter((r) => known.has(r.fixtureId));
+    const noRefSub = noRefRows.filter((r) => known.has(r.fixtureId));
+    console.log(
+      `\n--- ABLACE: přidává rozhodčí něco? (${withRefSub.length} zápasů se známým sudím) ---`
+    );
+    if (withRefSub.length === 0) {
+      console.log("  Nelze změřit – žádný zápas se známým rozhodčím a historií.");
+    } else {
+      console.log("linie   bez sudího   se sudím    rozdíl     ECE bez → se");
+      let totalGain = 0;
+      for (const line of CARD_LINES) {
+        const a = cardCalibration(noRefSub, line);
+        const b = cardCalibration(withRefSub, line);
+        const gain = a.logloss - b.logloss;
+        totalGain += gain;
+        console.log(
+          `${line.toFixed(1).padEnd(7)} ${a.logloss.toFixed(4)}      ${b.logloss.toFixed(4)}    ` +
+            `${(gain >= 0 ? "+" : "") + gain.toFixed(4)}   ` +
+            `${(a.ece ?? 0).toFixed(4)} → ${(b.ece ?? 0).toFixed(4)}` +
+            (gain > 0.001 ? "  ✅" : gain < -0.001 ? "  ✗ škodí" : "  ~ nic")
+        );
+      }
+      console.log(
+        `  součet přes linie: ${(totalGain >= 0 ? "+" : "") + totalGain.toFixed(4)}` +
+          "   (kladné = informace o sudím pomáhá)"
+      );
+
+      // Sweep shrinkage rozhodčího na TÉŽE podmnožině. Rozklad rozptylu říká, že optimum
+      // má být kolem 110 zápasů (pozorované rozpětí mezi sudími je z valné části šum) –
+      // tohle to ověří měřením a zároveň ukáže, jestli je optimum vnitřní.
+      console.log("\n--- Sweep shrinkage rozhodčího (log-loss na linii 4.5) ---");
+      console.log("refShrink   log-loss     ECE      vs. bez sudího");
+      const noRefLl = cardCalibration(noRefSub, 4.5).logloss;
+      for (const k of [0, 10, 25, 50, 100, 200, 400]) {
+        const rows = backtestCards(history, {
+          seasons,
+          minMatches,
+          tuning: { ...kTuning, refShrink: k, refereeWeight: 1 },
+        }).filter((r) => known.has(r.fixtureId));
+        const c = cardCalibration(rows, 4.5);
+        const gain = noRefLl - c.logloss;
+        console.log(
+          `${String(k).padEnd(11)} ${c.logloss.toFixed(4)}    ${(c.ece ?? 0).toFixed(4)}   ` +
+            `${(gain >= 0 ? "+" : "") + gain.toFixed(4)}${gain > 0.001 ? "  ✅" : ""}`
+        );
+      }
+      console.log(`(bez sudího = ${noRefLl.toFixed(4)}; refShrink 0 = žádné smrštění)`);
+    }
+
+    console.log(
+      "\nPozn.: měří se JEN kvalita modelu, ne ziskovost – historické kurzy na karty zdroj\n" +
+        "nemá (chodí jen živě z API, marže 5–9 %). Teprve až model porazí konstantu A bude\n" +
+        "kalibrovaný, má smysl snímat ceny a měřit CLV."
+    );
+    return;
+  }
+
+  // Grid modelu karet (`--cards-grid`): shrinkage rozhodčího × útlum rozptylu součtu λ.
+  // Rozsah jde schválně až do DEGENERACE na obou osách – `t = 0` = „predikuj vždy ligový
+  // průměr", `refW = 0` = „ignoruj rozhodčího". Když optimum leží až tam, není to
+  // nastavení k dolazení, ale odpověď, že tam signál není (tatáž zásada jako u rohů).
+  if (process.argv.includes("--cards-grid")) {
+    const ts = [1.0, 0.7, 0.5, 0.3, 0.15, 0];
+    const refs: { label: string; refShrink: number; refereeWeight: number }[] = [
+      { label: "refW=0", refShrink: 25, refereeWeight: 0 }, // degenerace: bez rozhodčího
+      { label: "k=100", refShrink: 100, refereeWeight: 1 },
+      { label: "k=50", refShrink: 50, refereeWeight: 1 },
+      { label: "k=25", refShrink: 25, refereeWeight: 1 },
+      { label: "k=10", refShrink: 10, refereeWeight: 1 },
+      { label: "k=0", refShrink: 0, refereeWeight: 1 }, // degenerace: bez smrštění
+    ];
+    console.log("\n=== Grid modelu karet (log-loss / ECE na linii 4.5) ===");
+    console.log("sudí\\t " + ts.map((t) => t.toFixed(2).padStart(15)).join(""));
+    for (const r of refs) {
+      const cells: string[] = [];
+      for (const t of ts) {
+        const rows = backtestCards(history, {
+          seasons,
+          minMatches,
+          tuning: {
+            ...DEFAULT_CARD_TUNING,
+            totalSpread: t,
+            refShrink: r.refShrink,
+            refereeWeight: r.refereeWeight,
+          },
+        });
+        const c = cardCalibration(rows, 4.5);
+        cells.push(`${c.logloss.toFixed(4)}/${(c.ece ?? 0).toFixed(3)}`.padStart(15));
+      }
+      console.log(`${r.label.padEnd(7)}${cells.join("")}`);
+    }
+    console.log("(log-loss/ECE, nižší = lepší; první řádek = model BEZ rozhodčího)");
     return;
   }
 

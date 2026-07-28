@@ -28,9 +28,15 @@ function hm(over: Partial<HistoryMatch> = {}): HistoryMatch {
 }
 
 const MAIN_CSV = [
-  "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HC,AC,PSCH,PSCD,PSCA,MaxCH,MaxCD,MaxCA,AvgCH,AvgCD,AvgCA,PC>2.5,PC<2.5,MaxC>2.5,MaxC<2.5,AvgC>2.5,AvgC<2.5",
-  "E0,16/08/2024,20:00,Man United,Fulham,1,0,H,7,3,1.60,4.20,5.25,1.65,4.40,5.60,1.60,4.15,5.20,1.85,2.05,1.90,2.10,1.83,2.02",
-  "E0,17/08/2024,15:00,Ipswich,Liverpool,0,2,A,4,8,7.50,4.80,1.45,7.90,5.00,1.48,7.20,4.70,1.44,1.75,2.15,1.80,2.20,1.73,2.10",
+  "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HTHG,HTAG,Referee,HS,AS,HST,AST,HF,AF,HC,AC,HY,AY,HR,AR,PSCH,PSCD,PSCA,MaxCH,MaxCD,MaxCA,AvgCH,AvgCD,AvgCA,PC>2.5,PC<2.5,MaxC>2.5,MaxC<2.5,AvgC>2.5,AvgC<2.5,AHCh,PCAHH,PCAHA,MaxCAHH,MaxCAHA,AvgCAHH,AvgCAHA",
+  "E0,16/08/2024,20:00,Man United,Fulham,1,0,H,1,0,M Oliver,14,9,5,3,11,8,7,3,2,1,0,0,1.60,4.20,5.25,1.65,4.40,5.60,1.60,4.15,5.20,1.85,2.05,1.90,2.10,1.83,2.02,-1,1.98,1.92,2.02,1.96,1.96,1.90",
+  "E0,17/08/2024,15:00,Ipswich,Liverpool,0,2,A,0,1,A Taylor,6,18,2,7,9,10,4,8,3,1,0,0,7.50,4.80,1.45,7.90,5.00,1.48,7.20,4.70,1.44,1.75,2.15,1.80,2.20,1.73,2.10,1.25,1.95,1.95,2.00,1.99,1.93,1.92",
+].join("\n");
+
+/** Starý tvar souboru: jen 1X2 a rohy, žádný hendikep ani karty. */
+const MINIMAL_CSV = [
+  "Div,Date,Time,HomeTeam,AwayTeam,FTHG,FTAG,FTR,HC,AC,PSCH,PSCD,PSCA",
+  "E0,16/08/2024,20:00,Man United,Fulham,1,0,H,7,3,1.60,4.20,5.25",
 ].join("\n");
 
 const EXTRA_CSV = [
@@ -82,6 +88,39 @@ describe("parseMainCsv", () => {
     expect(rows[0].odds.ou25?.pinnacle).toEqual({ over: 1.85, under: 2.05 });
     expect(rows[0].odds.corners).toEqual({ home: 7, away: 3 });
   });
+
+  it("načte ZAVÍRACÍ asijský hendikep včetně znaménka a čtvrtinových linek", () => {
+    const rows = parseMainCsv(MAIN_CSV);
+    // Domácí favorit → záporná linka (dávají gól náskoku).
+    expect(rows[0].odds.ah).toEqual({
+      line: -1,
+      pinnacle: { home: 1.98, away: 1.92 },
+      average: { home: 1.96, away: 1.9 },
+      best: { home: 2.02, away: 1.96 },
+    });
+    // Host favorit → kladná linka pro domácí; čtvrtinová se nesmí zaokrouhlit.
+    expect(rows[1].odds.ah?.line).toBe(1.25);
+  });
+
+  it("načte karty, fauly, střely, poločas i rozhodčího", () => {
+    const rows = parseMainCsv(MAIN_CSV);
+    expect(rows[0].odds.facts).toEqual({
+      referee: "M Oliver",
+      cards: { homeYellow: 2, awayYellow: 1, homeRed: 0, awayRed: 0 },
+      fouls: { home: 11, away: 8 },
+      shots: { home: 14, away: 9, homeOn: 5, awayOn: 3 },
+      halfTime: { home: 1, away: 0 },
+    });
+  });
+
+  it("chybějící sloupce nic nerozbijí (starý tvar souboru)", () => {
+    const rows = parseMainCsv(MINIMAL_CSV);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].odds.pinnacle).toEqual({ home: 1.6, draw: 4.2, away: 5.25 });
+    expect(rows[0].odds.ah).toBeUndefined();
+    expect(rows[0].odds.facts).toBeUndefined();
+    expect(rows[0].odds.corners).toEqual({ home: 7, away: 3 });
+  });
 });
 
 describe("parseExtraCsv", () => {
@@ -91,6 +130,8 @@ describe("parseExtraCsv", () => {
     expect(rows[0].odds.pinnacle).toEqual({ home: 2.4, draw: 3.5, away: 2.9 });
     expect(rows[0].odds.ou25).toBeUndefined();
     expect(rows[0].odds.corners).toBeUndefined();
+    expect(rows[0].odds.ah).toBeUndefined();
+    expect(rows[0].odds.facts).toBeUndefined();
     expect(rows[1].season).toBe(2012);
   });
 });

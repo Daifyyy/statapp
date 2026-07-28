@@ -57,6 +57,12 @@ export interface HistoryMatch {
    * backtest jen to, jestli je lepší než hádání.
    */
   odds?: MatchOddsRecord;
+  /**
+   * Jméno rozhodčího (football-data, sloupec `Referee`) – vstup do modelu karet, kde je
+   * to dominantní prediktor. Pokrytí je nerovnoměrné (Anglie 100 %, Řecko 0 %), takže
+   * je pole volitelné a zápas bez něj prostě dostane neutrální faktor.
+   */
+  referee?: string;
 }
 
 /**
@@ -89,9 +95,12 @@ export function matchStatsBefore(
       // xG SOUPEŘE = xG, které tým inkasoval → kvalita obrany bez šumu z proměňování.
       // Rohy soupeře = rohy, které tým pustil → obranná strana λ v modelu rohů
       // (`lib/picks/corners.ts`). Obojí je tatáž úvaha, jen nad jinou metrikou.
+      // Karty SOUPEŘE = jak moc tým kartu u protihráčů vyvolá → obranná strana λ
+      // v modelu karet (`lib/picks/cards.ts`). Tatáž úvaha jako u xG a rohů.
       const oppStats = isHome ? m.awayMetrics : m.homeMetrics;
       const xgAgainst = oppStats?.XG;
       const cornersAgainst = oppStats?.CORNERS;
+      const cardsAgainst = oppStats?.CARDS;
       return {
         fixtureId: m.fixtureId,
         date: m.date,
@@ -104,6 +113,7 @@ export function matchStatsBefore(
           ...stats,
           ...(xgAgainst != null ? { XG_AGAINST: xgAgainst } : {}),
           ...(cornersAgainst != null ? { CORNERS_AGAINST: cornersAgainst } : {}),
+          ...(cardsAgainst != null ? { CARDS_AGAINST: cardsAgainst } : {}),
           GOALS_FOR: gf,
           GOALS_AGAINST: ga,
         },

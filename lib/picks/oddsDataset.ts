@@ -30,6 +30,40 @@ export interface OddsPair {
   under: number;
 }
 
+/** Dvoucestná cena asijského hendikepu (bez remízy – ta se řeší pushem). */
+export interface OddsTwoWay {
+  home: number;
+  away: number;
+}
+
+/**
+ * Zavírací **asijský hendikep**. `line` je hendikep DOMÁCÍCH (záporný = favorit, −0.75 =
+ * čtvrtinová linka). Je to nejostřejší trh, jaký zdroj dává: marže ~2 % proti 5–7 %
+ * u 1X2 a de-vig je u dvoucestného trhu přesný, ne volba metody (viz `asianHandicap.ts`).
+ */
+export interface AsianHandicapOdds {
+  line: number;
+  pinnacle?: OddsTwoWay;
+  average?: OddsTwoWay;
+  best?: OddsTwoWay;
+}
+
+/**
+ * Skutečnosti ze zápasu, které zdroj veze zadarmo ve stejném řádku jako kurzy.
+ *
+ * **Nejsou to ceny** – je to výsledek, stejně jako `corners`. Tečou sidecarem jen proto,
+ * že jsou v témže CSV; kdo je čte, musí to vědět (viz `attachOdds`, které rohy přilepuje
+ * i při `--no-odds`). Karty + `referee` jsou vstup do modelu karet: rozhodčí je u toho
+ * trhu dominantní prediktor a rekreační knihy ho do linie často nedávají vůbec.
+ */
+export interface MatchFacts {
+  referee?: string;
+  cards?: { homeYellow: number; awayYellow: number; homeRed: number; awayRed: number };
+  fouls?: { home: number; away: number };
+  shots?: { home: number; away: number; homeOn: number; awayOn: number };
+  halfTime?: { home: number; away: number };
+}
+
 /**
  * Kurzy k jednomu zápasu ve třech cenových hladinách. Rozdíl mezi nimi je podstatný:
  * `pinnacle` = sharp linie (nejlepší odhad pravděpodobnosti), `average` = co dostane
@@ -41,8 +75,12 @@ export interface MatchOddsRecord {
   best?: OddsTriple;
   /** Over/Under 2.5 – jen hlavní ligy (soubory „extra" lig totaly nemají). */
   ou25?: { pinnacle?: OddsPair; average?: OddsPair; best?: OddsPair };
+  /** Zavírací asijský hendikep – jen hlavní ligy. Vstup pro diagnostiku převahy. */
+  ah?: AsianHandicapOdds;
   /** Skutečné rohy obou stran – vstup pro model rohů (jen hlavní ligy). */
   corners?: { home: number; away: number };
+  /** Ostatní skutečnosti ze zápasu (karty, fauly, střely, rozhodčí) – jen hlavní ligy. */
+  facts?: MatchFacts;
 }
 
 /** Zdroj dat pro jednu naši ligu. */
@@ -200,6 +238,58 @@ const pair = (
   return O && U ? { over: O, under: U } : undefined;
 };
 
+const twoWay = (
+  row: Record<string, string>,
+  h: string,
+  a: string
+): OddsTwoWay | undefined => {
+  const H = num(row[h]);
+  const A = num(row[a]);
+  return H && A ? { home: H, away: A } : undefined;
+};
+
+/**
+ * Číslo, které smí být nula i záporné – hendikep (−0.75) a počty (0 karet). `num` na ně
+ * použít nejde: ten zahazuje vše ≤ 1, protože je psaný pro kurzy.
+ */
+const signed = (v: string | undefined): number | undefined => {
+  if (v == null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/** Skutečnosti ze zápasu (karty, fauly, střely, poločas, rozhodčí). Prázdno → `undefined`. */
+function parseFacts(r: Record<string, string>): MatchFacts | undefined {
+  const facts: MatchFacts = {};
+  if (r.Referee) facts.referee = r.Referee;
+
+  const hy = signed(r.HY);
+  const ay = signed(r.AY);
+  const hr = signed(r.HR);
+  const ar = signed(r.AR);
+  if (hy != null && ay != null && hr != null && ar != null) {
+    facts.cards = { homeYellow: hy, awayYellow: ay, homeRed: hr, awayRed: ar };
+  }
+
+  const hf = signed(r.HF);
+  const af = signed(r.AF);
+  if (hf != null && af != null) facts.fouls = { home: hf, away: af };
+
+  const hs = signed(r.HS);
+  const as = signed(r.AS);
+  const hst = signed(r.HST);
+  const ast = signed(r.AST);
+  if (hs != null && as != null && hst != null && ast != null) {
+    facts.shots = { home: hs, away: as, homeOn: hst, awayOn: ast };
+  }
+
+  const hth = signed(r.HTHG);
+  const hta = signed(r.HTAG);
+  if (hth != null && hta != null) facts.halfTime = { home: hth, away: hta };
+
+  return Object.keys(facts).length > 0 ? facts : undefined;
+}
+
 /** CSV → pole objektů dle hlavičky (prázdné/rozbité řádky se přeskočí). */
 function toRecords(text: string): Record<string, string>[] {
   const rows = parseCsv(text).filter((r) => r.length > 1);
@@ -230,6 +320,20 @@ export function parseMainCsv(text: string): SourceMatch[] {
     const hc = Number(r.HC);
     const ac = Number(r.AC);
 
+    // Zavírací asijský hendikep. `AHCh` je ZAVÍRACÍ linka (otevírací je `AHh`) – brát
+    // otevírací linku k zavíracím cenám by míchalo dva okamžiky trhu do jednoho čísla.
+    const ahLine = signed(r.AHCh);
+    const ah: AsianHandicapOdds | undefined =
+      ahLine != null
+        ? {
+            line: ahLine,
+            pinnacle: twoWay(r, "PCAHH", "PCAHA"),
+            average: twoWay(r, "AvgCAHH", "AvgCAHA"),
+            best: twoWay(r, "MaxCAHH", "MaxCAHA"),
+          }
+        : undefined;
+    const facts = parseFacts(r);
+
     out.push({
       day,
       home: r.HomeTeam,
@@ -241,9 +345,11 @@ export function parseMainCsv(text: string): SourceMatch[] {
         average: triple(r, "AvgCH", "AvgCD", "AvgCA"),
         best: triple(r, "MaxCH", "MaxCD", "MaxCA"),
         ...(ou25.pinnacle || ou25.average || ou25.best ? { ou25 } : {}),
+        ...(ah && (ah.pinnacle || ah.average || ah.best) ? { ah } : {}),
         ...(Number.isFinite(hc) && Number.isFinite(ac)
           ? { corners: { home: hc, away: ac } }
           : {}),
+        ...(facts ? { facts } : {}),
       },
     });
   }

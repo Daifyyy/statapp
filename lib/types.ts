@@ -43,7 +43,20 @@ export type Metric =
    * potřebuje na druhou stranu λ: kolik rohů tým soupeři pouští. Mimo `ALL_METRICS`
    * → v UI se nezobrazuje a nevyžaduje bump cache verze.
    */
-  | "CORNERS_AGAINST";
+  | "CORNERS_AGAINST"
+  /**
+   * **Karty celkem** (žluté + červené) jedné strany. `YELLOW_CARDS`/`RED_CARDS` jsou
+   * v `ALL_METRICS` zvlášť kvůli UI; model karet (`lib/picks/cards.ts`) ale sází na
+   * jejich **součet**, protože přesně tak je postavená nabídka trhu. Plní se offline
+   * z football-data (`HY+HR`), mimo `ALL_METRICS` → v UI se nezobrazuje a nebumpuje cache.
+   */
+  | "CARDS"
+  /**
+   * Karty, které dostal **soupeř** – tedy jak moc tým kartu u protihráčů *vyvolá*
+   * (tvrdá hra, provokace, tempo). Obranný protějšek `CARDS`, přesně jako
+   * `CORNERS_AGAINST` u rohů. Mimo `ALL_METRICS`.
+   */
+  | "CARDS_AGAINST";
 
 /** Okna pro kluby (počtová) a reprezentace (časová). */
 export type WindowKey =
@@ -143,6 +156,8 @@ export const METRIC_LABELS: Record<Metric, string> = {
   CLEAN_SHEET: "Čisté konto (podíl zápasů)",
   XG_AGAINST: "Inkasované xG",
   CORNERS_AGAINST: "Inkasované rohy",
+  CARDS: "Karty celkem",
+  CARDS_AGAINST: "Karty soupeře",
 };
 
 /**
