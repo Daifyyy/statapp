@@ -303,6 +303,16 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
     otrávila okna, na kterých stojí λ predikcí. Repeat views pokrývá CDN cache routy
     (1 h / 24 h stale) a většina prokliknutých zápasů v cache už je (dotáhlo je Porovnání).
   - Tlačítko je **mimo `Link`** řádku – uvnitř by klik navigoval do Porovnání.
+  - **Verdikt NESMÍ mluvit o „ovládnutí" zápasu** – stojí na nebezpečnosti, ne na držení
+    míče, a tým si může vytvořit dvakrát víc s třetinou míče (reálně: Bournemouth 33 %
+    držení, xG 1.78 vs 0.78). Formulace „ovládli" si odporovala s pruhem Kontroly hry
+    hned pod tím; dnes „si vytvořili mnohem víc". Kryto testem s těmi čísly.
+  - **Ověřeno na reálných zápasech** (Premier League, La Liga, MS 2026, Fortuna liga):
+    turnajové reprezentační zápasy xG **mají** (na rozdíl od přáteláků), Fortuna liga je
+    smíšená – část zápasů má 15 metrik **bez xG** (Nebezpečnost spadne na střely na
+    branku, Proměňování se skryje), část jen 2 metriky (přehled se nevykreslí vůbec).
+    Známá hrubá hrana: bez xG se otevřenost počítá ze střel na branku, takže zápas
+    s málo střelami dostane „uzavřený", i když skončil 3:0. Prahy jsou v `T`.
 - **Deep-link target (klub i reprezentace):** `compareMode` + `home/awayCompareLeagueId`
   (na `UpcomingFixture`, `MatchPick` i `SettledMatch`). Klub → CLUB mód, „liga" = `leagueId`
   u obou. Reprezentace → **NATIONAL mód, kde „ligou" každého týmu je jeho konfederace** – tu
@@ -1518,6 +1528,17 @@ u karet je zhruba polovina přínosu z **rozhodčího** – informace známé p�
 rekreační kniha do linie často nedává. To je jediný trh, kde nemáme jen lépe spočítané
 průměry. Zároveň je tam nejvyšší marže (5–9 %), takže verdikt stejně padne až z CLV.
 
+### Hotovo 28. 7. (vše nasazené)
+- **AH diagnostika** (`lib/picks/asianHandicap.ts`) → **gólové trhy jsou uzavřené.**
+  β₂ = 0.007 ± 0.039, po ligách nic. Padá s tím i „model jako korekce trhu".
+- **MODEL KARET** (`lib/picks/cards.ts`) – nejlepší změřený trh: +0.011…+0.024 na hold-outu,
+  z toho **rozhodčí +0.011** a **fauly +0.005**. Kurzy na karty se snímají (0 volání navíc).
+- **Rozhodčí z API-Footballu** (`fixture.referee`) → pokrytí 29 % → **100 %** za 48 volání,
+  včetně lig, které football-data nemá vůbec (Řecko, Turecko, Fortuna liga).
+- **Dotěžení football-data**: zavírací AH + `MatchFacts` (karty, fauly, střely, poločas).
+- **Přehled zápasu ve Výsledcích** (`lib/stats/matchReport.ts`) – kategorický obraz místo
+  syrových čísel; jediná věc z téhle várky, která je pro uživatele, ne pro model.
+
 ### Hotovo 26.–27. 7. (vše nasazené)
 - **Sezónní údržba:** rotace + rozpočet predikčního cronu, `MIN_READABLE_CACHE_VERSION`,
   fallback formy pro nováčky, filtr lig do dotazu ve Výsledcích, `cachedJson` neukládá
@@ -1564,6 +1585,16 @@ sonda ověřuje tu logiku, která data opravdu plní. U karet navíc vypíše tr
    zápasů** (to byla oprava s cronem každé 3 h; dřív ho dostaly jen zápasy 04:30–16:30 UTC).
 3. **CLV panel** na `/predikce` naskočí kolem 10. 8., použitelný vzorek spíš **září/říjen**.
    `ClvSummary.sharpShare` řekne, kolik tipů se měří proti sharp konsenzu.
+
+### ⚠ „ZAVÍRACÍ" LINIE NENÍ ZAVÍRACÍ (nejlevnější zlepšení, které máme)
+`ODDS_CLOSING_HOURS = 12` a cron snapshotu běží **každé 3 h** → zavírací snímek padne na
+první běh uvnitř dvanáctihodinového okna, tedy **9–12 h před výkopem**. U večerního zápasu
+je to odpoledne předchozího dne. CLV se tím měří jako pohyb z T−72 h na T−10 h a **celý
+poslední den, kde je pohyb nejostřejší, nám uniká**.
+Oprava je téměř zadarmo: zkrátit okno (12 h → ~2 h) a pustit cron **hodinově**. **Kvótu to
+nezdraží** – guard `oddsSnapshotState` drží dva snímky na zápas za život bez ohledu na to,
+jak často se běží; mění se jen *kdy* se ten druhý vezme. Udělat **před** tím, než se začne
+CLV vyhodnocovat, jinak se první měsíce sezóny proměří proti špatné referenci.
 
 ### B) Sázecí model — otevřené
 4. **Verdikt o týmových totalech a rozích z CLV.** Jediná živá otázka. Pořadí podle skillu:
