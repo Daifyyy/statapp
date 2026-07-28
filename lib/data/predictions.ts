@@ -111,13 +111,24 @@ export const ODDS_LOOKAHEAD_HOURS = 72;
  *
  * Cena: +1 volání na zápas (~30–50/den = pod 1 % denní kvóty).
  *
- * **Snímky NEBERE denní predikční cron, ale vlastní `/api/cron/snapshot-odds` každé
- * 3 h** – a je to nutnost, ne kosmetika. S jedním během v 04:30 UTC a 12h oknem by
- * zavírací snímek dostaly **jen zápasy s výkopem mezi 04:30 a 16:30 UTC**: večerní
- * zápas ve 21:45 SELČ je v 04:30 ještě 15 h daleko (mimo okno) a další běh cronu je
- * až po výkopu. CLV by se tak počítalo z vychýlené menšiny (víkendová odpoledne).
+ * **Snímky NEBERE denní predikční cron, ale vlastní `/api/cron/snapshot-odds`, který
+ * jede HODINOVĚ** – a je to nutnost, ne kosmetika. S jedním během v 04:30 UTC by
+ * zavírací snímek dostaly jen zápasy s výkopem dopoledne; večerní zápas ve 21:45 SELČ
+ * by další běh zastihl až po výkopu.
+ *
+ * **3 h, ne 12 (změněno 28. 7. 2026).** `fixturesNeedingOdds` bere **první** běh uvnitř
+ * okna, takže při dvanáctihodinovém okně a cronu po 3 h padl „zavírací" snímek
+ * **9–12 h před výkopem** – u večerního zápasu odpoledne předchozího dne. CLV pak měřilo
+ * pohyb z T−72 h na T−10 h a **celý poslední den, kde je pohyb nejostřejší, chybělo**.
+ * Se třemi hodinami a hodinovým cronem padne snímek kolem **T−3 h** a zbývají ještě dva
+ * pokusy, kdyby běh vypadl (`schedule` v GitHub Actions je best-effort).
+ *
+ * **Kvótu to nezdraží ani o jedno volání**: guard `oddsFetchedAt`/`oddsCloseAt` drží dva
+ * snímky na zápas za život bez ohledu na to, jak často se běží – mění se jen *kdy* se
+ * ten druhý vezme. Kratší okno **nejde** kompenzovat řidším během; obojí musí sedět
+ * dohromady, jinak zápasy zavírací snímek nedostanou vůbec.
  */
-export const ODDS_CLOSING_HOURS = 12;
+export const ODDS_CLOSING_HOURS = 3;
 
 /**
  * Kolik času smí jeden běh spotřebovat, než skončí čistě. Musí být **pod** `maxDuration`
@@ -266,7 +277,7 @@ export async function runPredictUpcoming(
           }
 
           // Kurzy se tady ZÁMĚRNĚ neberou – vlastníkem obou snímků je
-          // `runSnapshotOdds` (`/api/cron/snapshot-odds`, každé 3 h). Denní běh by
+          // `runSnapshotOdds` (`/api/cron/snapshot-odds`, hodinově). Denní běh by
           // zavírací linii u večerních zápasů nikdy nestihl (viz `ODDS_CLOSING_HOURS`)
           // a dva vlastníci téhož zápisu jsou zbytečná past.
         }
@@ -299,11 +310,12 @@ const SNAPSHOT_LIMIT = 40;
  * 04:30 UTC, takže by zavírací snímek (okno 12 h) dostaly **jen zápasy s výkopem mezi
  * 04:30 a 16:30 UTC** – večerní zápasy, tedy většina, nikdy. CLV by pak stálo na
  * vychýlené menšině. Tenhle běh je proti tomu levný (jen `/odds`, žádné `compareTeams`)
- * a může jezdit každé 3 h.
+ * a jezdí **hodinově**.
  *
  * Kvótu to nezdraží: `fixturesNeedingOdds` čte jen DB a každý zápas dostane nejvýš dva
  * snímky za život (guard `oddsFetchedAt`/`oddsCloseAt`). Častější běh mění jen *kdy*
- * se ta dvě volání provedou, ne kolik jich je.
+ * se ta dvě volání provedou, ne kolik jich je. Hodinový běh navíc znamená **méně
+ * zápasů na jeden běh**, takže je dál od `SNAPSHOT_LIMIT` i od časového rozpočtu.
  *
  * **Chyby se počítají a vracejí, nepolykají se.** Fetch kurzů je best-effort a přesně
  * proto rok tiše nefungoval (zod schéma padalo na numerickém `value` a nikdo se to

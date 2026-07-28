@@ -11,15 +11,23 @@
 #   - variable APP_URL      … https://statapp-uvol.vercel.app  (bez koncového lomítka)
 #
 # Pozn.: `schedule` v Actions je **best-effort** – při zátěži se spuštění opozdí
-# i o pár desítek minut. Pro snímky kurzů to nevadí (okno je hodinové), pro denní
-# úlohy vůbec. Časy jsou v **UTC**.
+# i o pár desítek minut, občas se běh nespustí vůbec. Denním úlohám to nevadí.
+# U snímků kurzů je proto okno (`ODDS_CLOSING_HOURS = 3 h`) záměrně **širší než
+# perioda běhu (1 h)**: zápas tak má na zavírací snímek tři pokusy a jeden výpadek
+# ho nepřipraví o CLV. Časy jsou v **UTC**.
 
 name: Cron
 
 on:
   schedule:
     # Snímky kurzů – nejčastější úloha, kvůli zavírací linii u večerních zápasů.
-    - cron: "0 */3 * * *"
+    # HODINOVĚ (od 28. 7. 2026): `fixturesNeedingOdds` bere první běh uvnitř okna, takže
+    # při běhu po 3 h a 12h okně padal „zavírací" snímek 9–12 h před výkopem a CLV mu
+    # unikal celý poslední den. Viz `ODDS_CLOSING_HOURS` (dnes 3 h) – ta dvě čísla musí
+    # sedět dohromady: kratší okno bez častějšího běhu = zápasy bez zavíracího snímku.
+    # Minuta 20 schválně: denní úlohy jedou na :00, :15 a :30, takže nikdy nenastane
+    # okamžik, kdy by seděly dva rozvrhy naráz.
+    - cron: "20 * * * *"
     # Denní údržba (časy odpovídají původnímu vercel.json).
     - cron: "0 4 * * *" # warm
     - cron: "30 4 * * *" # predict-upcoming
@@ -66,7 +74,7 @@ jobs:
             exit 0
           fi
           case "$SCHEDULE" in
-            "0 */3 * * *")  path="snapshot-odds" ;;
+            "20 * * * *")   path="snapshot-odds" ;;
             "0 4 * * *")    path="warm" ;;
             "30 4 * * *")   path="predict-upcoming" ;;
             "0 5 * * *")    path="refresh-transfers" ;;

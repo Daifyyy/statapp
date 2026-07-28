@@ -663,7 +663,7 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   kontrolní součet, aby se nemohly podstrčit kurzy jiného zápasu; dnes 99.1 % (13 976/14 097).
   Jména se páruje kombinací shody tokenů („Man United" ⊂ „Manchester United") a bigramů
   („Levadiakos" vs „Levadeiakos"), plus ruční alias tam, kde se klub jmenuje jinak (WSG Tirol).
-- **Snímky kurzů má VLASTNÍ cron `/api/cron/snapshot-odds` (každé 3 h), ne denní pipeline.**
+- **Snímky kurzů má VLASTNÍ cron `/api/cron/snapshot-odds` (HODINOVĚ), ne denní pipeline.**
   Není to ladění, ale oprava vychýlení: predikční cron jede 1×/den ve 04:30 UTC a zavírací
   okno je 12 h, takže večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 ještě **15 h**
   daleko → mimo okno, a další běh přijde až po výkopu. Zavírací snímek by tak dostávaly
@@ -1455,7 +1455,7 @@ proto dělá upsert (ne createMany). Po nasazení případně urychli přes `/ap
 ## Plánované úlohy (crony) — POZOR: Vercel Hobby, spouští je GITHUB ACTIONS
 - **Rozvrh žije v `.github/workflows/cron.yml`, ne ve `vercel.json`** (ten je prázdný).
   Důvod je tvrdý limit plánu: **Vercel Hobby dovolí 2 cron joby a jen denní frekvenci.**
-  Úloh je šest a snímky kurzů musí běžet **každé 3 h**, jinak zavírací linii dostanou jen
+  Úloh je šest a snímky kurzů musí běžet **hodinově**, jinak zavírací linii dostanou jen
   zápasy s výkopem 04:30–16:30 UTC (viz `ODDS_CLOSING_HOURS`). Actions to zvládnou zdarma.
   Jeden vlastník rozvrhu = žádné dvojité běhy; **nevracet crony do `vercel.json`**.
 - **Nastavení v GitHubu** (Settings → Secrets and variables → Actions): secret `CRON_SECRET`
@@ -1581,20 +1581,24 @@ sonda ověřuje tu logiku, která data opravdu plní. U karet navíc vypíše tr
 1. **Parsování rohů a týmových totalů** proti živému API — `npm run probe-odds --
    <fixtureId> --markets`. Viz varování výše. **Tohle udělej první**, celý sběr na tom stojí.
 2. **Kurzy padají do DB:** v `FixturePrediction` přibývá `oddsHome`, `oddsCloseAt`,
-   `oddsBooks`/`oddsCloseBooks`. Zvlášť ověř, že **zavírací snímek chodí i u večerních
-   zápasů** (to byla oprava s cronem každé 3 h; dřív ho dostaly jen zápasy 04:30–16:30 UTC).
+   `oddsBooks`/`oddsCloseBooks`. Zvlášť ověř **dvě věci najednou**: že zavírací snímek
+   chodí i u **večerních** zápasů, a že `oddsCloseAt` je **~1–3 h před výkopem**, ne
+   deset hodin. Dřív padal 9–12 h předem (viz níže) – kdyby se to vrátilo, CLV měří
+   pohyb, který skončil dávno před zavřením.
 3. **CLV panel** na `/predikce` naskočí kolem 10. 8., použitelný vzorek spíš **září/říjen**.
    `ClvSummary.sharpShare` řekne, kolik tipů se měří proti sharp konsenzu.
 
-### ⚠ „ZAVÍRACÍ" LINIE NENÍ ZAVÍRACÍ (nejlevnější zlepšení, které máme)
-`ODDS_CLOSING_HOURS = 12` a cron snapshotu běží **každé 3 h** → zavírací snímek padne na
-první běh uvnitř dvanáctihodinového okna, tedy **9–12 h před výkopem**. U večerního zápasu
-je to odpoledne předchozího dne. CLV se tím měří jako pohyb z T−72 h na T−10 h a **celý
-poslední den, kde je pohyb nejostřejší, nám uniká**.
-Oprava je téměř zadarmo: zkrátit okno (12 h → ~2 h) a pustit cron **hodinově**. **Kvótu to
-nezdraží** – guard `oddsSnapshotState` drží dva snímky na zápas za život bez ohledu na to,
-jak často se běží; mění se jen *kdy* se ten druhý vezme. Udělat **před** tím, než se začne
-CLV vyhodnocovat, jinak se první měsíce sezóny proměří proti špatné referenci.
+### ✅ „ZAVÍRACÍ" LINIE UŽ ZAVÍRACÍ JE (opraveno 28. 7. 2026)
+`ODDS_CLOSING_HOURS` bylo **12 h** a cron běžel **každé 3 h**. `fixturesNeedingOdds` ale
+bere **první** běh uvnitř okna, takže „zavírací" snímek padal **9–12 h před výkopem** –
+u večerního zápasu odpoledne předchozího dne. CLV tím měřilo pohyb z T−72 h na T−10 h
+a **celý poslední den, kde je pohyb nejostřejší, chybělo**.
+Dnes je okno **3 h** a cron jede **hodinově** (`20 * * * *`) → snímek padne kolem **T−3 h**
+a zbývají dva pokusy, kdyby běh vypadl. **Kvóta se nezměnila ani o volání** – guard drží
+dva snímky na zápas za život bez ohledu na frekvenci, mění se jen *kdy*.
+**Ta dvě čísla musí sedět dohromady:** okno musí zůstat **širší než perioda běhu**, jinak
+zápas mezi dvěma běhy propadne a zavírací snímek nedostane vůbec. Nezkracovat okno bez
+zrychlení cronu (a naopak).
 
 ### B) Sázecí model — otevřené
 4. **Verdikt o týmových totalech a rozích z CLV.** Jediná živá otázka. Pořadí podle skillu:

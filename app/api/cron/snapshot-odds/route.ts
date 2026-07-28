@@ -4,7 +4,7 @@ import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
 
-// Snímky kurzů (otevírací + zavírací) pro CLV. Běží **každé 3 h**, na rozdíl od
+// Snímky kurzů (otevírací + zavírací) pro CLV. Běží **hodinově**, na rozdíl od
 // ostatních cronů – a je to nutnost, ne ladění:
 //
 // Predikční cron jede 1×/den ve 04:30 UTC. Zavírací okno je 12 h před výkopem, takže
