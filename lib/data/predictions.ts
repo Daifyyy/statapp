@@ -44,6 +44,13 @@ import {
   snapshotPlan,
 } from "@/lib/picks/oddsSeries";
 import { logError } from "@/lib/logError";
+import {
+  addFixtureCoverage,
+  coverageWarnings,
+  emptyCoverage,
+  type CoveredMarket,
+  type MarketCoverage,
+} from "./oddsCoverage";
 
 /**
  * Orchestrace predikční pipeline (běží jen na pozadí / cron, real data).
@@ -369,6 +376,16 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
   series: number;
   empty: number;
   errors: number;
+  /** Kolik zápasů běhu vrátilo aspoň jednu knihu (jmenovatel pro `coverage`). */
+  withBooks: number;
+  /** U kolika zápasů se podařilo vytáhnout který trh (viz `oddsCoverage.ts`). */
+  coverage: MarketCoverage;
+  /**
+   * Trhy, které v tomhle běhu nešly vytáhnout ANI JEDNOU. Prázdné = v pořádku.
+   * Tohle je pojistka proti tomu, aby parsování rohů/karet/totalů (napsané
+   * v mezisezóně, nikdy neověřené proti živému API) selhalo tiše celý podzim.
+   */
+  missingMarkets: CoveredMarket[];
 }> {
   const now = new Date();
   const candidates = await fixturesNeedingOdds({
@@ -386,6 +403,8 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
   let empty = 0;
   let errors = 0;
   let due = 0;
+  let withBooks = 0;
+  const coverage = emptyCoverage();
 
   for (const item of candidates) {
     // Čisté rozhodnutí: co se má z tohohle zápasu udělat. Zápas, který nepotřebuje nic,
@@ -401,6 +420,12 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
         // API pro zápas kurzy nemá (běžné daleko před výkopem i u menších lig).
         empty++;
         continue;
+      }
+      // Pokrytí trhů se měří na KAŽDÉ stažené odpovědi, ne jen na ukládaných snímcích –
+      // i bod časové řady prochází týmž parsováním, takže je to zadarmo a širší vzorek.
+      if (odds.books?.length) {
+        withBooks++;
+        addFixtureCoverage(coverage, odds.books);
       }
       if (plan.open) {
         await saveOdds(item.fixtureId, odds);
@@ -427,7 +452,18 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
       logError("snapshot-odds", e, { fixtureId: item.fixtureId, plan });
     }
   }
-  return { due, open, close, series, empty, errors };
+
+  const missingMarkets = coverageWarnings(coverage, withBooks);
+  if (missingMarkets.length) {
+    // Ne chyba běhu (kurzy se uložily), ale podezření na rozbité parsování. Musí být
+    // vidět HNED po startu lig, ne až v listopadu, kdy má z CLV padnout verdikt.
+    logError(
+      "snapshot-odds.coverage",
+      new Error(`trhy bez jediného záchytu: ${missingMarkets.join(", ")}`),
+      { withBooks, coverage }
+    );
+  }
+  return { due, open, close, series, empty, errors, withBooks, coverage, missingMarkets };
 }
 
 /** Dotáhne výsledky u predikcí, jejichž zápas už proběhl (batch po 20 ID). */
