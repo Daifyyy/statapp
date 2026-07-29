@@ -78,7 +78,6 @@ export function computeCategoryScores(
 
   return CATEGORY_DEFS.map((cat) => {
     let weightedHome = 0;
-    let weightedAway = 0;
     let totalWeight = 0;
     let anyLowConf = false;
     let dataCount = 0;
@@ -94,20 +93,13 @@ export function computeCategoryScores(
 
       const lowerBetter = LOWER_IS_BETTER.has(metric);
       const sum = hv + av;
-      let hs: number;
-      let as_: number;
+      // Obě strany na nule (typicky červené karty 0 : 0) → dělení nulou; remíza 5/5.
+      // Jinak podíl, u `LOWER_IS_BETTER` obrácený (míň obdržených gólů = lepší).
+      const homeShare = sum === 0 ? 0.5 : lowerBetter ? av / sum : hv / sum;
 
-      if (sum === 0) {
-        hs = 5;
-        as_ = 5;
-      } else {
-        const homeShare = lowerBetter ? av / sum : hv / sum;
-        hs = homeShare * 10;
-        as_ = (1 - homeShare) * 10;
-      }
-
-      weightedHome += hs * weight;
-      weightedAway += as_ * weight;
+      // Sleduje se JEN domácí strana; hostující je doplněk do 10 a dopočítá se až
+      // ze zaokrouhleného výsledku (viz níže), aby se strany nemohly rozejít.
+      weightedHome += homeShare * 10 * weight;
       totalWeight += weight;
 
       if (
@@ -120,13 +112,21 @@ export function computeCategoryScores(
 
     const available = dataCount > 0;
     const homeScore = available ? weightedHome / totalWeight : 5;
-    const awayScore = available ? weightedAway / totalWeight : 5;
+
+    // Druhá strana se dopočítá až ze ZAOKROUHLENÉ první, ne zaokrouhlením vlastní
+    // hodnoty. Skóre je podíl (`hs + as_ === 10` pro každou metriku, takže i vážený
+    // průměr dá přesně 10), ale nezávislé zaokrouhlení obou stran umí dát 3.8 + 6.3
+    // = 10.1 – a UI ty dvě čísla ukazuje vedle sebe a kreslí z nich pruh
+    // (`homeScore / total`). Reálných dvojic jsou v běžných rozsazích stovky:
+    // držení 30:50, fauly 8.5:11.5, góly 0.51:0.69. Táž konvence jako v `matchReport.ts`.
+    const home = Math.round(homeScore * 10) / 10;
+    const away = Math.round((10 - home) * 10) / 10;
 
     return {
       key: cat.key,
       label: cat.label,
-      homeScore: Math.round(homeScore * 10) / 10,
-      awayScore: Math.round(awayScore * 10) / 10,
+      homeScore: home,
+      awayScore: away,
       lowConfidence: anyLowConf,
       available,
     };
