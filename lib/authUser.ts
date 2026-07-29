@@ -3,6 +3,7 @@
 // Tím se gating nikdy nestane tvrdou závislostí pro základní (FREE) tok.
 
 import { auth } from "@/auth";
+import { isFrameworkSignal, logError } from "./logError";
 import type { Tier } from "./entitlements";
 
 export interface CurrentUser {
@@ -28,7 +29,16 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       tier: u.tier,
       proTrialUsed: u.proTrialUsed,
     };
-  } catch {
+  } catch (e) {
+    // `auth()` čte `headers()`, takže při pokusu o statický render sem přiletí
+    // DynamicServerError – to je ŘÍDICÍ TOK Next.js, ne selhání. Musí projít dál,
+    // jinak se rozbije mechanismus, který stránku překlápí na dynamickou (a build
+    // by logoval stack z každé takové routy).
+    if (isFrameworkSignal(e)) throw e;
+    // Degradace na anonyma je ZÁMĚRNÁ (FREE tok nesmí padat na auth), ale je to
+    // nejzákeřnější tichý stav v celé appce: při výpadku session lookupu se KAŽDÝ
+    // platící uživatel tiše přepne na FREE a vypadá to jako „odhlásil se".
+    logError("authUser.getCurrentUser", e);
     return null;
   }
 }

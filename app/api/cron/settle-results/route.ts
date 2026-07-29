@@ -3,6 +3,7 @@ import { runSettleResults } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
+import { cronJson } from "@/lib/cronResult";
 
 // Dotažení skutečných výsledků u odehraných predikcí (denní cron). Levné
 // (batch /fixtures?ids=). Doplní goals/status → základ track-recordu a kalibrace.
@@ -20,7 +21,7 @@ export async function GET(req: Request) {
 
   try {
     const stats = await runSettleResults();
-    return NextResponse.json({ ok: true, ...stats });
+    return cronJson("cron/settle-results", stats, stats.errors, stats.settled);
   } catch (e) {
     logError("cron/settle-results", e);
     return NextResponse.json({ error: "Settle selhal" }, { status: 502 });

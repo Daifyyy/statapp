@@ -96,7 +96,8 @@ export async function runRefreshTransfers(
     let teams;
     try {
       teams = await getTeamsByLeague(leagueId);
-    } catch {
+    } catch (e) {
+      logError("transfers.runRefreshTransfers", e, { leagueId });
       continue;
     }
     for (const team of teams) {

@@ -65,6 +65,7 @@ import {
   type RatingMatch,
   type TeamStrength,
 } from "@/lib/stats/ratings";
+import { logError } from "@/lib/logError";
 import { fullTimeGoals } from "./fixtures";
 import { pickLeagueAssists, pickLeagueScorers, pickTeamScorers } from "./scorers";
 import { standingsToTeams } from "@/lib/game/teams";
@@ -113,40 +114,68 @@ export function getLeagues(): League[] {
  * Lehké, vhodné pro denní cron: menu výběru je pak instantní, ale zápasová data
  * zůstávají líná (žádný bulk download).
  */
-export async function warmCatalog(): Promise<number> {
+export async function warmCatalog(): Promise<{ warmed: number; failed: number }> {
   let warmed = 0;
+  const failedLeagues: number[] = [];
   for (const l of getLeagues()) {
     try {
       await getTeamsByLeague(l.id);
       warmed++;
     } catch {
-      // pokračuj i při výpadku jedné ligy
+      failedLeagues.push(l.id); // pokračuj i při výpadku jedné ligy
     }
   }
   // Ligové tabulky klubových lig (levné, ~18 volání) → rank v seznamech Zápasy/Tipy
   // je pak instantní (jinak by je líně tahal cold homepage load).
-  await Promise.all(
-    CLUB_LEAGUES.map((l) => cachedLeagueStandings(l.id).catch(() => undefined))
+  const standings = await Promise.all(
+    CLUB_LEAGUES.map((l) =>
+      cachedLeagueStandings(l.id).then(
+        () => true,
+        () => false
+      )
+    )
   );
-  return warmed;
+  const failedStandings = standings.filter((ok) => !ok).length;
+  // Jeden log za běh, ne za položku: výpadek jedné ligy je běžný, výpadek deseti je
+  // porucha. Rozdíl mezi tím musí jít poznat, aniž by se log zaplavil.
+  if (failedLeagues.length || failedStandings) {
+    logError("realRepository.warmCatalog", new Error("částečný warm katalogu"), {
+      failedLeagues,
+      failedStandings,
+      warmed,
+    });
+  }
+  return { warmed, failed: failedLeagues.length + failedStandings };
 }
 
 /**
  * Předehřeje ZÁPASOVÁ DATA všech týmů jedné ligy/soutěže (těžké – ~20×22 volání).
  * Jen na vyžádání (`?league=ID`), ne v denním cronu.
  */
-export async function warmLeague(leagueId: number): Promise<number> {
+export async function warmLeague(
+  leagueId: number
+): Promise<{ warmed: number; failed: number }> {
   const teams = await getTeamsByLeague(leagueId);
   let warmed = 0;
+  const failedTeams: number[] = [];
   for (const t of teams) {
     try {
       await getCompareTeam(t.id, leagueId, false);
       warmed++;
     } catch {
-      // pokračuj dál i při výpadku jednoho týmu
+      failedTeams.push(t.id); // pokračuj dál i při výpadku jednoho týmu
     }
   }
-  return warmed;
+  // Jeden log za běh (viz `warmCatalog`). Warm ligy je nejdražší operace v appce –
+  // když ji z poloviny sežral rate-limit, ať to není vidět až na chybějících datech.
+  if (failedTeams.length) {
+    logError("realRepository.warmLeague", new Error("částečný warm ligy"), {
+      leagueId,
+      failedTeams,
+      warmed,
+    });
+  }
+  return { warmed, failed: failedTeams.length };
 }
 
 export async function getTeamsByLeague(leagueId: number): Promise<TeamLite[]> {
@@ -234,7 +263,8 @@ export async function getTeamInjuries(
     // Filtr stáří + dedup (čistá funkce): API vrací zranění napříč celou sezónou,
     // tak vyřadíme zastaralá (uzdravená) i záznamy bez data – viz injuries.ts.
     return selectCurrentInjuries(raw);
-  } catch {
+  } catch (e) {
+    logError("realRepository.getTeamInjuries", e, { teamId, season });
     return [];
   }
 }
@@ -256,7 +286,8 @@ export async function getLeagueStanding(
       standing: pickTeamStanding(raw, teamId),
       leagueAvg: computeLeagueGoalsAvg(raw),
     };
-  } catch {
+  } catch (e) {
+    logError("realRepository.getLeagueStanding", e, { teamId, leagueId });
     return { standing: null, leagueAvg: null };
   }
 }
@@ -281,7 +312,11 @@ export async function getLeagueBaseline(
     return computeLeagueBaseline(
       await cachedLeagueStandingsFor(leagueId, PREVIOUS_SEASON)
     );
-  } catch {
+  } catch (e) {
+    // TICHÉ ZHORŠENÍ MODELU, ne jen prázdná sekce: bez baseline spadne λ na generický
+    // `DEFAULT_BASELINE` (1.5/1.2), který nízkoskórovým ligám nadsazuje góly. V track-recordu
+    // to vypadá jako „model má horší měsíc", ne jako výpadek → musí být v logu.
+    logError("realRepository.getLeagueBaseline", e, { leagueId });
     return null;
   }
 }
@@ -312,7 +347,10 @@ export async function getLeagueRatings(
       }
     );
     return cached && cached.length > 0 ? new Map(cached) : null;
-  } catch {
+  } catch (e) {
+    // Jako u baseline: bez ratingů spadne λ na okenní model (v backtestu ~0.012 log-lossu).
+    // Degradace je záměrná, neviditelnost ne.
+    logError("realRepository.getLeagueRatings", e, { leagueId });
     return null;
   }
 }
@@ -339,7 +377,10 @@ export async function getNationalRatings(): Promise<Map<
       computeNationalRatings
     );
     return cached && cached.length > 0 ? new Map(cached) : null;
-  } catch {
+  } catch (e) {
+    // Bez globálních ratingů se reprezentace vrátí na okenní model – to je rozdíl
+    // log-loss 0.9352 → 1.0182, tedy pětkrát větší propad než u klubů.
+    logError("realRepository.getNationalRatings", e);
     return null;
   }
 }
@@ -347,10 +388,16 @@ export async function getNationalRatings(): Promise<Map<
 async function computeNationalRatings(): Promise<[number, TeamStrength][] | null> {
   const seasons = [CURRENT_SEASON - 3, CURRENT_SEASON - 2, CURRENT_SEASON - 1, CURRENT_SEASON];
   const matches: RatingMatch[] = [];
+  // Selhání jedné dvojice soutěž×sezóna je BĚŽNÉ (turnaj se ten rok nekonal) → logovat
+  // každé zvlášť by byl spam. Zajímá nás jen poměr: pár výpadků je normální provoz,
+  // většina znamená, že ratingy stojí na zlomku historie a nikdo by se to nedozvěděl.
+  let skipped = 0;
+  let attempted = 0;
 
   for (const leagueId of NATIONAL_HISTORY_LEAGUE_IDS) {
     for (const season of seasons) {
       let raw: ApiFixture[] = [];
+      attempted++;
       try {
         // Dohraná sezóna se už nezmění → drž ji v cache měsíc; jen běžící se obnovuje denně.
         const ttl = season < CURRENT_SEASON ? LIST_TTL * 30 : LIST_TTL;
@@ -358,6 +405,7 @@ async function computeNationalRatings(): Promise<[number, TeamStrength][] | null
           fetchLeagueSeasonFixtures(leagueId, season)
         );
       } catch {
+        skipped++;
         continue; // soutěž se v té sezóně nekonala / výpadek → nezastaví ostatní
       }
       const neutral = isNeutralNationalLeague(leagueId);
@@ -377,6 +425,15 @@ async function computeNationalRatings(): Promise<[number, TeamStrength][] | null
         });
       }
     }
+  }
+  // Práh je volný schválně: část soutěží se v dané sezóně opravdu nekoná (MS jsou po
+  // čtyřech letech). Až když vypadne většina, jde o poruchu upstreamu, ne o kalendář.
+  if (skipped > attempted / 2) {
+    logError(
+      "realRepository.computeNationalRatings",
+      new Error("většina reprezentačních sezón nedostupná"),
+      { skipped, attempted, matches: matches.length }
+    );
   }
   if (matches.length < RATING_MIN_MATCHES) return null;
 
@@ -533,7 +590,8 @@ export async function getTeamTopScorers(
       () => fetchLeagueTopScorers(leagueId, CURRENT_SEASON)
     );
     return pickTeamScorers(raw, teamId);
-  } catch {
+  } catch (e) {
+    logError("realRepository.getTeamTopScorers", e, { teamId, leagueId });
     return [];
   }
 }
@@ -555,7 +613,8 @@ export async function getLeagueScorers(
       () => fetchLeagueTopScorers(leagueId, CURRENT_SEASON)
     );
     return pickLeagueScorers(raw, limit);
-  } catch {
+  } catch (e) {
+    logError("realRepository.getLeagueScorers", e, { leagueId });
     return [];
   }
 }
@@ -576,7 +635,8 @@ export async function getLeagueAssists(
       () => fetchLeagueTopAssists(leagueId, CURRENT_SEASON)
     );
     return pickLeagueAssists(raw, limit);
-  } catch {
+  } catch (e) {
+    logError("realRepository.getLeagueAssists", e, { leagueId });
     return [];
   }
 }
@@ -609,7 +669,8 @@ export async function getLeagueRound(leagueId: number): Promise<LeagueRound | nu
       ),
     ]);
     return { last: pickRound(lastRaw, "last"), next: pickRound(nextRaw, "next") };
-  } catch {
+  } catch (e) {
+    logError("realRepository.getLeagueRound", e, { leagueId });
     return null;
   }
 }
@@ -631,8 +692,9 @@ export async function getRanks(
     leagueIds.map(async (id) => {
       try {
         byLeague.set(id, await cachedLeagueStandings(id));
-      } catch {
-        // výpadek jedné ligy nezhasne ostatní
+      } catch (e) {
+        // výpadek jedné ligy nezhasne ostatní (jen v ní zmizí pozice u řádků)
+        logError("realRepository.getRanks", e, { leagueId: id });
       }
     })
   );
@@ -664,8 +726,9 @@ async function buildNationalConfedMap(): Promise<Map<number, number>> {
       try {
         const teams = await getTeamsByLeague(l.id); // cachované (natteams)
         for (const t of teams) if (!map.has(t.id)) map.set(t.id, l.id);
-      } catch {
+      } catch (e) {
         // výpadek jedné konfederace nezhasne ostatní (méně klikacích řádků)
+        logError("realRepository.buildNationalConfedMap", e, { confedId: l.id });
       }
     })
   );
@@ -685,7 +748,8 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
           fetchFixturesByDate(date)
         );
         return { date, fixtures: normalizeUpcomingFixtures(raw) };
-      } catch {
+      } catch (e) {
+        logError("realRepository.getFixturesByDates", e, { date });
         return { date, fixtures: [] };
       }
     })
@@ -726,7 +790,10 @@ export async function getLiveFixtures(): Promise<LiveScore[]> {
         homeGoals: f.goals.home,
         awayGoals: f.goals.away,
       }));
-  } catch {
+  } catch (e) {
+    // Živé skóre v Programu prostě přestane svítit a `mergeLive` se vrátí k SSR datům –
+    // zvenčí nerozeznatelné od „nic se zrovna nehraje". Proto log.
+    logError("realRepository.getLiveFixtures", e);
     return [];
   }
 }
@@ -1149,7 +1216,8 @@ export async function getMatchStatsPair(
   let stats: ApiFixtureStats;
   try {
     stats = await fetchFixtureStatistics(fixtureId);
-  } catch {
+  } catch (e) {
+    logError("realRepository.getMatchStatsPair", e, { fixtureId });
     return null;
   }
   const teamStats = (id: number) => stats.find((s) => s.team.id === id) ?? null;

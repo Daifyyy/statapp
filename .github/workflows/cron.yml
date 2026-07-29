@@ -1,9 +1,9 @@
 # Plánované úlohy (crony) appky.
 #
 # **Proč GitHub Actions a ne `vercel.json`:** Vercel Hobby plán dovolí jen **2 cron
-# joby a jen denní** frekvenci. Úloh máme šest a snímky kurzů potřebují běžet **každé
-# 3 hodiny** – jinak zavírací snímek dostanou jen zápasy s výkopem mezi 04:30 a 16:30
-# UTC (viz `ODDS_CLOSING_HOURS` v lib/data/predictions.ts) a CLV by stálo na vychýlené
+# joby a jen denní** frekvenci. Úloh máme šest a snímky kurzů potřebují běžet **hodinově**
+# – jinak zavírací snímek dostanou jen zápasy s výkopem mezi 04:30 a 16:30 UTC
+# (viz `ODDS_CLOSING_HOURS` v lib/data/predictions.ts) a CLV by stálo na vychýlené
 # menšině. Actions to zvládnou zdarma a v libovolné frekvenci.
 #
 # Nastavení (jednorázově, v GitHubu → Settings → Secrets and variables → Actions):
@@ -101,7 +101,11 @@ jobs:
           if [ "$JOB" = "warm" ]; then url="$APP_URL/api/warm"; else url="$APP_URL/api/cron/$JOB"; fi
           echo "→ $url"
           # `--fail-with-body` = nenulový exit u 4xx/5xx, ale tělo se pořád vypíše,
-          # takže je v logu vidět DŮVOD (např. 401 = nesedí CRON_SECRET).
+          # takže je v logu vidět DŮVOD. Statusy, které sem chodí:
+          #   401 = nesedí CRON_SECRET · 503 = CRON_SECRET není v env na Vercelu
+          #   502 = běh doběhl, ale NIC nezvládl (viz `cronJson` v lib/cronResult.ts)
+          # Dílčí výpadek (část lig selhala, zbytek prošel) zůstává 200 = zeleně, ale
+          # počet je vidět v těle jako `errors` – schválně, ať se červená nedevalvuje.
           # Bez `--fail*` by curl skončil úspěchem i na 500 a úloha by selhávala tiše –
           # což je přesně ta třída chyb, která u kurzů stála rok dat.
           curl --fail-with-body --silent --show-error --location \

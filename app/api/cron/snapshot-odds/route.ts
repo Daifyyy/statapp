@@ -3,6 +3,7 @@ import { runSnapshotOdds } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
+import { cronJson } from "@/lib/cronResult";
 
 // Snímky kurzů pro CLV: otevírací, zavírací a body ČASOVÉ ŘADY. Běží **hodinově**,
 // na rozdíl od ostatních cronů – a je to nutnost, ne ladění:
@@ -39,7 +40,14 @@ export async function GET(req: Request) {
     const stats = await runSnapshotOdds(
       Number.isFinite(limit) && limit! > 0 ? limit : undefined
     );
-    return NextResponse.json({ ok: true, ...stats });
+    // „Zvládnuto" = uložený snímek jakéhokoli druhu. `empty` (kniha zápas nekótuje)
+    // se nepočítá ani do chyb, ani do úspěchů – to je legitimní prázdná odpověď.
+    return cronJson(
+      "cron/snapshot-odds",
+      stats,
+      stats.errors,
+      stats.open + stats.close + stats.series
+    );
   } catch (e) {
     logError("cron/snapshot-odds", e);
     return NextResponse.json({ error: "Snímek kurzů selhal" }, { status: 502 });

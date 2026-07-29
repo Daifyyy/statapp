@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { warmCatalog, warmLeague } from "@/lib/data/realRepository";
 import { isRealDataConfigured } from "@/lib/db";
 import { requireCronAuth } from "@/lib/cronAuth";
+import { cronJson } from "@/lib/cronResult";
 
 // Limit funkce (60 s je bezpečné i na Vercel Hobby). Katalogový warm (cron)
 // doběhne za pár sekund; těžký warm ligy běž raději lokálně / opakovaně.
@@ -31,7 +32,9 @@ export async function GET(req: Request) {
   const leagueParam = new URL(req.url).searchParams.get("league");
   if (leagueParam) {
     const id = Number(leagueParam);
-    return NextResponse.json({ warmedTeams: await warmLeague(id) });
+    const { warmed, failed } = await warmLeague(id);
+    return cronJson("cron/warm-league", { warmedTeams: warmed, failed }, failed, warmed);
   }
-  return NextResponse.json({ warmedCatalog: await warmCatalog() });
+  const { warmed, failed } = await warmCatalog();
+  return cronJson("cron/warm", { warmedCatalog: warmed, failed }, failed, warmed);
 }

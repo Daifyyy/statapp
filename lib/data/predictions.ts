@@ -159,6 +159,14 @@ export interface PredictUpcomingResult {
   predicted: number;
   /** Běh skončil kvůli časovému rozpočtu, ne proto, že by došly ligy. */
   stopped: boolean;
+  /**
+   * Kolik soutěží / zápasů běh přeskočil kvůli chybě (ne kvůli rozpočtu).
+   *
+   * Stejný důvod jako `errors` u `runSnapshotOdds`: běh, který hlásí `predicted: 0` a
+   * `errors: 0` (mimo sezónu, nic k predikci), musí jít poznat od běhu, který hlásí
+   * `errors: 24` (vypršel API klíč). Bez toho vypadají oba v logu identicky.
+   */
+  errors: number;
 }
 
 /**
@@ -184,6 +192,7 @@ export async function runPredictUpcoming(
   let predicted = 0;
   let covered = 0;
   let stopped = false;
+  let errors = 0;
   for (const leagueId of queue) {
     if (Date.now() >= deadline) {
       stopped = true;
@@ -193,7 +202,9 @@ export async function runPredictUpcoming(
     let upcoming;
     try {
       upcoming = await fetchLeagueUpcomingFixtures(leagueId, UPCOMING_PER_LEAGUE);
-    } catch {
+    } catch (e) {
+      errors++;
+      logError("predictions.runPredictUpcoming.league", e, { leagueId });
       continue; // výpadek jedné ligy nezastaví ostatní
     }
     // Volba build módu týmu pro soutěž: klub → konfederačně-nezávislý getCompareTeam;
@@ -279,8 +290,11 @@ export async function runPredictUpcoming(
               const bench = await fetchPrediction(f.fixture.id);
               if (bench) await saveBenchmark(f.fixture.id, bench);
             }
-          } catch {
-            // benchmark je best-effort
+          } catch (e) {
+            // Benchmark je best-effort a jeho výpadek NESMÍ shodit náš řádek – ale
+            // „best-effort" znamená nezastavit běh, ne mlčet (viz rok bez kurzů).
+            // Do `errors` se nepočítá: náš vlastní řádek se uložil v pořádku.
+            logError("predictions.benchmark", e, { fixtureId: f.fixture.id });
           }
 
           // Kurzy se tady ZÁMĚRNĚ neberou – vlastníkem obou snímků je
@@ -288,7 +302,12 @@ export async function runPredictUpcoming(
           // zavírací linii u večerních zápasů nikdy nestihl (viz `ODDS_CLOSING_HOURS`)
           // a dva vlastníci téhož zápisu jsou zbytečná past.
         }
-      } catch {
+      } catch (e) {
+        errors++;
+        logError("predictions.runPredictUpcoming.fixture", e, {
+          leagueId,
+          fixtureId: f.fixture.id,
+        });
         // přeskoč problémový zápas, pokračuj dál
       }
       // Rozpočet se kontroluje i uvnitř ligy: jedna studená liga umí sama sníst celý běh.
@@ -298,7 +317,7 @@ export async function runPredictUpcoming(
       }
     }
   }
-  return { leagues: queue.length, covered, fixtures, predicted, stopped };
+  return { leagues: queue.length, covered, fixtures, predicted, stopped, errors };
 }
 
 /**
@@ -415,15 +434,22 @@ export async function runSnapshotOdds(limit = SNAPSHOT_LIMIT): Promise<{
 export async function runSettleResults(): Promise<{
   pending: number;
   settled: number;
+  /** Kolik dávek po 20 se nepodařilo stáhnout (viz `errors` u ostatních běhů). */
+  errors: number;
 }> {
   const pending = await getUnsettledPredictions();
   let settled = 0;
+  let errors = 0;
   for (let i = 0; i < pending.length; i += 20) {
     const chunk = pending.slice(i, i + 20);
     let fixtures;
     try {
       fixtures = await fetchFixturesByIds(chunk.map((p) => p.fixtureId));
-    } catch {
+    } catch (e) {
+      errors++;
+      // Nesettlnutá predikce zůstane ve frontě a příští běh ji zkusí znovu – ale když
+      // selhává trvale, dataset tiše přestane růst a track-record zamrzne.
+      logError("predictions.runSettleResults", e, { batch: i / 20 });
       continue;
     }
     for (const f of fixtures) {
@@ -439,5 +465,5 @@ export async function runSettleResults(): Promise<{
       settled++;
     }
   }
-  return { pending: pending.length, settled };
+  return { pending: pending.length, settled, errors };
 }

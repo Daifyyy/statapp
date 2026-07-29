@@ -3,6 +3,7 @@ import { runPredictUpcoming } from "@/lib/data/predictions";
 import { isRealDataConfigured } from "@/lib/db";
 import { logError } from "@/lib/logError";
 import { requireCronAuth } from "@/lib/cronAuth";
+import { cronJson } from "@/lib/cronResult";
 
 // Predikce nadcházejících zápasů (denní cron). Warm cache → levné; první studené
 // naplnění radši lokálně / přes ?league=ID. Idempotentní (upsert).
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
 
   try {
     const stats = await runPredictUpcoming(leagueIds);
-    return NextResponse.json({ ok: true, ...stats });
+    return cronJson("cron/predict-upcoming", stats, stats.errors, stats.predicted);
   } catch (e) {
     logError("cron/predict-upcoming", e, { leagueIds });
     return NextResponse.json({ error: "Predikce selhala" }, { status: 502 });

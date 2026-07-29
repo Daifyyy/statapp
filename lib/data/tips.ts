@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { logError } from "@/lib/logError";
 import { fetchFixturesByIds, FINISHED_STATUSES } from "./apiFootball";
 import { fullTimeGoals } from "./fixtures";
 import { settleTip } from "@/lib/tips/settle";
@@ -34,7 +35,10 @@ export async function runSettleTips(
     let fixtures;
     try {
       fixtures = await fetchFixturesByIds(chunk);
-    } catch {
+    } catch (e) {
+      // Nevypořádaný tip zůstane ve frontě, ale při trvalém selhání zamrzne uživateli
+      // ROI v Tipovačce a vypadá to jako „ještě se nehrálo".
+      logError("tips.settle", e, { batch: i / 20 });
       continue; // výpadek jedné dávky nezastaví ostatní
     }
     for (const f of fixtures) {
