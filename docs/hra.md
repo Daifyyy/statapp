@@ -352,6 +352,29 @@
     musíš propracovat přes silnější klub (prestiž ~92 → reputace 100). Prestiž se nese na summary
     (`SeasonSummary.yourPrestige` = `teamPrestige`, `TournamentSummary.teamPrestige` = `nationPrestige`,
     fallback bez ní = strop 100). Ladicí konstanta – `sim-game` reputaci mezi ligami neměří.
+- **Body vs. očekávané body** (`lib/game/expectedPoints.ts`, čisté + testy; `SeasonSummary.
+  expectedPoints`, UI `ExpectedPointsNote` v `SeasonDone`) — **zavření smyčky, kterou má Hra
+  v popisu**. Manažer ukazoval před každým zápasem predikci modelu a pak ji zahodil; `MatchResult`
+  nesl jen skóre. Teď `playRound` u **tvých** zápasů uloží `xp` = `3·V + R` z predikce a souhrn
+  sezóny řekne, jestli byla zasloužená: 52 bodů při zasloužených 44 = šťastlivec, ne génius.
+  Je to totéž, co `lib/stats/formQuality.ts` dělá pro reálné týmy.
+  - **xB jde z λ, která se SKUTEČNĚ odehrála** (plán, counter, instrukce, morálka, kondice,
+    eventy — tedy `resolveYourAdjust`), **ne z náhledu** `yourNextMatch`. Ten jede záměrně
+    `"balanced"`/`"none"` kvůli anti-exploitu, a kdyby xB šlo z něj, „nadvýkon" by z poloviny
+    měřil, že **zabrala taktika** — pravý opak smůly, kterou má ukázat. Kryto testem.
+  - **Ukládá se jen u tvých zápasů.** `results` drží celou ligu (380 zápasů/sezónu), takže xB
+    u zápasů AI proti sobě by jen nafouklo save a nikoho by nezajímalo.
+  - **Pole je volitelné a `chybí` ≠ `0.0`** (= jistá prohra). Rozehraná kariéra má dřívější kola
+    bez xB, proto se agreguje **jen přes zápasy, které ho mají** — a to včetně skutečných bodů.
+    Se dvěma různými jmenovateli by vyšel obrovský „nadvýkon" čistě z toho, že se do jedné
+    strany rozdílu sečetlo víc zápasů. `SAVE_VERSION` se kvůli tomu **nebumpuje** (pole je čistě
+    přírůstkové a serverové zod schéma jede na `passthrough()`).
+  - **Verdikt až od 8 zápasů** (`MIN_XP_SAMPLE`) a od rozdílu 4 bodů (`XP_VERDICT_MARGIN`) —
+    na kratším úseku je rozdíl z valné části šum. Táž zásada jako `T.minXgSample` u kvality formy.
+  - **Balanc se nezměnil**: `predictProbs` nesahá na RNG, ověřeno tím, že výstup `npm run sim-game`
+    je proti stavu před změnou **bit-identický**. 0 volání API, žádná nová data.
+  - Zatím **jen ligová sezóna** — turnaje (`tournament.ts`) a pohár mají vlastní `results` a xB
+    tam nevstupuje.
 - **Přehled klubu** (`ClubOverview` v záložce Sezóna): síla útoku/obrany vs ⌀ ligy (barevně), hvězdy,
   stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež, skauting + legenda co mezi
   sezónami regreduje. Čistě čte `SeasonState`. `DEV_AREA_HINT` texty zpřesněny o trvanlivost.

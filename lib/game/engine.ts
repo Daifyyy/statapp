@@ -8,6 +8,7 @@ import { ADJUST_MAX, ADJUST_MIN } from "./balance";
 import { generateLeague, teamById } from "./teams";
 import { roundRobin } from "./schedule";
 import { simulateMatch, predictProbs, NEUTRAL_ADJUST } from "./simulate";
+import { expectedPointsOf } from "./expectedPoints";
 import type { SideAdjust } from "./simulate";
 import { buildTable } from "./standings";
 import { MOCK_LEAGUE, seasonObjective, teamStrengthScore } from "./leagues";
@@ -199,6 +200,18 @@ export function playRound(state: SeasonState): SeasonState {
       awayId: f.awayId,
       homeGoals: r.homeGoals,
       awayGoals: r.awayGoals,
+      // Očekávané body tvého týmu – ze STEJNÉ λ, jakou zápas právě odehrál (plán,
+      // counter, instrukce, morálka, kondice, eventy jsou v `homeAdj`/`awayAdj`).
+      // Ne z náhledu `yourNextMatch`, ten jede neutrálně kvůli anti-exploitu a rozdíl
+      // proti němu by měřil „zabrala taktika", ne smůlu. Viz `expectedPoints.ts`.
+      ...(youHome || youAway
+        ? {
+            xp: expectedPointsOf(
+              predictProbs(home, away, homeAdj, awayAdj),
+              youHome
+            ),
+          }
+        : {}),
     };
     results.push(mr);
     if (youHome || youAway) {

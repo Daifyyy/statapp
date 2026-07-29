@@ -4,6 +4,9 @@
 // `import type` je při kompilaci ERASED → žádný runtime cyklus (types ↔ nationalCompetitions).
 import type { TournamentRun } from "./nationalCompetitions";
 import type { CupRun } from "./clubCup";
+// `import type` = žádná runtime závislost, takže cyklus types ↔ expectedPoints nevzniká
+// (expectedPoints si typy bere odsud).
+import type { SeasonExpectedPoints } from "./expectedPoints";
 
 /**
  * Zápasový plán tvého týmu – hlavní páka trenéra. Proti stylu soupeře funguje jako
@@ -93,6 +96,18 @@ export interface MatchResult {
   awayId: number;
   homeGoals: number;
   awayGoals: number;
+  /**
+   * **Očekávané body TVÉHO týmu** z tohoto zápasu (`3·V + R` z predikce modelu).
+   *
+   * Ukládá se jen u tvých zápasů – u zápasů AI proti sobě by to nikoho nezajímalo a
+   * `results` drží celou ligu (380 zápasů/sezónu), takže by to zbytečně nafouklo save.
+   *
+   * **Volitelné schválně:** rozehraná kariéra má dřívější kola bez něj a `chybí` musí jít
+   * odlišit od `0.0` (= jistá prohra). Proto se agreguje jen přes zápasy, které ho mají
+   * (viz `seasonExpectedPoints`). Bump `SAVE_VERSION` kvůli tomu netřeba – pole je čistě
+   * přírůstkové a serverové zod schéma jede na `passthrough()`.
+   */
+  xp?: number;
 }
 
 /** Řádek ligové tabulky (odvozený z výsledků). */
@@ -174,6 +189,11 @@ export interface SeasonSummary {
   relegated: boolean;
   /** Postup do vyšší ligy (jen z 2. ligy: umístění v postupové zóně). */
   promoted?: boolean;
+  /**
+   * Body vs. **očekávané body** (`expectedPoints.ts`) – byla ta sezóna zasloužená?
+   * Volitelné: kariéry rozehrané před zavedením xB ho u starších sezón nemají.
+   */
+  expectedPoints?: SeasonExpectedPoints;
   championId: number;
   championName: string;
   /** Byl splněn sezónní cíl vedení? (bonus k reputaci) */

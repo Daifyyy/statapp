@@ -6,6 +6,7 @@ import { newSeason, currentTable } from "./engine";
 import { teamById } from "./teams";
 import { evaluateSeason, teamPrestige } from "./leagues";
 import { expectedRank } from "./reputation";
+import { seasonExpectedPoints } from "./expectedPoints";
 import {
   applyDevelopment,
   nextScouting,
@@ -66,6 +67,7 @@ export function summarizeSeason(state: SeasonState): SeasonSummary {
     championName: teamById(state.teams, champion.teamId).name,
     objectiveMet: you.rank <= state.objective.targetRank,
     yourPrestige: teamPrestige(yourTeam, state.leagueId, state.teams),
+    expectedPoints: seasonExpectedPoints(state.results, state.yourTeamId),
   };
 }
 

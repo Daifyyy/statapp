@@ -35,6 +35,10 @@ import {
   yourResults,
 } from "@/lib/game/engine";
 import { summarizeSeason, startNextSeason } from "@/lib/game/career";
+import {
+  xpVerdictLabel,
+  type SeasonExpectedPoints,
+} from "@/lib/game/expectedPoints";
 import { updateReputation, isHireable } from "@/lib/game/reputation";
 import {
   teamPrestige,
@@ -2594,6 +2598,35 @@ const DevelopmentPanel = memo(function DevelopmentPanel({
   );
 });
 
+/**
+ * **Body vs. očekávané body** – jediná věc v souhrnu, která odpovídá na „byla ta sezóna
+ * zasloužená?". Tabulka to říct neumí: 52 bodů může být skvělá práce i série šťastných
+ * odrazů, a z umístění se to nepozná.
+ *
+ * Ukazuje se **jen s verdiktem** (od `MIN_XP_SAMPLE` zápasů). Pod prahem je rozdíl bodů
+ * a xB z valné části šum a číslo bez významu by jen mátlo – táž zásada jako u „kvality
+ * formy" v Porovnání.
+ */
+function ExpectedPointsNote({ xp }: { xp?: SeasonExpectedPoints }) {
+  if (!xp || xp.verdict === "unknown") return null;
+  const tone =
+    xp.verdict === "lucky"
+      ? "text-warning"
+      : xp.verdict === "unlucky"
+        ? "text-home"
+        : "text-muted";
+  const icon = xp.verdict === "lucky" ? "🍀" : xp.verdict === "unlucky" ? "🥀" : "⚖️";
+  const sign = xp.delta > 0 ? "+" : "";
+  return (
+    <p className={"mt-2 text-xs " + tone}>
+      <span aria-hidden>{icon}</span> {xpVerdictLabel(xp.verdict)} —{" "}
+      <strong>{xp.points} b</strong> při zasloužených{" "}
+      <strong>{xp.expected.toFixed(1)}</strong> ({sign}
+      {xp.delta.toFixed(1)})
+    </p>
+  );
+}
+
 function SeasonDone({
   save,
   onContinue,
@@ -2703,6 +2736,7 @@ function SeasonDone({
         <p className="mt-1 text-sm text-muted">
           Mistr: <strong className="text-foreground">{champ.name}</strong>
         </p>
+        <ExpectedPointsNote xp={summary.expectedPoints} />
         {clubQualifies(summary.europe) && (
           <p className="mt-2 rounded-lg bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">
             🎟️ Postup do {CLUB_CUP_NAME}! (Pokud pokračuješ se stejným klubem.)
