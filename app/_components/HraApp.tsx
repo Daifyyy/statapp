@@ -255,17 +255,45 @@ export function HraApp({ user }: { user: SessionUser | null }) {
     savingRef.current = false;
   }, []);
 
-  const trackSave = useCallback(
-    (next: SaveState) => {
-      pendingSaveRef.current = next;
-      void flushSave();
-    },
-    [flushSave]
-  );
+  /**
+   * Co se má po commitu stavu provést. **Updater `setSave` smí být jen čistá funkce**,
+   * takže se v něm nic nespouští – jen zaznamená úmysl a effect ho po renderu vykoná.
+   *
+   * Dřív se přímo z updateru volalo `trackSave` (= rozjetí PUTu) a
+   * `queueMicrotask(() => showToast(...))` (= obcházka „setState during render"). React
+   * updater ale v StrictMode volá **dvakrát**, takže se v devu posílal každý tah na server
+   * dvakrát; ta obcházka byla symptom téhož problému.
+   *
+   * Zápis do refu je proti tomu **idempotentní** – dvojí zavolání uloží tutéž hodnotu
+   * a effect z ní udělá jednu akci.
+   */
+  const flushRef = useRef(false);
+  const pendingToastRef = useRef<ToastData | null>(null);
+
+  const trackSave = useCallback((next: SaveState) => {
+    pendingSaveRef.current = next;
+    flushRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!flushRef.current) return;
+    flushRef.current = false;
+    void flushSave();
+    const toast = pendingToastRef.current;
+    if (toast) {
+      pendingToastRef.current = null;
+      showToast(toast);
+    }
+  }, [save, flushSave, showToast]);
 
   const retrySave = useCallback(() => {
-    if (saveError) trackSave(saveError);
-  }, [saveError, trackSave]);
+    // Ruční „Zkusit znovu" musí odeslat HNED – neběží přes `setSave`, takže by na
+    // effect výše nikdy nedošlo (stav se nemění, jen se opakuje jeho odeslání).
+    if (saveError) {
+      pendingSaveRef.current = saveError;
+      void flushSave();
+    }
+  }, [saveError, flushSave]);
 
   /** Náhrada za nativní `confirm()` u destruktivních akcí – konzistentní vzhled s toastem. */
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogData | null>(null);
@@ -409,13 +437,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             oppGoals: isHome ? yourLast.awayGoals : yourLast.homeGoals,
             moraleDelta: (nextActive?.morale ?? prevMorale) - prevMorale,
           };
-          queueMicrotask(() => showToast(data));
+          pendingToastRef.current = data;
         }
         return next;
       });
       setBusy(false);
     }, 0);
-  }, [trackSave, showToast]);
+  }, [trackSave]);
 
   const onTournSimToEnd = useCallback(() => {
     setConfirmDialog({
@@ -498,13 +526,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             oppGoals: isHome ? yourLast.awayGoals : yourLast.homeGoals,
             moraleDelta: after.tournament.morale - prevMorale,
           };
-          queueMicrotask(() => showToast(data));
+          pendingToastRef.current = data;
         }
         return next;
       });
       setBusy(false);
     }, 0);
-  }, [trackSave, showToast]);
+  }, [trackSave]);
 
   const onCupSimToEnd = useCallback(() => {
     setConfirmDialog({
@@ -587,13 +615,13 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             oppGoals: isHome ? r.awayGoals : r.homeGoals,
             moraleDelta: after.morale - prevMorale,
           };
-          queueMicrotask(() => showToast(data));
+          pendingToastRef.current = data;
         }
         return next;
       });
       setBusy(false);
     }, 0);
-  }, [trackSave, showToast]);
+  }, [trackSave]);
 
   const onSimulateToEnd = useCallback(() => {
     const planLabel = save?.current ? PLAN_LABEL[save.current.plan] : "";

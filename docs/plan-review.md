@@ -171,7 +171,30 @@ metrika s jednou stranou `null` se přeskočí (neposune váhy), kategorie bez d
 Největší soubor v repu. **48 komponent, 24× `useState`, 6× `useEffect`** v jednom
 souboru; samotná `HraApp` je 712 řádků (214–926).
 
-### 3.1 Side effect uvnitř `setState` updateru — 14 výskytů
+### ✅ 3.1 Side effect v `setState` updateru — HOTOVO 29. 7. 2026
+
+Řešeno **změnou sémantiky `trackSave`, ne přepisem 14 call-sites** — ukládání kariéry
+není kde riskovat. `trackSave` nově jen zapíše do refů (idempotentní i při dvojím
+volání v StrictMode); nový `useEffect` na `save` po commitu vykoná PUT i toast.
+Tři `queueMicrotask` obcházky zmizely, `showToast` vypadl ze tří závislostních polí.
+
+**Invariant, na kterém to stojí, jsem ověřil na všech 14 místech:** `trackSave` se volá
+až za guardem a vždy nad **nově vytvořeným** objektem, takže `save` po něm nutně změní
+referenci → React překreslí → effect doběhne. Kdyby některý updater volal `trackSave`
+a pak vrátil `prev`, React by bailoutoval a ten zápis by se **nikdy neodeslal**.
+
+`retrySave` obchází effect záměrně a odesílá přímo — nemění stav, jen opakuje odeslání,
+takže by na něj effect nikdy nedošel.
+
+**⚠ Není to kryté automatickým testem.** V repu není jsdom ani React Testing Library
+(`playwright` je v devDependencies, ale **nepoužívá se** — žádný config, žádné testy).
+Přidat je = dvě devDependencies a `npm install`, který je na tomhle stroji za TLS proxy
+křehký; to je rozhodnutí pro vlastníka, ne vedlejší efekt téhle etapy.
+Ověřeno staticky: lint, typecheck, build, 819 testů + kontrola invariantu výše.
+**Ručně proklikat:** odehrát kolo (uloží se, toast se ukáže **jednou**), rychlý dvojklik,
+dva otevřené taby, „Zkusit znovu" po výpadku sítě.
+
+### Původní zadání 3.1
 ```ts
 setSave((prev) => {
   const next = { ...prev, current: fn(prev.current) };
