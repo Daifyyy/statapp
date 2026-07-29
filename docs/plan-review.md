@@ -98,7 +98,26 @@ Proto krok 1 před krokem 2. **Odhad:** ~30 min.
 Testovací pokrytí je **nerovnoměrné**: model má 752 testů, ale několik modulů s
 historií incidentů nemá ani jeden.
 
-### 2.1 `lib/data/cache.ts` (229 ř.) — nula testů
+### ✅ 2.1 `lib/data/cache.ts` — HOTOVO 29. 7. 2026
+
+25 testů, **produkční kód beze změny** (na rozdíl od 2.2 se tu žádná chyba nenašla — což
+je samo o sobě výsledek: tři pravidla, která dosud držel jen komentář, teď drží test).
+
+Prisma se nahrazuje malým in-memory fakem (`vi.hoisted` + `vi.mock("@/lib/db")`) —
+**první DB-mockovaný test v repu**, vzor pro `predictionStore`/`tipStore`/`favoritesStore`.
+Neověřuje se jím Prisma, ale naše rozhodnutí: kdy se sáhne na fetcher, s jakým TTL se
+zapíše a které řádky se čtou.
+
+**Ověřeno mutačně** — testy nesmí jen procházet, musí kousnout. Čtyři záměrné regrese:
+
+| mutace | spadlo |
+|---|---|
+| práh čtení `MIN` → `CURRENT` (zahodilo by ~9 000 zápasů) | 1 test |
+| zrušen guard „`null` se necachuje" | 2 testy |
+| prázdné pole dostane plné TTL (oslepí ligu na 24 h) | 1 test |
+| zápis starou `schemaVersion` | 3 testy |
+
+### Původní zadání 2.1
 Modul s **nejvíc zdokumentovanými incidenty v celém repu**: `null` se nesmí uložit
 (házelo výjimku, kterou volající spolkl), prázdné pole musí mít krátké TTL (jinak
 oslepí ligu na 24 h), `CURRENT_CACHE_VERSION` vs. `MIN_READABLE_CACHE_VERSION`.
