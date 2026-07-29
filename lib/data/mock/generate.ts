@@ -101,6 +101,15 @@ function buildMatch(
     set(metric, mean * jit(), isGoals ? 0 : 1);
   }
 
+  // Inkasované xG. V reálu přichází ze **soupeřovy půlky téže odpovědi** `/fixtures/statistics`
+  // jako `XG` → v mocku se váže na tutéž dostupnost (reprezentace nemají ani jedno).
+  // Je mimo `ALL_METRICS` (jako `CORNERS_AGAINST`), takže `set` by ho přes `allowed` neprošlo
+  // a zapisuje se přímo.
+  if (allow("XG")) {
+    const mean = metricMean(profile, "GOALS_AGAINST", opts.isHome, opts.recencyFactor);
+    metrics.XG_AGAINST = Math.max(0, Math.round(mean * jit() * 10) / 10);
+  }
+
   // Odvozené metriky ze střel / faulů (zachovají homeBoost i formu skrz SHOTS).
   const shots = metricMean(profile, "SHOTS", opts.isHome, opts.recencyFactor);
   const fouls = metrics.FOULS ?? profile.FOULS;

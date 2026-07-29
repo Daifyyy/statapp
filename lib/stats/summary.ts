@@ -2,8 +2,20 @@ import type { MatchResult, MatchStat, TeamSummary, Venue } from "@/lib/types";
 import { matchesVenue } from "./aggregate";
 
 /** Z kolika nejnovějších zápasů se počítá forma a CS/FTS. */
-const FORM_SIZE = 5;
+export const FORM_SIZE = 5;
 const RATE_SIZE = 10;
+
+/**
+ * Zápasy varianty seřazené od nejnovějšího – **jediný zdroj výběru formy**.
+ * Exportováno, aby `formQuality.ts` počítalo nad **týmiž zápasy ve stejném pořadí**;
+ * dvě nezávislé kopie tohoto filtru by se mohly tiše rozejít a UI by pak kreslilo
+ * hodnocení výkonu k jinému zápasu, než ukazuje badge formy.
+ */
+export function orderedMatches(matches: MatchStat[], venue: Venue): MatchStat[] {
+  return matches
+    .filter((m) => matchesVenue(m, venue))
+    .sort((a, b) => b.date.localeCompare(a.date)); // nejnovější první
+}
 
 /**
  * Souhrn formy a podílů čistého konta / zápasů bez gólu pro jednu variantu.
@@ -14,9 +26,7 @@ export function computeSummary(
   matches: MatchStat[],
   venue: Venue
 ): TeamSummary {
-  const selected = matches
-    .filter((m) => matchesVenue(m, venue))
-    .sort((a, b) => b.date.localeCompare(a.date)); // nejnovější první
+  const selected = orderedMatches(matches, venue);
 
   const formMatches = selected.slice(0, FORM_SIZE);
   const form = formMatches.map(resultOf);

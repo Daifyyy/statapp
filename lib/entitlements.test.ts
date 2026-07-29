@@ -70,8 +70,8 @@ describe("toFreeResult", () => {
     source: "LEAGUE",
     sourceNote: "pozn",
     metrics: ["GOALS_FOR"] as CompareResult["metrics"],
-    home: { team: { id: 1, name: "A", logoUrl: "", country: "" }, values: [], summary: [] },
-    away: { team: { id: 2, name: "B", logoUrl: "", country: "" }, values: [], summary: [] },
+    home: { team: { id: 1, name: "A", logoUrl: "", country: "" }, values: [], summary: [], formQuality: [] },
+    away: { team: { id: 2, name: "B", logoUrl: "", country: "" }, values: [], summary: [], formQuality: [] },
     prediction: {
       available: true,
       lambdaHome: 1.5,

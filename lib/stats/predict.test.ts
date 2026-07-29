@@ -34,6 +34,7 @@ function team(
     team: { id: 1, name: "T", logoUrl: "", country: "" },
     values,
     summary: [],
+    formQuality: [],
   };
 }
 
@@ -57,7 +58,7 @@ function teamAt(
   };
   push("HOME", home);
   push("AWAY", away);
-  return { team: { id: 1, name: "T", logoUrl: "", country: "" }, values, summary: [] };
+  return { team: { id: 1, name: "T", logoUrl: "", country: "" }, values, summary: [], formQuality: [] };
 }
 
 /** Ligově průměrný tým: doma dává/dostává přesně tolik co průměr ligy, venku taky. */
@@ -85,6 +86,7 @@ describe("predictMatch", () => {
         { metric: "GOALS_AGAINST", venue: "HOME", value: 1.2, lowConfidence: false, sampleSize: sample, breakdown: [] },
       ],
       summary: [],
+    formQuality: [],
     });
     const opponent = teamAt(AVERAGE_HOME, AVERAGE_AWAY);
     // Bez útlumu součtu (t=1), ať test měří jen shrinkage.
@@ -130,6 +132,7 @@ describe("predictMatch", () => {
         { metric: "GOALS_AGAINST", venue: "TOTAL", value: ga, lowConfidence: false, sampleSize: 8, breakdown: [] },
       ],
       summary: [],
+    formQuality: [],
     });
     const p = predictMatch(onlyTotal(2, 1), onlyTotal(1, 2));
     expect(p.lambdaHome).toBeGreaterThan(0);
@@ -205,6 +208,7 @@ describe("predictMatch", () => {
       team: { id: 1, name: "X", logoUrl: "", country: "" },
       values: [],
       summary: [],
+    formQuality: [],
     };
     expect(predictMatch(empty, empty).topScores).toEqual([]);
   });
@@ -214,6 +218,7 @@ describe("predictMatch", () => {
       team: { id: 1, name: "Nováček", logoUrl: "", country: "" },
       values: [],
       summary: [],
+    formQuality: [],
     };
     const p = predictMatch(empty, empty);
     expect(p.available).toBe(false);
@@ -228,6 +233,7 @@ describe("predictMatch", () => {
       team: { id: 1, name: "A", logoUrl: "", country: "" },
       values: [],
       summary: [],
+    formQuality: [],
     };
     const away = team({ GOALS_AGAINST: 1.4, GOALS_FOR: 1.2 });
     const p = predictMatch(home, away);

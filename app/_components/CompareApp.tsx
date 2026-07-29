@@ -687,6 +687,10 @@ function ResultPanel({
   const summaryFor = (teamSide: "home" | "away") =>
     result[teamSide].summary.find((s) => s.venue === venue) ?? null;
 
+  // `formQuality` chybí u snímků uložených před jejím zavedením (`SavedComparison.snapshot`).
+  const qualityFor = (teamSide: "home" | "away") =>
+    result[teamSide].formQuality?.find((q) => q.venue === venue) ?? null;
+
   return (
     <div
       key={`${result.home.team.id}-${result.away.team.id}`}
@@ -735,7 +739,12 @@ function ResultPanel({
         </>
       )}
 
-      <FormSummary home={summaryFor("home")} away={summaryFor("away")} />
+      <FormSummary
+        home={summaryFor("home")}
+        away={summaryFor("away")}
+        homeQuality={qualityFor("home")}
+        awayQuality={qualityFor("away")}
+      />
 
       <StandingContext home={homeStanding} away={awayStanding} venue={venue} />
 

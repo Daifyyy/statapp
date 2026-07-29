@@ -28,7 +28,7 @@ function team(
       });
     }
   }
-  return { team: { id: 1, name: "T", logoUrl: "", country: "" }, values, summary: [] };
+  return { team: { id: 1, name: "T", logoUrl: "", country: "" }, values, summary: [], formQuality: [] };
 }
 
 describe("readinessLevel / readinessOf", () => {
@@ -86,6 +86,7 @@ describe("computeReadiness", () => {
       team: { id: 1, name: "X", logoUrl: "", country: "" },
       values: [],
       summary: [],
+      formQuality: [],
     };
     const r = computeReadiness(empty, empty);
     expect(r.sample).toBe(0);

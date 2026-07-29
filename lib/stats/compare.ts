@@ -2,6 +2,7 @@ import type { CompareResult, Team, TeamComparison } from "@/lib/types";
 import { METRICS_BY_ENTITY } from "@/lib/types";
 import { computeAllValues } from "./aggregate";
 import { computeAllSummaries } from "./summary";
+import { computeAllFormQuality } from "./formQuality";
 import { predictMatch, type PredictOptions } from "./predict";
 import { PREDICTION_METRICS, PREDICTION_WINDOW_WEIGHTS } from "./weights";
 import { resolveSource } from "./resolveSource";
@@ -35,6 +36,7 @@ export function compareTeams(
     },
     values: computeAllValues(matches, metrics, entityType, now),
     summary: computeAllSummaries(matches),
+    formQuality: computeAllFormQuality(matches),
   });
 
   const homeComparison = build(home, resolved.homeMatches);

@@ -301,6 +301,51 @@ export interface TeamSummary {
   sampleSize: number; // jmenovatel pro CS/FTS (0–10)
 }
 
+/**
+ * Jak si tým vedl v jednom zápase formy **výkonově**, ne jen výsledkově.
+ * `null` u xG polí = zápas xG nemá (třetina reprezentačních, část Fortuna ligy).
+ */
+export interface FormMatchQuality {
+  fixtureId: number;
+  date: string; // ISO 8601
+  result: MatchResult;
+  goalsFor: number;
+  goalsAgainst: number;
+  xgFor: number | null;
+  xgAgainst: number | null;
+  /** Skutečné body (3/1/0). */
+  points: number;
+  /** Očekávané body z xG obou stran (0–3). `null` bez xG. */
+  expectedPoints: number | null;
+  /** `points − expectedPoints`; kladné = víc bodů, než výkon zasloužil. */
+  edge: number | null;
+  /** Kategorie pro UI. `null` bez xG. */
+  verdict: "lucky" | "matched" | "unlucky" | null;
+}
+
+/**
+ * **Kvalita formy**: sedí posledních 5 výsledků s výkony? Doplněk `TeamSummary`
+ * (ta říká jen W/D/L) postavený nad **týmiž zápasy** – viz `orderedMatches`.
+ * Popisný kontext, **ne signál**: do λ ani do tipů nevstupuje (pět zápasů je z valné
+ * části šum, proto má LAST5 v `PREDICTION_WINDOW_WEIGHTS` jen 5 %).
+ */
+export interface FormQuality {
+  venue: Venue;
+  /** Nejnovější první, max 5 – index po indexu shodné s `TeamSummary.form`. */
+  matches: FormMatchQuality[];
+  /** Kolik z nich má xG = jmenovatel všeho níže. */
+  xgSampleSize: number;
+  /** Body a očekávané body **jen ze zápasů s xG** (jinak by se nedaly srovnat). */
+  points: number | null;
+  expectedPoints: number | null;
+  /** ⌀ rozdíl xG na zápas (vytvořené − povolené). */
+  xgDiffPerMatch: number | null;
+  /** Verdikt nad oknem. `null` při vzorku pod prahem – tam by nic neznamenal. */
+  level: "overperforming" | "inline" | "underperforming" | null;
+  /** Jedna popisná věta. Prázdná, když není z čeho. */
+  note: string;
+}
+
 /** Zraněný hráč (samostatná, líně načítaná data – ne ze zápasových statistik). */
 export interface Injury {
   playerId: number;
@@ -486,6 +531,8 @@ export interface TeamComparison {
   values: MetricValue[];
   /** Souhrn formy a CS/FTS pro každou variantu (HOME/AWAY/TOTAL). */
   summary: TeamSummary[];
+  /** Kvalita formy (výsledky vs. výkony) pro každou variantu – stejné pořadí jako `summary`. */
+  formQuality: FormQuality[];
 }
 
 /** Predikce zápasu z očekávaných gólů (Poisson). Domácí = první tým. */

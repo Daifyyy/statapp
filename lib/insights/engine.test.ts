@@ -46,6 +46,7 @@ function comparison(
     team: { id: name.length, name, logoUrl: "", country: "" },
     values,
     summary,
+    formQuality: [],
   };
 }
 

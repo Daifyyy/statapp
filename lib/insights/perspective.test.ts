@@ -36,6 +36,7 @@ function teamPerVenue(
       failedToScorePct: null,
       sampleSize: 5,
     })),
+    formQuality: [],
   };
 }
 
@@ -94,6 +95,7 @@ describe("reprezentace – TOTAL, predikce nezávislá na pořadí", () => {
       team: { id: name.length, name, logoUrl: "", country: "" },
       values,
       summary: venues.map((venue) => ({ venue, form: [], formOpponents: [], formSampleSize: 0, cleanSheetPct: null, failedToScorePct: null, sampleSize: venue === "TOTAL" ? 12 : 0 })),
+      formQuality: [],
     };
   }
 
