@@ -88,6 +88,39 @@ neumí stáhnout novější binárku přes TLS proxy, novější verze TS toolch
   z posl. 10 zápasů (jeden jasný jmenovatel `sampleSize`, ne vážený mix oken). Sleduje
   přepínač Doma/Venku/Celkově (sdílí `matchesVenue`). Vše odvozené z `GOALS_FOR/AGAINST`
   → žádný nový fetch, žádný bump cache verze. UI: `FormSummary.tsx` nad metrikami.
+- **Kvalita formy** (`lib/stats/formQuality.ts`, `TeamComparison.formQuality`) – doplněk
+  souhrnu formy, který odpovídá na „**sedí výsledky s výkony?**". Pro každý zápas okna
+  spočítá **očekávané body (xB)** z xG obou stran a porovná je se skutečnými; nad oknem
+  z toho udělá verdikt nadstavená / sedí / podhodnocená forma. Je to tentýž rozpor mezi
+  hrou a skóre, kvůli kterému vznikl `matchReport.ts`, jen agregovaný přes formu.
+  - **Není to `matchReport.ts` per zápas.** Ten je konstruovaný jako **podíl dvou stran
+    jednoho zápasu** (součet pruhů je vždy 10) a potřebuje obě poloviny odpovědi
+    `/fixtures/statistics`. Tady je soupeř pokaždé jiný a `MatchStat` nese jen **vlastní**
+    metriky + `GOALS_AGAINST`/`XG_AGAINST` – soupeřovo držení, střely ani fauly v tom
+    řádku nejsou, takže podíl by nešlo ani spočítat, ani by nic neznamenal.
+  - **xB jede stejnou mřížkou jako predikce** (`gridProbs`, λ = xG týmu a xG soupeře →
+    `3·V + R`) → žádná druhá implementace Poissona, která by se mohla rozejít. Zostření λ
+    a Platt kalibrace se ale **vypínají explicitně** (`XP_PARAMS`): jsou to post-parametry
+    fitnuté na *predikční* λ, kdežto xB je **retrodikce** odehraného zápasu. Dnes jsou obojí
+    no-op, ale zapnutí `LAMBDA_SHARPEN` by jinak tiše pokřivilo očekávané body. **ρ zůstává**
+    (Dixon–Coles je vlastnost gólového rozdělení, ne prediktivní post-param).
+  - **Výběr zápasů sdílí s `computeSummary`** přes vytknutý `orderedMatches` (`summary.ts`).
+    Dvě nezávislé kopie filtru by se mohly rozejít a UI by kreslilo hodnocení k jinému
+    zápasu, než ukazuje badge formy. Kryto testem přes všechny tři venue.
+  - **Verdikt nad oknem vzniká až od 4 zápasů s xG** (`T.minXgSample`) – xB z pěti zápasů
+    má obrovský interval. Jednotlivé zápasy se hodnotí i pod prahem (mají vlastní čísla
+    vedle sebe). Body i xB se agregují **jen ze zápasů s xG**, ať mají stejný jmenovatel.
+    **Jednostranné xG se zahazuje** – soupeř by v mřížce neměl šance vůbec.
+  - **Degraduje po částech** jako `matchReport.ts`: bez xG zůstane výsledek a góly, zbytek
+    je `null` a sekce zmizí. U reprezentací je to **běžný stav** (xG má 30,9 % zápasů se
+    statistikami, přáteláky 2,0 %) – nedopočítávat odhadem.
+  - **Popisný kontext, NE signál.** Do λ, insights ani tipů nevstupuje: pět zápasů je
+    z valné části šum, proto má LAST5 v `PREDICTION_WINDOW_WEIGHTS` jen 5 %. Kdyby to
+    někdy mělo do modelu, tak přes `npm run backtest`, ne dojmem.
+  - **0 volání API** (čte už cachovanou `MatchStatCache`), žádný bump cache verze, **FREE**
+    (`toFreeResult` posílá `home`/`away` vcelku). Mock má kvůli tomu `XG_AGAINST`
+    (v realitě chodí ze soupeřovy půlky téže odpovědi jako `XG` → váže se na jeho dostupnost).
+    UI: proužek pod badgem formy + řádek „Body vs. xG" ve `FormSummary.tsx`.
 - **Zranění** (`getInjuries` v `repository.ts`, endpoint `/api/injuries`, UI `InjuryList.tsx`)
   – **líně** načítaná samostatná sekce, ne ze zápasových statistik. `/injuries` přes TTL
   `ApiCache` (6 h), dedup dle hráče. Pokrytí v API je nekonzistentní → **graceful**:
