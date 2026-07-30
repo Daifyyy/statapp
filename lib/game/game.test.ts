@@ -18,6 +18,7 @@ import {
   secondTierOf,
   firstTierOf,
   seasonHeadline,
+  leaguePrestige,
 } from "./leagues";
 import { expectedRank, updateReputation, isHireable } from "./reputation";
 import { leagueGoalsPerTeamGame, teamSeasonStats, venueStats } from "./analysis";
@@ -67,9 +68,11 @@ import {
   HOME_BOOST_CAP,
   MAX_DEV_POINTS,
   PLAN_FATIGUE,
+  PRESTIGE_SPAN,
   SCOUT_CONFIDENCE_BOOSTED,
   SCOUT_CONFIDENCE_MIN,
   SCOUT_LEVEL_MAX,
+  STARTING_REPUTATION,
 } from "./balance";
 import { ADJUST_MAX, ADJUST_MIN } from "./balance";
 import { scoutConfidence, scoutOpponent, scoutQuality } from "./scouting";
@@ -546,6 +549,65 @@ describe("leagues – hodnocení sezóny", () => {
   });
 });
 
+// Dřív `base − 18 + pct·34` přetékalo přes 100 a clamp špičku slepil: půlka Premier League
+// měla prestiž 100, takže pro `isHireable` byl Man City stejně dostupný jako Newcastle.
+describe("teamPrestige – rozprostření stupnice", () => {
+  /** Liga 20 týmů s rovnoměrným žebříkem sil. */
+  const ladder = (n = 20): GameTeam[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: i + 1,
+      name: `T${i + 1}`,
+      short: `T${i + 1}`,
+      color: "#000",
+      attack: 2.2 - i * 0.06,
+      defense: 0.9 + i * 0.05,
+      homeBoost: 1.1,
+    }));
+
+  it("nesaturuje na 100 ani v nejprestižnější lize", () => {
+    const league = ladder();
+    const byRank = league.map((t) => teamPrestige(t, 39, league)); // seřazené od nejsilnějšího
+    expect(byRank[0]).toBe(100); // špička Premier League = strop stupnice
+    expect(new Set(byRank).size).toBeGreaterThanOrEqual(league.length - 1); // ne slepenec
+    for (let i = 1; i < byRank.length; i++) {
+      expect(byRank[i], `${i}. místo`).toBeLessThan(byRank[i - 1]);
+    }
+  });
+
+  it("rozsah ligy = leaguePrestige dolů o PRESTIGE_SPAN", () => {
+    const league = ladder();
+    for (const id of [39, 94, 345, 40]) {
+      const top = teamPrestige(league[0], id, league);
+      const bottom = teamPrestige(league[league.length - 1], id, league);
+      expect(top, `liga ${id}`).toBe(leaguePrestige(id));
+      expect(top - bottom, `liga ${id}`).toBe(PRESTIGE_SPAN);
+    }
+  });
+
+  it("jeden dominantní klub nestlačí zbytek ligy ke dnu", () => {
+    // Percentil bere POŘADÍ, ne rozdíl – min-max normalizace by z Celticu udělala měřítko
+    // a zbytku Premiership by dala skoro stejnou (nejnižší) prestiž.
+    const league = ladder();
+    const monster = { ...league[0], attack: 6, defense: 0.2 };
+    const withMonster = [monster, ...league.slice(1)];
+    const second = teamPrestige(withMonster[1], 179, withMonster);
+    const last = teamPrestige(withMonster[withMonster.length - 1], 179, withMonster);
+    expect(second - last).toBeGreaterThan(PRESTIGE_SPAN * 0.8);
+  });
+
+  it("startovní reputace vezme spodek 2. ligy, ne její špičku", () => {
+    // Dokumentovaný záměr „2. ligy = kariéra zdola nahoru“: s předchozí stupnicí
+    // (Championship 44…78) nebyl na startu hireable ANI JEDEN klub Championship.
+    const league = ladder(24);
+    const hireable = league.filter((t) =>
+      isHireable(t, 40, league, STARTING_REPUTATION)
+    );
+    expect(hireable.length).toBeGreaterThan(0);
+    expect(hireable).not.toContain(league[0]); // špička ne
+    expect(hireable.length).toBeLessThan(league.length / 2); // ale ani půlka ligy
+  });
+});
+
 describe("sestup/postup mezi 1. a 2. ligou", () => {
   it("2. liga: postupová zóna (top 2) = promoted, žádná Evropa, sestup dole", () => {
     // Championship (40) = 2. liga Anglie, 24 týmů, 2 postupová místa.
@@ -820,6 +882,89 @@ describe("standingsToTeams", () => {
     expect(alpha.logo).toBe("a.png");
     expect(alpha.short).toBe("AF"); // iniciály slov
     expect(alpha.homeBoost).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Velikost klubu je daná historií. Bez prioru z loňska stačilo jedno odehrané kolo,
+// aby se z mistra ligy stal 1★ outsider a z nováčka 5★ favorit – a přes
+// `teamStrengthScore` to teklo do hvězd, prestiže, cíle sezóny i job marketu.
+describe("standingsToTeams – historie klubu jako prior", () => {
+  const AVG = { goalsFor: 1.35, goalsAgainst: 1.35 };
+  /** Loňsko: žebřík od velkoklubu (i=0) po dno (i=19). */
+  const prevSeason = (i: number) => ({
+    prevPlayed: 38,
+    prevGoalsFor: Math.round((2.3 - i * 0.07) * 38),
+    prevGoalsAgainst: Math.round((0.8 + i * 0.05) * 38),
+  });
+  /** Letošek s OBRÁCENÝM pořadím výsledků – historie a letošek si maximálně odporují. */
+  const thisSeason = (i: number, played: number) => ({
+    teamId: i + 1,
+    name: `T${i + 1}`,
+    played,
+    goalsFor: Math.round((0.8 + i * 0.07) * played),
+    goalsAgainst: Math.round((2.2 - i * 0.05) * played),
+  });
+  const build = (played: number) =>
+    standingsToTeams(
+      Array.from({ length: 20 }, (_, i) => ({ ...thisSeason(i, played), ...prevSeason(i) })),
+      AVG,
+      AVG
+    );
+
+  it("po jednom kole rozhoduje loňsko, ne jediný zápas", () => {
+    const teams = build(1);
+    const big = teams.find((t) => t.id === 1)!; // loni nejlepší, letos prohrál
+    const small = teams.find((t) => t.id === 20)!; // loni dno, letos vyhrál
+    expect(teamStrengthScore(big)).toBeGreaterThan(teamStrengthScore(small));
+    expect(leagueStars(big, teams)).toBe(5);
+    expect(leagueStars(small, teams)).toBe(1);
+    // A prestiž (klub → job market) jde stejným směrem.
+    expect(teamPrestige(big, 39, teams)).toBeGreaterThan(teamPrestige(small, 39, teams));
+  });
+
+  it("ke konci sezóny už převáží odehraná sezóna", () => {
+    const teams = build(38);
+    const big = teams.find((t) => t.id === 1)!;
+    const small = teams.find((t) => t.id === 20)!;
+    expect(teamStrengthScore(small)).toBeGreaterThan(teamStrengthScore(big));
+  });
+
+  it("pořadí sil po 1. kole kopíruje loňský žebřík", () => {
+    const teams = build(1);
+    const byId = [...teams].sort((a, b) => a.id - b.id); // = loňské pořadí
+    // Jedno kolo je celý gól sem nebo tam (data jsou celočíselná), takže sousedi se
+    // prohodit MŮŽOU – kluby vzdálené dvě příčky loňské tabulky už ne.
+    for (let i = 2; i < byId.length; i++) {
+      expect(teamStrengthScore(byId[i - 2]), `${byId[i - 2].name} vs ${byId[i].name}`)
+        .toBeGreaterThan(teamStrengthScore(byId[i]));
+    }
+  });
+
+  it("nováček bez historie se nesplácne k ligovému průměru", () => {
+    // Klub bez loňského řádku (postoupil) s celou odehranou sezónou musí zůstat silný:
+    // prior je u něj ligový průměr, takže se na něj váže jen slabý `SHRINK_K`.
+    const rows = Array.from({ length: 20 }, (_, i) => ({
+      ...thisSeason(i, 38),
+      ...(i === 0 ? {} : prevSeason(i)),
+    }));
+    const teams = standingsToTeams(rows, AVG, AVG);
+    const rookie = teams.find((t) => t.id === 1)!; // letos nejhorší útok, nejvíc obdržel
+    expect(rookie.attack).toBeLessThan(AVG.goalsFor);
+    expect(rookie.defense).toBeGreaterThan(AVG.goalsAgainst);
+    expect(teamStrengthScore(rookie)).toBeLessThan(
+      teamStrengthScore(teams.find((t) => t.id === 20)!)
+    );
+  });
+
+  it("loňské góly se přepočtou na letošní gólovou hladinu ligy", () => {
+    // Táž loňská tabulka, ale liga letos dává o třetinu víc gólů → ratingy se posunou
+    // nahoru, relativní pořadí zůstane.
+    const rows = Array.from({ length: 20 }, (_, i) => ({ ...thisSeason(i, 0), ...prevSeason(i) }));
+    const low = standingsToTeams(rows, AVG, AVG);
+    const high = standingsToTeams(rows, { goalsFor: 1.8, goalsAgainst: 1.8 }, AVG);
+    const meanAtk = (ts: typeof low) => ts.reduce((s, t) => s + t.attack, 0) / ts.length;
+    expect(meanAtk(high)).toBeGreaterThan(meanAtk(low) * 1.2);
+    expect(high.map((t) => t.id)).toEqual(low.map((t) => t.id));
   });
 });
 

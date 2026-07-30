@@ -8,7 +8,7 @@
 // split-formát nemodeluje, jen vyhodnotí finální pořadí ploché tabulky přes
 // evaluateSeason/deriveLeagueAccess. Vědomý kompromis pro jednoduchost, ne bug.
 
-import { PRESTIGE_SCALE, PRESTIGE_SHIFT, PROMOTION_PUSH_GAP } from "./balance";
+import { PRESTIGE_SPAN, PROMOTION_PUSH_GAP } from "./balance";
 import type { EuropeSpot, GameTeam, LeagueAccess, Objective } from "./types";
 
 /** Ligy nabízené ve hře (Top-5 + pár dalších). id = reálné league id z katalogu. */
@@ -283,14 +283,23 @@ export function teamStrengthScore(team: GameTeam): number {
 }
 
 /**
+ * Percentil síly týmu v jeho lize: 0 = dno, 1 = nejsilnější. **Pořadí, ne rozdíl** —
+ * min-max normalizace by z jednoho dominantního klubu (Celtic, Bayern) udělala měřítko
+ * a zbytek ligy by stlačila k nule. Sdílí ho `leagueStars` i `teamPrestige`, ať hvězdy
+ * a prestiž nemůžou ukazovat opačným směrem.
+ */
+export function strengthPercentile(team: GameTeam, league: GameTeam[]): number {
+  const mine = teamStrengthScore(team);
+  const below = league.filter((t) => teamStrengthScore(t) < mine).length;
+  return league.length > 1 ? below / (league.length - 1) : 0.5;
+}
+
+/**
  * Hvězdy 1–5 dle PERCENTILU síly týmu v jeho lize (ne absolutní práh). Nejsilnější tým
  * ligy ~5★, nejslabší ~1★, střed ~3★ – rozprostřené i pro slabé ligy.
  */
 export function leagueStars(team: GameTeam, league: GameTeam[]): number {
-  const mine = teamStrengthScore(team);
-  const below = league.filter((t) => teamStrengthScore(t) < mine).length;
-  const pct = league.length > 1 ? below / (league.length - 1) : 0.5; // 0 (dno) .. 1 (top)
-  return Math.max(1, Math.min(5, Math.round(pct * 4) + 1));
+  return Math.max(1, Math.min(5, Math.round(strengthPercentile(team, league) * 4) + 1));
 }
 
 /**
@@ -345,21 +354,27 @@ export function seasonObjective(
 }
 
 /**
- * Prestiž týmu 0–100 = prestiž ligy posunutá podle síly týmu v rámci ligy.
- * Top tým velké ligy ~ 95+, průměr ~ 75, dno ~ 60; slabá liga posune celý rozsah dolů.
+ * Prestiž týmu 0–100. **`leaguePrestige` je prestiž ŠPIČKY ligy**, od ní se jde dolů
+ * podle percentilu síly: nejsilnější klub ligy = `base`, nejslabší = `base − PRESTIGE_SPAN`.
+ * Premier League 100…66, Fortuna liga 44…10.
+ *
+ * Dřív se počítalo `base − 18 + pct·34`, takže špička velkých lig přetekla přes 100 a
+ * **clamp ji slepil**: půlka Premier League měla prestiž 100 a pro `isHireable` byl
+ * Man City stejně dostupný jako Newcastle. Kotva nahoře to rozprostře, aniž by se hnulo
+ * dno ligy — a `Math.round` na 34 bodech dá i ve 20členné lize skoro každé příčce
+ * vlastní číslo (`isHireable` gatuje po ~1 bodu reputace).
  */
 export function teamPrestige(
   team: GameTeam,
   leagueId: number,
   league: GameTeam[]
 ): number {
-  const scores = league.map(teamStrengthScore).sort((a, b) => a - b);
-  const min = scores[0];
-  const max = scores[scores.length - 1];
-  const range = max - min || 1;
-  const pct = (teamStrengthScore(team) - min) / range; // 0 (dno) .. 1 (top)
-  const base = leaguePrestige(leagueId);
-  return clamp(Math.round(base + PRESTIGE_SHIFT + pct * PRESTIGE_SCALE), 0, 100);
+  const pct = strengthPercentile(team, league); // 0 (dno) .. 1 (špička)
+  return clamp(
+    Math.round(leaguePrestige(leagueId) - PRESTIGE_SPAN * (1 - pct)),
+    0,
+    100
+  );
 }
 
 function clamp(v: number, lo: number, hi: number): number {

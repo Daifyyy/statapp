@@ -91,6 +91,25 @@ export const SPREAD_DEFENSE_MAX = 3.2;
 export const SHRINK_K = 3;
 
 /**
+ * Váha **loňské sezóny** jako prioru pro rating klubu (`standingsToTeams`). Kolik
+ * letošních zápasů musí klub odehrát, aby letošek vážil stejně jako historie
+ * (`n / (n + HISTORY_K)`).
+ *
+ * Proč to existuje: velikost klubu je daná historií, ne prvním kolem. Se samotným
+ * `SHRINK_K` byl prior **ligový průměr**, takže po 1. kole měly všechny kluby rating
+ * ze 75 % z průměru a ze 25 % z jednoho zápasu – a `amplifySpread` (1.35×) ten jeden
+ * zápas ještě roztáhl. Výhra 4:0 v prvním kole udělala z nováčka 5★ favorita a remíza
+ * 0:0 z mistra ligy 1★ outsidera; přes `teamStrengthScore` to teklo do hvězd, prestiže,
+ * sezónního cíle i do toho, které kluby projdou `isHireable`.
+ *
+ * 12 ≈ třetina sezóny: po 12 kolech je letošek 50 %, po půlsezóně (19) 61 %, na konci
+ * (38) 76 %. Zbytek nese loňsko – ne ligový průměr, takže se síla neztrácí, jen se
+ * neřídí šumem. Prior je sám smrštěný `SHRINK_K` a klub bez loňské historie (nováček,
+ * postoupivší) spadne na ligový průměr = původní chování.
+ */
+export const HISTORY_K = 12;
+
+/**
  * Mezisezónní drift ratingu (`driftTeams` v career.ts): regrese ke skutečnému průměru
  * ligy + náhodný šum, ať pořadí sil mezi sezónami mírně kolísá. Drift **zachovává
  * rozptyl** ligy (renormalizace) – nesmí volat `amplifySpread`, ten je jen pro čerstvě
@@ -461,9 +480,23 @@ export const REP_PERF_WEIGHT = 0.6;
  */
 export const MIN_HIREABLE_PRESTIGE = 40;
 
-/** Posun/rozsah prestiže týmu v rámci ligy (`teamPrestige` v leagues.ts). */
-export const PRESTIGE_SHIFT = -18;
-export const PRESTIGE_SCALE = 34;
+/**
+ * Rozsah prestiže uvnitř jedné ligy (`teamPrestige` v leagues.ts): nejsilnější klub má
+ * `leaguePrestige`, nejslabší o `PRESTIGE_SPAN` míň. 34 bodů drží dno Premier League
+ * (66) zhruba na úrovni špičky Portugalska — tam ta hranice mezi „velkoklub" a „slušný
+ * klub menší ligy" opravdu je, a v 20členné lize dostane skoro každá příčka vlastní číslo.
+ *
+ * Proti dřívějšímu `base − 18 + pct·34` je celá stupnice **o 16 níž** (kromě špiček
+ * velkých lig, které stejně vrážely do clampu na 100). Dva důsledky, oba zamýšlené:
+ *  - **mistr menší ligy už není nafouklý** (Fortuna liga 44 místo 60) → série titulů se
+ *    slabým klubem nevystřelí reputaci přes `REP_CEILING_MARGIN` rovnou k elitě; k té se
+ *    pořád leze přes Portugalsko/Nizozemsko.
+ *  - **start kariéry má z čeho vybírat.** Na `STARTING_REPUTATION` (30) projde přes
+ *    `isHireable` prestiž ≤ 40; s dřívější stupnicí to nesplňoval ani jeden klub
+ *    Championship (44…78), ačkoli dokumentace slibuje „2. ligy = kariéra zdola nahoru".
+ *    Teď je to spodní třetina (28…62).
+ */
+export const PRESTIGE_SPAN = 34;
 
 /**
  * O kolik příček pod postupovou zónou 2. ligy ještě zní sezónní cíl jako „zabojuj

@@ -13,11 +13,34 @@
   trychtýře ratingů** (`generateLeague`/`standingsToTeams` i po `driftTeams`). Empiricky: nejsilnější
   tým vyhraje titul ~33 %, nejslabší ~0 %, Ø mistr ~80 b / poslední ~26 b (náročné, ne walkover).
   `leagueStars(team, league)` = hvězdy 1–5 dle **percentilu** síly v lize.
+- **Prestiž klubu 0–100** (`teamPrestige`) = `leaguePrestige` je prestiž **špičky** ligy, od ní
+  se jde dolů podle `strengthPercentile` až na `base − PRESTIGE_SPAN` (34). Premier League
+  100…66, Championship 62…28, Fortuna liga 44…10. Percentil (pořadí), **ne min-max normalizace**
+  — jeden dominantní klub by jinak sloužil za měřítko a zbytek ligy by stlačil ke dnu; navíc
+  hvězdy a prestiž teď stojí na téže funkci a nemůžou ukazovat opačně. Dřív se počítalo
+  `base − 18 + pct·34`, což u velkých lig **přetékalo přes 100 a clamp špičku slepil**: půlka
+  Premier League měla prestiž 100 a pro `isHireable` byl Man City stejně dostupný jako Newcastle.
+  Stupnice je tím o 16 níž, takže: (a) mistr menší ligy už nevystřelí reputaci ke stropu elity
+  (viz `REP_CEILING_MARGIN` níže), (b) na `STARTING_REPUTATION` (30) je konečně hireable spodní
+  třetina Championship — což dokumentace slibovala, ale předchozí stupnice (44…78) nesplňovala.
 - **Reálné týmy = z ligové tabulky** (`getGameLeague` v `repository.ts` → `getLeagueGameTeams` v
-  `realRepository.ts`): ratingy útoku/obrany = **góly na zápas** z tabulky (shrink k ligovému
-  průměru), domácí výhoda z home splitu, loga+jména z API. **1 cachované volání/liga** (sdílí
-  `standings:` cache). **Mezisezóna** (0 odehraných) → fallback na **předchozí sezónu**. Mock/bez API
-  → fiktivní `generateLeague`. Pool lig = `GAME_LEAGUES` (`lib/game/leagues.ts`, Top-5 + Portugalsko/
+  `realRepository.ts`): ratingy útoku/obrany = **góly na zápas** z tabulky (shrink k **loňskému
+  ratingu klubu**, u nováčků k ligovému průměru), domácí výhoda z home splitu, loga+jména z API.
+  **2 cachovaná volání/liga** – tabulka + tabulka předchozí sezóny (sdílí `standings:` cache
+  se záložkou Tabulka i s `getLeagueBaseline`, takže typicky 0 volání navíc). **Mezisezóna**
+  (0 odehraných) → fallback na **předchozí sezónu** (a historie je pak o sezónu starší).
+  Mock/bez API → fiktivní `generateLeague`.
+  - **Velikost klubu je daná historií, ne rozehranou sezónou** (`HISTORY_K` = 12 v `balance.ts`).
+    Prior ratingu je **loňská sezóna téhož klubu** (přepočtená na letošní gólovou hladinu ligy
+    a sama smrštěná `SHRINK_K`); letošek se k ní smršťuje `n/(n+12)` → po 12 kolech 50 %,
+    po půlsezóně 61 %, na konci 76 %. Předtím byl prior **ligový průměr** s `SHRINK_K` = 3,
+    takže po 1. kole stál rating ze 75 % na průměru a z 25 % na jednom zápase — a `amplifySpread`
+    (1.35×) ten jeden zápas ještě roztáhl: výhra 4:0 udělala z nováčka 5★ favorita, remíza 0:0
+    z mistra ligy 1★ outsidera. Přes `teamStrengthScore` to teklo do **hvězd, prestiže,
+    sezónního cíle i `isHireable`** (které kluby jdou na startu kariéry vůbec vzít).
+    **Klub bez loňského řádku** (postoupivší, nově zařazená liga) drží starý `SHRINK_K` —
+    silný prior je oprávněný jen proti skutečnému ratingu, ne proti ligovému průměru,
+    jinak by se odehraná sezóna zbytečně splácla ke středu. Pool lig = `GAME_LEAGUES` (`lib/game/leagues.ts`, Top-5 + Portugalsko/
   Nizozemsko/**Belgie/Skotsko/Rakousko/Řecko**/Česko; malé ligy = předkola v `LEAGUE_ACCESS`).
   Výběr kariéry nabízí **i 2. ligy** (`SECOND_TIERS`, `tier: 2` z `/api/game/leagues`) – nízká
   prestiž → projdou `isHireable` na startovní reputaci = kariéra „zdola nahoru".
@@ -347,9 +370,10 @@
   reputaci). `startGame`/`startTournament` už reputaci NEresetují (sdílená, `prev?.manager.reputation`).
   - **Sdílená reputace se stropem úrovně** (uživatelův požadavek): reputace se buduje napříč klubem
     i reprezentací, ALE `applyCeiling` (`reputation.ts`) drží **kladné** přírůstky pod
-    `prestiž vedeného týmu + REP_CEILING_MARGIN` (12). Empiricky: 20 titulů se Spartou (prestiž ~60)
-    → strop reputace ~72 → Španělsko (prestiž 95, brána ~91) zůstane „🔒 mimo dosah"; k elitě se
-    musíš propracovat přes silnější klub (prestiž ~92 → reputace 100). Prestiž se nese na summary
+    `prestiž vedeného týmu + REP_CEILING_MARGIN` (12). Empiricky: 20 titulů se Spartou (prestiž 44)
+    → strop reputace 56 → Španělsko (prestiž 95, brána ~91) zůstane „🔒 mimo dosah"; k elitě se
+    musíš propracovat přes silnější klub (mistr Portugalska 66 → strop 78 → otevře se půlka
+    Premier League). Prestiž se nese na summary
     (`SeasonSummary.yourPrestige` = `teamPrestige`, `TournamentSummary.teamPrestige` = `nationPrestige`,
     fallback bez ní = strop 100). Ladicí konstanta – `sim-game` reputaci mezi ligami neměří.
 - **Body vs. očekávané body** (`lib/game/expectedPoints.ts`, čisté + testy; `SeasonSummary.

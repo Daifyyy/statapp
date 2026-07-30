@@ -524,36 +524,65 @@ export async function getLeagueTable(leagueId: number): Promise<LeagueTable | nu
 
 /**
  * Reálné týmy ligy s herními ratingy útoku/obrany (herní modul „Manažer"). Odvozeno
- * z ligové tabulky (góly na zápas + home split) přes **1 cachované volání** (sdílí
- * `standings:` cache se záložkou Tabulka). Žádné drahé per-zápas fetche.
+ * z ligové tabulky (góly na zápas + home split) přes **2 cachovaná volání** (sdílí
+ * `standings:` cache se záložkou Tabulka i s `getLeagueBaseline`). Žádné drahé
+ * per-zápas fetche.
+ *
+ * **Velikost klubu je daná historií, ne rozehranou sezónou.** Proto se k základní
+ * tabulce načítá ta **předchozí** a předává jako prior do `standingsToTeams`
+ * (`HISTORY_K`): po 1. kole drží ratingy loňsko, ke konci sezóny letošek. Bez toho
+ * dělal jeden zápas z mistra ligy 1★ outsidera – hvězdy, prestiž, sezónní cíl
+ * i job market visí na `teamStrengthScore`.
  */
 export async function getLeagueGameTeams(
   leagueId: number
 ): Promise<{ teams: GameTeam[]; leagueAccess: LeagueAccess | null }> {
-  let raw = await cachedLeagueStandings(leagueId);
+  const current = await cachedLeagueStandings(leagueId);
   // Mezisezóna: aktuální tabulka je prázdná (0 odehraných) → ratingy by byly všechny
   // stejné (ligový průměr). Spadni na PŘEDCHOZÍ sezónu, ať mají týmy reálné síly.
-  if (!hasPlayedMatches(raw)) {
-    const prev = await cachedLeagueStandingsFor(leagueId, PREVIOUS_SEASON).catch(
-      () => [] as ApiStandingRow[]
-    );
-    if (prev.length) raw = prev;
-  }
-  const avg = computeLeagueGoalsAvg(raw);
+  // Historie je pak vždy o sezónu starší než ta, ze které se staví tabulka.
+  const useCurrent = hasPlayedMatches(current);
+  const historySeason = useCurrent ? PREVIOUS_SEASON : PREVIOUS_SEASON - 1;
+  const fallback = useCurrent
+    ? []
+    : await standingsOrEmpty(leagueId, PREVIOUS_SEASON);
+  const raw = useCurrent || !fallback.length ? current : fallback;
+  const history = raw.length ? await standingsOrEmpty(leagueId, historySeason) : [];
+
+  const prevById = new Map(history.map((r) => [r.team.id, r]));
   const teams = standingsToTeams(
-    raw.map((r) => ({
-      teamId: r.team.id,
-      name: r.team.name,
-      logo: r.team.logo,
-      played: r.all?.played ?? 0,
-      goalsFor: r.all?.goals?.for ?? 0,
-      goalsAgainst: r.all?.goals?.against ?? 0,
-      homePlayed: r.home?.played ?? 0,
-      homeGoalsFor: r.home?.goals?.for ?? 0,
-    })),
-    avg
+    raw.map((r) => {
+      const prev = prevById.get(r.team.id); // chybí u nováčka → prior = ligový průměr
+      return {
+        teamId: r.team.id,
+        name: r.team.name,
+        logo: r.team.logo,
+        played: r.all?.played ?? 0,
+        goalsFor: r.all?.goals?.for ?? 0,
+        goalsAgainst: r.all?.goals?.against ?? 0,
+        homePlayed: r.home?.played ?? 0,
+        homeGoalsFor: r.home?.goals?.for ?? 0,
+        prevPlayed: prev?.all?.played ?? 0,
+        prevGoalsFor: prev?.all?.goals?.for ?? 0,
+        prevGoalsAgainst: prev?.all?.goals?.against ?? 0,
+      };
+    }),
+    computeLeagueGoalsAvg(raw),
+    computeLeagueGoalsAvg(history)
   );
   return { teams, leagueAccess: deriveLeagueAccess(raw) };
+}
+
+/**
+ * Tabulka dané sezóny, nebo `[]`. Historická sezóna je **best-effort vstup** (chybí
+ * u čerstvě zařazené soutěže) – výpadek nesmí shodit start kariéry, ale ani zmizet:
+ * bez ní se ratingy tiše vrátí k „jen letošek".
+ */
+function standingsOrEmpty(leagueId: number, season: number): Promise<ApiStandingRow[]> {
+  return cachedLeagueStandingsFor(leagueId, season).catch((e) => {
+    logError("realRepository.getLeagueGameTeams.history", e, { leagueId, season });
+    return [] as ApiStandingRow[];
+  });
 }
 
 /** Syrová ligová tabulka dané sezóny přes per-liga TTL cache. */

@@ -7,6 +7,7 @@ import {
   ATTACK_MIN,
   DEFENSE_BEST,
   DEFENSE_WORST,
+  HISTORY_K,
   HOME_BOOST_CAP,
   HOME_BOOST_FALLBACK,
   HOME_BOOST_MAX,
@@ -153,6 +154,20 @@ export interface RawStandingRow {
   goalsAgainst: number;
   homePlayed?: number;
   homeGoalsFor?: number;
+  /**
+   * **Loňská** sezóna téhož klubu v téže lize (historie klubu, ne letošní forma).
+   * Slouží jako prior pro letošní rating – viz `HISTORY_K`. Chybí u nováčků a když
+   * loňská tabulka není k dispozici; pak se prior vrací na ligový průměr.
+   */
+  prevPlayed?: number;
+  prevGoalsFor?: number;
+  prevGoalsAgainst?: number;
+}
+
+/** Průměr gólů na zápas v lize (vstřelené/obdržené) – měřítko pro shrink i prior. */
+export interface LeagueGoalsMean {
+  goalsFor: number;
+  goalsAgainst: number;
 }
 
 /**
@@ -184,9 +199,36 @@ function colorFromId(id: number): string {
 }
 
 /**
+ * Rating klubu na jedné ose (útok / obrana) z letoška a loňska.
+ *
+ * Prior = **loňský** rating klubu, přepočtený na letošní gólovou hladinu ligy
+ * (`scale`) a sám smrštěný k ligovému průměru (`SHRINK_K`), ať pár loňských zápasů
+ * nedělá extrém. Bez loňské historie = ligový průměr. Letošek se pak k prioru smršťuje
+ * `HISTORY_K` → po 1. kole rozhoduje historie, ke konci sezóny letošek.
+ */
+function ratingWithHistory(
+  played: number,
+  goals: number,
+  prevPlayed: number,
+  prevGoals: number,
+  mean: number,
+  scale: number
+): number {
+  const hasHistory = prevPlayed > 0;
+  const prior = hasHistory
+    ? shrink((prevGoals / prevPlayed) * scale, mean, prevPlayed, SHRINK_K)
+    : mean;
+  // Bez historie je prior ligový PRŮMĚR – tam se smršťuje jen proti šumu malého vzorku
+  // (`SHRINK_K`), jinak by se odehraná sezóna zbytečně splácla k průměru. Silný prior
+  // (`HISTORY_K`) je oprávněný jen proti skutečnému loňskému ratingu klubu.
+  const k = hasHistory ? HISTORY_K : SHRINK_K;
+  return played > 0 ? shrink(goals / played, prior, played, k) : prior;
+}
+
+/**
  * Převede ligovou tabulku na herní týmy s ratingy útoku/obrany (góly na zápas,
- * shrink k ligovému průměru). Domácí výhoda z home splitu. Lichý počet → dropne
- * poslední (roundRobin potřebuje sudý počet).
+ * shrink k **loňskému ratingu klubu**, u nováčků k ligovému průměru). Domácí výhoda
+ * z home splitu. Lichý počet → dropne poslední (roundRobin potřebuje sudý počet).
  *
  * **`homeBoost` = poměr SKUTEČNÝCH gólů: domácí góly/zápas ÷ celkové góly/zápas.** Je to
  * čistě reálná veličina, na herních ratinzích **nezávislá** – proto se počítá z hrubých
@@ -198,22 +240,40 @@ function colorFromId(id: number): string {
  */
 export function standingsToTeams(
   rows: RawStandingRow[],
-  leagueAvg?: { goalsFor: number; goalsAgainst: number } | null
+  leagueAvg?: LeagueGoalsMean | null,
+  prevLeagueAvg?: LeagueGoalsMean | null
 ): GameTeam[] {
   const meanFor = leagueAvg?.goalsFor ?? 1.35;
   const meanAgainst = leagueAvg?.goalsAgainst ?? 1.35;
+  // Loňské góly na letošní hladinu ligy: gólovost se mezi sezónami posouvá (a v prvních
+  // kolech je letošní průměr sám o sobě rozkolísaný), poměr je pro všechny kluby stejný,
+  // takže nemění pořadí sil – jen srovnává měřítko obou sezón.
+  const scaleFor = prevLeagueAvg?.goalsFor ? meanFor / prevLeagueAvg.goalsFor : 1;
+  const scaleAgainst = prevLeagueAvg?.goalsAgainst
+    ? meanAgainst / prevLeagueAvg.goalsAgainst
+    : 1;
   const seen = new Set<number>();
   const teams: GameTeam[] = [];
   for (const row of rows) {
     if (seen.has(row.teamId)) continue;
     seen.add(row.teamId);
     const played = row.played;
-    const attack =
-      played > 0 ? shrink(row.goalsFor / played, meanFor, played) : meanFor;
-    const defense =
-      played > 0
-        ? shrink(row.goalsAgainst / played, meanAgainst, played)
-        : meanAgainst;
+    const attack = ratingWithHistory(
+      played,
+      row.goalsFor,
+      row.prevPlayed ?? 0,
+      row.prevGoalsFor ?? 0,
+      meanFor,
+      scaleFor
+    );
+    const defense = ratingWithHistory(
+      played,
+      row.goalsAgainst,
+      row.prevPlayed ?? 0,
+      row.prevGoalsAgainst ?? 0,
+      meanAgainst,
+      scaleAgainst
+    );
     // Poměr reálných gólů doma vs celkově – nezávislý na spreadu i na shrinku.
     const homePlayed = row.homePlayed ?? 0;
     const overallGpg = played > 0 ? row.goalsFor / played : 0;
