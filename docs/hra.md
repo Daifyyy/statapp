@@ -399,6 +399,114 @@
     je proti stavu před změnou **bit-identický**. 0 volání API, žádná nová data.
   - Zatím **jen ligová sezóna** — turnaje (`tournament.ts`) a pohár mají vlastní `results` a xB
     tam nevstupuje.
+- **Dopad taktiky — „udělalo moje rozhodnutí vůbec něco?"** (`lib/game/tacticImpact.ts`, čisté +
+  `tacticImpact.test.ts`; `MatchResult.xpBase`/`win`/`winBase`, UI chip v `MatchResultToast` +
+  `TacticImpactNote` v `SeasonDone`).
+  - **Problém, který řeší (změřeno, `npm run sim-game` sekce 6):** volba plánu a instrukce vynese
+    za sezónu **+2,5 bodu** proti šumu sezóny **±8 bodů** → poměr signál/šum **~0,3 sd**. Náhodné
+    klikání je od promyšlené hry statisticky k nerozeznání a nejhorší možná hra stojí 1,3 bodu.
+    Taktická vrstva tedy **funguje, ale je pod prahem rozlišitelnosti** — z tabulky ji hráč
+    nikdy nepřečte a hra působí jako klikačka. Proto se dopad ukazuje **explicitně**.
+  - **Kontrafaktuál na každém tvém zápase:** vedle `xp` (skutečná λ) se ukládá `xpBase` a
+    `win`/`winBase` = co by predikce říkala s `"balanced"`/`"none"`. Rozdíl je čistý efekt tvé
+    volby. Toast po zápase hlásí „🎛️ plán 41 % → 44 %", `SeasonDone` sečte sezónu.
+  - **Základna JE ten náhled, který hráč viděl** (`yourNextMatch` jede neutrálně kvůli
+    anti-exploitu) → hlášení navazuje na číslo, které appka před zápasem ukázala. Kryto testem.
+  - **Čte se z ULOŽENÉHO výsledku, ne ze stavu.** Kdyby šel dopad spočítat pro nadcházející
+    zápas, hráč by proklikal plány a vzal nejvyšší posun — přesně to, čemu neutrální náhled
+    brání. Tvar funkce (`matchTacticImpact(result)`) to znemožňuje.
+  - **Morálka/kondice/eventy jsou v obou větvích totožné**, takže rozdíl izoluje volbu. Ale
+    **není na stavu nezávislý**: cesta z násobiče λ na 1X2 je přes Poissona nelineární, takže
+    týž plán posune unavený tým o jiný počet p.b. než svěží (kryto testem, aby se to nečetlo
+    jako konstanta). Přenos přes kola (lepší taktika → víc výher → vyšší morálka příště) se
+    do rozdílu nezapočítá → součet za sezónu hodnotu volby spíš **podhodnotí**.
+  - `SAVE_VERSION` se **nebumpuje** (pole přírůstková, zod jede `passthrough()`), balanc je
+    **bit-identický** (`predictProbs` nesahá na RNG — ověřeno diffem sekcí 1–5 proti HEAD).
+    Jen ligová sezóna, stejně jako xB.
+- **Sázky zápasu — „co odsud potřebuješ"** (`lib/game/stakes.ts` + `planChoice.ts` + `adjust.ts`,
+  čisté + `stakes.test.ts`; UI `StakesNote` nad scoutingem).
+  - **Problém:** `recommendPlan(styl)` byl argmax `planScore = útok − obdržené`, tedy proxy na
+    gólový rozdíl. Ta má na každý styl **jednu** správnou odpověď bez ohledu na situaci —
+    naměřeno napříč 4 560 koly: `counter` 62 %, `press` 28 %, `balanced` 10 %, a **`open`
+    s `low_block` ani jednou**. Jenže manažer gólový rozdíl nemaximalizuje: venku u lídra
+    bere bod, doma se dnem potřebuje tři.
+  - **Řešení:** `matchStakes(state, oppId)` odvodí z tabulky, cíle a zbývajících kol
+    **váhy výhry/remízy** (`must_win` 3/0.3 · `hold_a_point` 3/2 · `normal` 3/1) a
+    `recommendPlan` porovná plány **na skutečné 1X2 predikci** (ne na proxy) váženě podle nich.
+    `must_win` se spustí jen v poslední třetině a jen když ani samé remízy na cíl nestačí.
+    Turnaj/pohár si váhy dodají sám (`KNOCKOUT_WEIGHTS` 3/1.5 — remíza = prodloužení, ne bod).
+  - **`composeAdjust` (`adjust.ts`) je vytknutý stack násobičů**, aby `resolveAdjust` (pravda)
+    i `planChoice` (hlášení) skládaly λ **týmž kódem**. Druhá kopie by se rozešla a `ADJUST_MIN/MAX`
+    by přestal platit pro jednu větev.
+  - **`planScore`/`recommendPlan` v `plans.ts` ZRUŠENY** — dvě škály na tutéž věc se rozejdou.
+  - **Balanc, který si to vynutilo** (obojí změřeno, detail v `balance.ts`):
+    - `low_block` útok **0.82 → 0.87** + counter řádek proti `attacking` **conc 0.88 → 0.98**.
+      Plán byl mrtvý ne kvůli účelové funkci, ale protože jeho `concede` vycházelo
+      `0.80 × 0.88 = 0.704`, tedy **na podlaze `ADJUST_MIN` (0.70)** — obranný přínos se
+      ořezal, útočnou cenu platil celou. Snižovat `concede` nepomáhá (clampne víc), zvyšovat
+      ho zabije identitu (0.84 → zpět na 0 %).
+    - `open` útok **1.15 → 1.12**. Se sázkami přestal být mrtvý, ale rovnou spolkl 53 % kol
+      a saturoval `ADJUST_MAX`. Po úpravě: `open` 33 · `counter` 30 · `press` 22 ·
+      `balanced` 10 · `low_block` 4 % — **poprvé jsou v provozu všechny plány**.
+  - **Cena: clamp 0.12 % → 0.43 %** (sekce 3). Původní číslo platilo pro svět, kde se dva
+    z pěti plánů nevolily vůbec; nad ~1 % je čas se podívat znovu. Agency stoupla:
+    rozpětí **4.5 → 5.8 b**, pozorná hra **+2.3 → +2.9 b/sezónu**.
+  - **Anti-exploit beze změny:** doporučení se staví z `reportedStyle`/`reportedTraits`, ne
+    z pravdy, a náhled (`yourNextMatch`) se pořád nehýbe s volbou plánu. Kryto testy.
+- **„Hrát dál" — kolo přestává být jednotkou rozhodnutí** (`lib/game/autoplay.ts`, čisté +
+  `autoplay.test.ts`; UI třetí tlačítko + souhrnný toast).
+  - **Problém:** sezóna má 38 kol a v každém hráč udělá totéž (scouting → plán → instrukce →
+    klik). Událost padne jen ve čtvrtině kol, takže **tři čtvrtiny jsou čistá obsluha**. Appka
+    měla jen dvě krajnosti: „Odehrát kolo" (38 kliků) a „Dohrát sezónu" (0 kliků, ale i
+    0 rozhodnutí a přeskočené události).
+  - **Řešení:** `playUntilDecision` hraje stávajícím plánem, dokud si další kolo neřekne o
+    rozhodnutí. `needsYou` vrací důvod v tomhle pořadí: `event` (blokující) → `must_win`
+    (sázky ze `stakes.ts`) → `finale` (poslední 3 kola) → `rival` (soupeř do ±2 příček,
+    až po 5. kole – dřív tabulka nic neznamená) → `fitness` (< 45 = „Vyčerpaní") → `cap`.
+  - **Naměřeno** (`sim-game` sekce 7): **19.5 kliku/sezónu místo 38**, z toho jen ~9 je
+    administrativa (zbytek jsou volby v událostech) → **administrativní kliky spadly z ~28
+    na ~9**. Ø dávka 1.95 kola. Zastávky: event 54 % · rival 21 % · must_win 10 % · finale 6 %.
+  - **Cena pohodlí ~1.0 b/sezónu**, což je proti sekci 6 (+2.9 b za pozornou hru) **zhruba
+    třetina taktické výhody za polovinu kliků**. Je to nabídka, ne past — „Odehrát kolo"
+    zůstává a dá plnou hodnotu.
+  - **Automatická kola jedou se STÁVAJÍCÍM plánem, ne s doporučením skautů.** Jinak by si
+    hráč jedním klikem přečetl radu, kterou má jinak až za investici do skautingu
+    (`detailed`) — stačilo by se podívat, co se v přepínači vybralo. Kryto testem.
+  - **`AUTOPLAY_MAX_ROUNDS` (6)** je strop na klik, ať klidný úsek nespolkne půl sezóny
+    naslepo. `playUntilDecision` vždy odehraje **aspoň jedno** kolo (jinak by tlačítko
+    nedělalo nic v situaci, kterou hráč právě obsluhuje).
+  - Determinismus beze změny: sezóna odehraná přes „Hrát dál" dá **bit-identické výsledky**
+    jako kolo po kole (RNG je per kolo, `deriveSeed(seed, round)`) — kryto testem.
+  - Jen ligová sezóna; turnaj a pohár mají 6–7 kol, tam nemá smysl nic dávkovat.
+- **`npm run sim-game` sekce 6 (AGENCY)** hlídá právě tenhle poměr regresně: čtyři strategie
+  párově na týchž seedech. Spadne-li „pozorná hra nad nesaháš" k nule, taktická vrstva přestala
+  existovat. Vedle toho tiskne **kvalitu scoutingu** (dnes vague 10 % · standard ~86 % ·
+  detailed ~4 %) **pro hráče BEZ investice** — tam jsou ta 4 % jen z eventu a je to
+  záměr. Podstatná osa je náběh podle investice, který tiskne tentýž řádek níž.
+- **Oprava scoutingu: tři z pěti investovaných bodů nedělaly NIC.** Podíl kol s detailním
+  hlášením podle úrovně skautingu byl `0 · 0 · 50 · 50 · 84 · 87 %` — schodiště s mrtvými
+  schody (první bod nic, třetí nic, pátý skoro nic).
+  - **Příčina není v prazích, ale v hrubosti mřížky.** Konfidence = `MIN + vzorek + odveta +
+    investice`. Vzorek se sytí po **6 kolech** (`SCOUT_SAMPLE_FULL`) a skáče po `1/6 × 0.25 =
+    0.042`, odveta přidá rovnou `0.08` — a krok investice `0.04` se mezi ně nevešel. Od 7. kola
+    do odvety byla konfidence **plochá** a pak skočila, takže o kvalitě hlášení rozhodovala
+    jediná binární věc (jestli je po odvetě) víc než celá investice.
+  - **Co se změnilo:** `SCOUT_LEVEL_STEP` 0.04 → **0.07**, `SCOUT_FAMILIARITY_BONUS` 0.08 →
+    **0.04** (menší skok), `SCOUT_QUALITY_DETAILED` 0.85 → **0.80**. Dnes
+    `0 · 50 · 84 · 89 · 95 · 100 %` — monotónní, bez mrtvého schodu.
+  - **Odhalování traitů je nově SPOJITÉ v konfidenci** (`revealThreshold`), ne skokové po
+    stupních kvality: práh klesá plynule z `SCOUT_REVEAL_VAGUE` na `SCOUT_REVEAL_STANDARD`,
+    takže i bod, který nepřekročí stupeň, odhalí o kus slabší traity (83 % → 100 % odhalených
+    napříč úrovněmi). `detailed` zůstává skokem na nulu („vidíme všechno").
+  - **Invariant držel:** bez investice se na `detailed` nedá dostat (strop `0.45 + 0.25 + 0.04
+    = 0.74 < 0.80`) — doporučení skautů je pořád odměna za investici. Kryto testem.
+  - **Turnaje beze změny:** tam je `scouting` nedefinovaný a soupeř má 0–3 zápasy, takže strop
+    konfidence je 0.74 < 0.80 → detailní hlášení nikdy, stejně jako dřív.
+  - **Regresní strážce** (`sim-game` sekce 6 + test „každý bod investice do skautingu je vidět
+    na hlášení"): podíl detailních hlášení musí růst na **každém** kroku. Test byl ověřen
+    v obou směrech — se starým `SCOUT_LEVEL_STEP` spadne a pojmenuje mrtvý schod. Pozor:
+    měřit se musí **průměr přes celou sezónu**, ne jeden okamžik — po ~20. kole má každý
+    soupeř plný vzorek i odvetu a všechny úrovně vyjdou stejně (100 %).
 - **Přehled klubu** (`ClubOverview` v záložce Sezóna): síla útoku/obrany vs ⌀ ligy (barevně), hvězdy,
   stadion jako progres ke `HOME_BOOST_CAP` (**trvalý, neregreduje**), mládež, skauting + legenda co mezi
   sezónami regreduje. Čistě čte `SeasonState`. `DEV_AREA_HINT` texty zpřesněny o trvanlivost.

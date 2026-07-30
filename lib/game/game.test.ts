@@ -45,7 +45,16 @@ import {
   nextOpponentOf,
 } from "./engine";
 import { summarizeSeason, startNextSeason, careerStats } from "./career";
-import { PLANS, planScore, recommendPlan, resolvePlan } from "./plans";
+import { PLANS, resolvePlan } from "./plans";
+import {
+  recommendPlan,
+  outcomeValue,
+  POINTS_WEIGHTS,
+  MUST_WIN_WEIGHTS,
+  HOLD_POINT_WEIGHTS,
+} from "./planChoice";
+import { composeAdjust } from "./adjust";
+import type { Plan } from "./types";
 import { moraleFactor, updateMorale } from "./morale";
 import { maybeEvent, applyEventChoice, describeEffect, EVENTS, getEvent } from "./events";
 import { RNG_SALT_LEAGUE, RNG_SALT_TOURNAMENT } from "./agency";
@@ -71,7 +80,10 @@ import {
   PRESTIGE_SPAN,
   SCOUT_CONFIDENCE_BOOSTED,
   SCOUT_CONFIDENCE_MIN,
+  SCOUT_FAMILIARITY_BONUS,
   SCOUT_LEVEL_MAX,
+  SCOUT_QUALITY_DETAILED,
+  SCOUT_SAMPLE_WEIGHT,
   STARTING_REPUTATION,
 } from "./balance";
 import { ADJUST_MAX, ADJUST_MIN } from "./balance";
@@ -1836,14 +1848,16 @@ describe("scouting – nejistota", () => {
 
   it("vague hlášení neurčí styl a nedá doporučení; detailed dá obojí", () => {
     const fresh = newSeason(5, teams[0].id, { teams });
-    const vague = scoutOpponent(fresh, teams[1].id);
+    const advice = { youHome: true };
+    const vague = scoutOpponent(fresh, teams[1].id, advice);
     expect(vague.quality).toBe("vague");
     expect(vague.reportedStyle).toBeNull();
     expect(vague.suggestion).toBeUndefined();
 
     const detailed = scoutOpponent(
       { ...fresh, scoutBoostUntilRound: fresh.round },
-      teams[1].id
+      teams[1].id,
+      advice
     );
     expect(detailed.quality).toBe("detailed");
     expect(detailed.reportedStyle).not.toBeNull();
@@ -1854,6 +1868,78 @@ describe("scouting – nejistota", () => {
     expect(scoutQuality(0.45)).toBe("vague");
     expect(scoutQuality(0.7)).toBe("standard");
     expect(scoutQuality(0.95)).toBe("detailed");
+  });
+
+  /**
+   * **Žádný investovaný bod nesmí být němý.** Dřív byl podíl detailních hlášení podle
+   * úrovně skautingu `0 · 0 · 50 · 50 · 84 · 87 %` – schodiště, kde tři z pěti bodů
+   * neudělaly vůbec nic. Konfidence přitom rostla s každým bodem (o 0.04), takže sledovat
+   * ji NESTAČÍ – němé byly až stupně kvality: hrubá mřížka (vzorek skáče po 0.042, odveta
+   * o 0.08) rozhodovala o překročení prahu víc než investice.
+   *
+   * Test proto měří to, co hráč opravdu vidí: kolik hlášení je detailních a kolik traitů
+   * je odhalených. Každý bod musí posunout aspoň jedno z toho.
+   */
+  it("každý bod investice do skautingu je vidět na hlášení", () => {
+    const s = played(20); // po odvetách, ať je vzorek i známost v maximu
+    const observe = (scouting: number) => {
+      let detailed = 0;
+      let traits = 0;
+      for (const t of s.teams.slice(1)) {
+        const r = scoutOpponent({ ...s, scouting, scoutBoostUntilRound: null }, t.id);
+        if (r.quality === "detailed") detailed++;
+        traits += r.reportedTraits.length;
+      }
+      return { detailed, traits };
+    };
+    const byLevel = [0, 1, 2, 3, 4, 5].map(observe);
+    for (let i = 1; i < byLevel.length; i++) {
+      // Kvalita hlášení musí růst na KAŽDÉM kroku – tohle je ta vlastnost, která dřív
+      // chyběla (spojité odhalování traitů samo o sobě nestačí, to by prošlo i se starou,
+      // rozbitou mřížkou). Výjimka jen tam, kde už je detailní všechno.
+      const saturated = byLevel[i - 1].detailed === s.teams.length - 1;
+      expect(
+        byLevel[i].detailed > byLevel[i - 1].detailed || saturated,
+        `úroveň ${i} nepřidala detailní hlášení (${byLevel[i - 1].detailed} → ${byLevel[i].detailed} z ${s.teams.length - 1})`
+      ).toBe(true);
+      // A traity nesmí nikdy ubýt.
+      expect(byLevel[i].traits).toBeGreaterThanOrEqual(byLevel[i - 1].traits);
+    }
+    // A celkově musí být rozdíl mezi nulou a maximem výrazný, ne kosmetický.
+    expect(byLevel[5].detailed).toBeGreaterThan(byLevel[0].detailed + 5);
+  });
+
+  /**
+   * Odhalování traitů je spojité v konfidenci, ne skokové po stupních kvality – jinak
+   * investice uvnitř stupně nebyla vidět. Vyšší konfidence nesmí nikdy odhalit MÍŇ.
+   */
+  it("s vyšší konfidencí neubývá odhalených traitů", () => {
+    const s = played(8);
+    for (const t of s.teams.slice(1, 6)) {
+      let prev = -1;
+      for (const scouting of [0, 1, 2, 3, 4, 5]) {
+        const r = scoutOpponent({ ...s, scouting, scoutBoostUntilRound: null }, t.id);
+        expect(r.reportedTraits.length).toBeGreaterThanOrEqual(prev);
+        for (const tr of r.reportedTraits) expect(r.traits).toContain(tr);
+        prev = r.reportedTraits.length;
+      }
+    }
+  });
+
+  /**
+   * Invariant, který přeladění konstant nesmí porušit: **doporučení skautů je odměna za
+   * investici.** Bez ní se na `detailed` nedá dostat ani s plným vzorkem a po odvetě.
+   */
+  it("bez investice do skautingu se hráč na detailní hlášení nedostane", () => {
+    const ceiling =
+      SCOUT_CONFIDENCE_MIN + SCOUT_SAMPLE_WEIGHT + SCOUT_FAMILIARITY_BONUS;
+    expect(ceiling).toBeLessThan(SCOUT_QUALITY_DETAILED);
+    const s = played(30); // plný vzorek i odveta
+    for (const t of s.teams.slice(1)) {
+      const r = scoutOpponent({ ...s, scouting: 0, scoutBoostUntilRound: null }, t.id);
+      expect(r.quality).not.toBe("detailed");
+      expect(r.suggestion).toBeUndefined();
+    }
   });
 
   // Skauti nikdy nelžou o traitech – jen nemusí vidět všechny. Skrytý `punishedBy` trait
@@ -1875,10 +1961,23 @@ describe("scouting – nejistota", () => {
   it("doporučení je funkcí HLÁŠENÍ, ne skutečného stylu", () => {
     const s = played(8);
     for (const t of s.teams.slice(1)) {
-      const r = scoutOpponent({ ...s, scoutBoostUntilRound: s.round }, t.id);
+      const st = { ...s, scoutBoostUntilRound: s.round };
+      const r = scoutOpponent(st, t.id, { youHome: true });
       if (!r.suggestion || !r.reportedStyle) continue;
-      expect(r.suggestion.plan).toBe(recommendPlan(r.reportedStyle));
+      expect(r.suggestion.plan).toBe(
+        recommendPlan(st, t.id, true, r.reportedStyle, r.reportedTraits)
+      );
       expect(r.suggestion.instruction).toBe(recommendInstruction(r.reportedTraits));
+    }
+  });
+
+  // Bez kontextu zápasu (hřiště + sázky) se doporučení nestaví vůbec – tak scoutOpponent
+  // volá `resolveAdjust`, kterému jde jen o pravdu.
+  it("bez `advice` report doporučení neobsahuje", () => {
+    const s = played(8);
+    for (const t of s.teams.slice(1)) {
+      expect(scoutOpponent({ ...s, scoutBoostUntilRound: s.round }, t.id).suggestion)
+        .toBeUndefined();
     }
   });
 
@@ -1934,15 +2033,58 @@ describe("zápasové plány – balanc", () => {
     }
   });
 
-  it("recommendPlan doporučí kontry na útočného a presink na zataženého", () => {
-    expect(recommendPlan("attacking")).toBe("counter");
-    expect(recommendPlan("defensive")).toBe("press");
-    // Doporučení = argmax planScore, ne libovolná volba.
-    for (const st of STYLES) {
-      const best = recommendPlan(st);
-      for (const p of PLANS) {
-        expect(planScore(best, st)).toBeGreaterThanOrEqual(planScore(p, st));
+  /**
+   * Doporučení je argmax **vážené hodnoty zápasu** na skutečné 1X2 predikci, ne argmax
+   * proxy `útok − obdržené`. Testuje se proto definičně: žádný jiný plán nesmí mít vyšší
+   * hodnotu než doporučený, při týchž vahách.
+   */
+  it("recommendPlan je argmax vážené hodnoty zápasu", () => {
+    const league = generateLeague(31);
+    const s = newSeason(31, league[0].id, { teams: league });
+    const oppId = league[1].id;
+    for (const weights of [POINTS_WEIGHTS, MUST_WIN_WEIGHTS, HOLD_POINT_WEIGHTS]) {
+      for (const st of STYLES) {
+        for (const youHome of [true, false]) {
+          const best = recommendPlan(s, oppId, youHome, st, [], weights);
+          const value = (plan: Plan) => {
+            const adj = composeAdjust(s, st, [], plan, "none");
+            const you = teamById(s.teams, s.yourTeamId);
+            const opp = teamById(s.teams, oppId);
+            const probs = predictProbs(
+              youHome ? you : opp,
+              youHome ? opp : you,
+              youHome ? adj : NEUTRAL_ADJUST,
+              youHome ? NEUTRAL_ADJUST : adj
+            );
+            return outcomeValue(youHome ? probs.homeWin : probs.awayWin, probs.draw, weights);
+          };
+          for (const p of PLANS) {
+            expect(value(best) + 1e-12).toBeGreaterThanOrEqual(value(p));
+          }
+        }
       }
     }
+  });
+
+  /**
+   * Jádro celé změny: sázky zápasu MĚNÍ odpověď. Kdyby doporučení vycházelo pořád stejně,
+   * byla by váhová vrstva k ničemu a `open`/`low_block` by zůstaly mrtvé volby.
+   */
+  it("sázky zápasu mění doporučený plán", () => {
+    const league = generateLeague(32);
+    const s = newSeason(32, league[0].id, { teams: league });
+    const seen = new Set<Plan>();
+    for (const t of s.teams.slice(1)) {
+      for (const weights of [POINTS_WEIGHTS, MUST_WIN_WEIGHTS, HOLD_POINT_WEIGHTS]) {
+        for (const st of STYLES) {
+          for (const youHome of [true, false]) {
+            seen.add(recommendPlan(s, t.id, youHome, st, [], weights));
+          }
+        }
+      }
+    }
+    // Dřív padaly jen counter/press/balanced. Aspoň jeden z „mrtvých" plánů musí ožít.
+    expect(seen.has("open") || seen.has("low_block")).toBe(true);
+    expect(seen.size).toBeGreaterThanOrEqual(3);
   });
 });

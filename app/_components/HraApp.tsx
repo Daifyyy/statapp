@@ -39,6 +39,19 @@ import {
   xpVerdictLabel,
   type SeasonExpectedPoints,
 } from "@/lib/game/expectedPoints";
+import {
+  matchTacticImpact,
+  seasonTacticImpact,
+  MIN_TACTIC_SAMPLE,
+  type MatchTacticImpact,
+  type SeasonTacticImpact,
+} from "@/lib/game/tacticImpact";
+import type { MatchStakes } from "@/lib/game/stakes";
+import {
+  playUntilDecision,
+  STOP_REASON_LABEL,
+  type StopReason,
+} from "@/lib/game/autoplay";
 import { updateReputation, isHireable } from "@/lib/game/reputation";
 import {
   teamPrestige,
@@ -131,6 +144,16 @@ interface ToastData {
   oppGoals: number;
   /** Změna morálky za tento zápas (±), aby efekt výsledku nebyl jen tichá aktualizace baru. */
   moraleDelta: number;
+  /**
+   * Dopad tvé taktiky na tenhle zápas (jen ligová sezóna – turnaj a pohár kontrafaktuál
+   * neukládají). Bez něj se řádek prostě nevykreslí.
+   */
+  tactic?: MatchTacticImpact | null;
+  /**
+   * Dávka odehraná přes „Hrát dál". Když je vyplněná, popup neukazuje jeden výsledek
+   * s napínavým odhalením, ale souhrn kol a důvod, proč se to zastavilo.
+   */
+  batch?: { rounds: number; reason: StopReason; form: ("W" | "D" | "L")[] };
 }
 
 /** Data pro potvrzovací dialog destruktivní akce (náhrada za nativní `confirm()`). */
@@ -618,8 +641,57 @@ export function HraApp({ user }: { user: SessionUser | null }) {
             yourGoals: isHome ? r.homeGoals : r.awayGoals,
             oppGoals: isHome ? r.awayGoals : r.homeGoals,
             moraleDelta: after.morale - prevMorale,
+            // Kolik z toho udělala tvoje volba – čte se z uloženého výsledku, takže
+            // se nedá zneužít na náhled dopředu (viz `tacticImpact.ts`).
+            tactic: matchTacticImpact(r),
           };
           pendingToastRef.current = data;
+        }
+        return next;
+      });
+      setBusy(false);
+    }, 0);
+  }, [trackSave]);
+
+  /**
+   * „Hrát dál" – odehraje kola stávajícím plánem, dokud si další neřekne o rozhodnutí
+   * (událost, přituhlé sázky, souboj s konkurentem, závěr sezóny, vyčerpaný tým).
+   * Střed mezi „Odehrát kolo" (38 kliků) a „Dohrát sezónu" (nula rozhodnutí).
+   */
+  const onPlayOn = useCallback(() => {
+    setBusy(true);
+    setTimeout(() => {
+      setSave((prev) => {
+        if (!prev || !prev.current || isSeasonOver(prev.current)) return prev;
+        const before = prev.current.round;
+        const out = playUntilDecision(prev.current);
+        const next = { ...prev, current: out.state };
+        trackSave(next);
+        // Souhrn dávky: tvoje výsledky z odehraných kol (yourResults je nejnovější první).
+        const played = out.state.results
+          .filter(
+            (r) =>
+              r.round >= before &&
+              (r.homeId === out.state.yourTeamId || r.awayId === out.state.yourTeamId)
+          )
+          .sort((a, b) => a.round - b.round);
+        const form = played.map((r) => {
+          const isHome = r.homeId === out.state.yourTeamId;
+          const f = isHome ? r.homeGoals : r.awayGoals;
+          const a = isHome ? r.awayGoals : r.homeGoals;
+          return f > a ? "W" : f < a ? "L" : ("D" as const);
+        }) as ("W" | "D" | "L")[];
+        const last = played[played.length - 1];
+        if (last) {
+          const isHome = last.homeId === out.state.yourTeamId;
+          const opp = teamById(out.state.teams, isHome ? last.awayId : last.homeId);
+          pendingToastRef.current = {
+            oppName: opp.name,
+            yourGoals: isHome ? last.homeGoals : last.awayGoals,
+            oppGoals: isHome ? last.awayGoals : last.homeGoals,
+            moraleDelta: 0,
+            batch: { rounds: out.rounds, reason: out.reason, form },
+          };
         }
         return next;
       });
@@ -924,6 +996,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
               setView={setView}
               busy={busy}
               onPlayRound={onPlayRound}
+              onPlayOn={onPlayOn}
               onSimulateToEnd={onSimulateToEnd}
               onPlan={onPlan}
               onInstruction={onInstruction}
@@ -1074,6 +1147,47 @@ function MatchResultToast({
 
   if (!toast) return null;
 
+  // Dávka z „Hrát dál": napínavé odhalení nedává smysl (kol je víc), takže rovnou souhrn
+  // + důvod zastávky. Detaily si hráč přečte v tabulce a ve formě pod ní.
+  if (toast.batch) {
+    const { rounds, reason, form } = toast.batch;
+    return (
+      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+        <div
+          className="fade-in pointer-events-auto flex max-w-[92vw] flex-col items-center gap-0.5 rounded-2xl border border-border bg-surface/95 px-5 py-2 shadow-lg backdrop-blur"
+          role="status"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-foreground">
+              Odehráno {rounds} {rounds === 1 ? "kolo" : rounds < 5 ? "kola" : "kol"}
+            </span>
+            <span className="flex gap-0.5">
+              {form.map((f, i) => (
+                <span
+                  key={i}
+                  className={
+                    "inline-flex h-4 w-4 items-center justify-center rounded text-[9px] font-bold text-white " +
+                    (f === "W" ? "bg-positive" : f === "L" ? "bg-negative" : "bg-muted")
+                  }
+                >
+                  {f === "W" ? "V" : f === "L" ? "P" : "R"}
+                </span>
+              ))}
+            </span>
+          </div>
+          <span className="text-center text-[10px] text-muted">
+            {STOP_REASON_LABEL[reason]}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Posun se ukáže, jen když je po zaokrouhlení vidět – „41 % → 41 %" je šum, ne informace.
+  // Záporný posun se ukazuje taky (a hlavně): špatně zvolený plán se hráč jinak nedozví.
+  const tacticShift =
+    toast.tactic && Math.abs(toast.tactic.shift) >= 0.5 ? toast.tactic.shift : null;
+
   const outcome =
     toast.yourGoals > toast.oppGoals
       ? { label: "Výhra 🎉", cls: "border-positive bg-positive/15 text-positive" }
@@ -1098,26 +1212,42 @@ function MatchResultToast({
       ) : (
         <div
           className={
-            "fade-in pointer-events-auto flex items-center gap-3 rounded-full border px-5 py-2.5 shadow-lg backdrop-blur " +
+            "fade-in pointer-events-auto flex flex-col items-center gap-0.5 rounded-2xl border px-5 py-2 shadow-lg backdrop-blur " +
             outcome.cls
           }
           role="status"
         >
-          <span className="text-sm font-bold">{outcome.label}</span>
-          <span className="reveal-pop tabular-nums text-lg font-bold text-foreground">
-            {toast.yourGoals}:{toast.oppGoals}
-          </span>
-          <span className="max-w-[40vw] truncate text-xs text-muted">vs {toast.oppName}</span>
-          {toast.moraleDelta !== 0 && (
-            <span
-              className={
-                "text-xs font-semibold tabular-nums " +
-                (toast.moraleDelta > 0 ? "text-positive" : "text-negative")
-              }
-            >
-              {toast.moraleDelta > 0 ? "+" : ""}
-              {toast.moraleDelta} morálka
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-bold">{outcome.label}</span>
+            <span className="reveal-pop tabular-nums text-lg font-bold text-foreground">
+              {toast.yourGoals}:{toast.oppGoals}
             </span>
+            <span className="max-w-[40vw] truncate text-xs text-muted">
+              vs {toast.oppName}
+            </span>
+          </div>
+          {/* Druhý řádek: co se dějem zápasu změnilo. Zvlášť, ať se pilulka na úzkém
+              telefonu nerozjede do šířky (mobile-first). */}
+          {(toast.moraleDelta !== 0 || tacticShift !== null) && (
+            <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[10px] font-semibold tabular-nums">
+              {toast.moraleDelta !== 0 && (
+                <span
+                  className={toast.moraleDelta > 0 ? "text-positive" : "text-negative"}
+                >
+                  {toast.moraleDelta > 0 ? "+" : ""}
+                  {toast.moraleDelta} morálka
+                </span>
+              )}
+              {tacticShift !== null && toast.tactic && (
+                <span
+                  className={tacticShift > 0 ? "text-positive" : "text-negative"}
+                  title="Šance na výhru bez tvé volby → s tvým plánem a instrukcí"
+                >
+                  🎛️ plán {Math.round(toast.tactic.winBase * 100)} %{" → "}
+                  {Math.round(toast.tactic.win * 100)} %
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -1394,6 +1524,7 @@ function GameView({
   setView,
   busy,
   onPlayRound,
+  onPlayOn,
   onSimulateToEnd,
   onPlan,
   onInstruction,
@@ -1420,6 +1551,7 @@ function GameView({
   setView: (v: GameView) => void;
   busy: boolean;
   onPlayRound: () => void;
+  onPlayOn: () => void;
   onSimulateToEnd: () => void;
   onPlan: (p: Plan) => void;
   onInstruction: (i: Instruction) => void;
@@ -1550,6 +1682,8 @@ function GameView({
             <EventCard event={s.pendingEvent} onChoice={onEventChoice} />
           )}
           <NextMatch state={s} onPlan={onPlan} onInstruction={onInstruction} />
+          {/* Dvě časté akce velké vedle sebe (palec na mobilu), „Dohrát sezónu"
+              degradovaná pod ně – přeskočí všechna rozhodnutí i události. */}
           <div className="mt-3 flex gap-2">
             <button
               type="button"
@@ -1562,11 +1696,26 @@ function GameView({
             </button>
             <button
               type="button"
+              disabled={busy || Boolean(s.pendingEvent)}
+              onClick={onPlayOn}
+              title={
+                s.pendingEvent
+                  ? "Nejdřív vyřeš událost výše"
+                  : "Hraje se stávajícím plánem, dokud nepřijde zápas, který si o tebe řekne"
+              }
+              className="flex-1 rounded-full border border-positive/60 bg-surface px-4 py-2.5 text-sm font-semibold text-positive transition hover:bg-positive/10 disabled:opacity-50"
+            >
+              {busy ? "Simuluje se…" : "Hrát dál ⏩"}
+            </button>
+          </div>
+          <div className="mt-1.5 text-center">
+            <button
+              type="button"
               disabled={busy}
               onClick={onSimulateToEnd}
-              className="rounded-full border border-border bg-surface px-4 py-2.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-50"
+              className="text-xs text-muted underline decoration-dotted underline-offset-2 transition hover:text-foreground disabled:opacity-50"
             >
-              {busy ? "Simuluje se…" : "Dohrát sezónu"}
+              Dohrát celou sezónu naráz
             </button>
           </div>
           <ClubOverview state={s} />
@@ -1695,6 +1844,9 @@ function NextMatch({
         </div>
       </div>
 
+      {/* Co ze zápasu potřebuješ – řídí i to, co doporučí skauti */}
+      <StakesNote stakes={next.stakes} />
+
       {/* Scouting soupeře */}
       <ScoutCard scout={next.scout} oppName={next.opponent.name} />
 
@@ -1745,6 +1897,30 @@ function NextMatch({
           disabled={false}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * **Sázky zápasu** – co odsud potřebuješ odvézt. Není to jen text: tytéž váhy rozhodují,
+ * který plán doporučí skauti (`stakes.ts` → `planChoice.ts`). Bez téhle informace měl
+ * každý styl soupeře jednu správnou odpověď bez ohledu na situaci a dva z pěti plánů
+ * (`open`, `low_block`) nebyly správně NIKDY.
+ *
+ * Hráči se ukazuje záměrně jen věta, ne váhy – rozhodnutí zůstává jeho, tohle je kontext.
+ */
+function StakesNote({ stakes }: { stakes: MatchStakes }) {
+  const tone =
+    stakes.kind === "must_win"
+      ? "border-negative/40 bg-negative/10 text-negative"
+      : stakes.kind === "hold_a_point"
+        ? "border-home/40 bg-home/10 text-home"
+        : "border-border bg-surface text-muted";
+  const icon =
+    stakes.kind === "must_win" ? "🔥" : stakes.kind === "hold_a_point" ? "🛡️" : "⚽";
+  return (
+    <div className={"mt-3 rounded-xl border px-3 py-2 text-center text-[11px] " + tone}>
+      <span aria-hidden>{icon}</span> {stakes.text}
     </div>
   );
 }
@@ -2627,6 +2803,32 @@ function ExpectedPointsNote({ xp }: { xp?: SeasonExpectedPoints }) {
   );
 }
 
+/**
+ * Kolik ti za sezónu vynesla TVOJE ROZHODNUTÍ (plán + instrukce) proti tomu, kdybys je
+ * nechal na výchozím „Vyvážený / bez instrukce".
+ *
+ * Protipól `ExpectedPointsNote`: ten říká, jestli byla sezóna zasloužená (štěstí vs. smůla),
+ * tenhle říká, jestli za ni můžeš ty. Bez něj je taktická vrstva neměřitelná – efekt volby
+ * (~2,6 bodu za sezónu) je hluboko pod rozptylem sezóny (±8 bodů), takže z tabulky ho hráč
+ * nikdy nepřečte. Viz `lib/game/tacticImpact.ts`.
+ */
+function TacticImpactNote({ impact }: { impact: SeasonTacticImpact }) {
+  if (impact.matches < MIN_TACTIC_SAMPLE) return null;
+  const sign = impact.points > 0 ? "+" : "";
+  const tone = impact.points > 0 ? "text-positive" : impact.points < 0 ? "text-negative" : "text-muted";
+  return (
+    <p className="mt-1 text-xs text-muted">
+      <span aria-hidden>🎛️</span> Tvoje taktika:{" "}
+      <strong className={tone}>
+        {sign}
+        {impact.points.toFixed(1)} b
+      </strong>{" "}
+      za sezónu (Ø {impact.avgShift > 0 ? "+" : ""}
+      {impact.avgShift.toFixed(1)} p.b. na zápas)
+    </p>
+  );
+}
+
 function SeasonDone({
   save,
   onContinue,
@@ -2737,6 +2939,7 @@ function SeasonDone({
           Mistr: <strong className="text-foreground">{champ.name}</strong>
         </p>
         <ExpectedPointsNote xp={summary.expectedPoints} />
+        <TacticImpactNote impact={seasonTacticImpact(s.results, s.yourTeamId)} />
         {clubQualifies(summary.europe) && (
           <p className="mt-2 rounded-lg bg-positive/10 px-2 py-1 text-xs font-semibold text-positive">
             🎟️ Postup do {CLUB_CUP_NAME}! (Pokud pokračuješ se stejným klubem.)

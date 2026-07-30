@@ -16,6 +16,7 @@ import {
   simulateTournamentToEnd,
   yourFixture,
 } from "./tournament";
+import { KNOCKOUT_WEIGHTS, POINTS_WEIGHTS } from "./planChoice";
 import type { Stage, TournamentFormat, TournamentState } from "./tournament";
 import { resolveAdjust } from "./engine";
 import { NEUTRAL_ADJUST, predictProbs } from "./simulate";
@@ -191,7 +192,12 @@ export function cupPreview(run: CupRun): CupPreview | null {
     you: teamById(t.teams, run.yourTeamId),
     opponent: teamById(t.teams, oppId),
     probs,
-    scout: scoutOpponent(t, oppId),
+    // Ve skupině se hraje o body, ve vyřazovací fázi remíza znamená prodloužení
+    // (≈ půl postupu) – doporučení skautů se podle toho mění. Viz `planChoice.ts`.
+    scout: scoutOpponent(t, oppId, {
+      youHome: isHome,
+      weights: t.stage === "group" ? POINTS_WEIGHTS : KNOCKOUT_WEIGHTS,
+    }),
   };
 }
 

@@ -2,7 +2,7 @@
 // Spuštění: npm run sim-game
 //           npm run sim-game -- --seasons=300 --careers=60 --maxSeasons=12
 //
-// Měří pět věcí:
+// Měří sedm věcí:
 //  1. LIGA – náročnost jedné sezóny (Ø body mistra/posledního, jak často vyhraje favorit,
 //     rozklad 1X2 a ⌀ góly). Reference: mistr ~80 b, poslední ~26 b, favorit ~30 %, 45/25/30.
 //  2. ROZVOJ – kolik sezón trvá vytáhnout klub ze středu tabulky nahoru. Cílová křivka:
@@ -15,6 +15,10 @@
 //  5. TURNAJ – Euro/MS: jak často vyhraje favorit (turnaj je loterie), kolik vyřazovacích
 //     zápasů jde do prodloužení (~25 %) a na penalty (~12 %). Malý počet běhů = velký šum:
 //     u MS se titul nejsilnějšího čeká jen ~9 %, takže 0/40 není chyba.
+//  6. AGENCY – opačný konec než sekce 3: je vůbec CÍTIT, že hráč něco zvolil? Porovná
+//     „nesaháš na nic" / „podle skautů" / „s pravdou" / „naschvál špatně" párově na týchž
+//     seedech. Pozorná hra má vynést ~+2.5 b/sezónu proti šumu ±8 b (signál/šum ~0.3 sd).
+//  7. AUTOPLAY – kolik kliků sezóna stojí přes „Hrát dál" a kolik bodů to pohodlí stojí.
 
 import { generateLeague } from "../lib/game/teams.ts";
 import {
@@ -31,7 +35,19 @@ import { startNextSeason, summarizeSeason } from "../lib/game/career.ts";
 import { updateReputation } from "../lib/game/reputation.ts";
 import { applyEventChoice } from "../lib/game/events.ts";
 import { scoutOpponent } from "../lib/game/scouting.ts";
-import { recommendPlan } from "../lib/game/plans.ts";
+import { PLANS } from "../lib/game/plans.ts";
+import { recommendPlan, outcomeValue } from "../lib/game/planChoice.ts";
+import { composeAdjust } from "../lib/game/adjust.ts";
+import { matchStakes } from "../lib/game/stakes.ts";
+import { playUntilDecision } from "../lib/game/autoplay.ts";
+import { predictProbs, NEUTRAL_ADJUST } from "../lib/game/simulate.ts";
+import { teamById } from "../lib/game/teams.ts";
+import {
+  INSTRUCTIONS,
+  MATCHUP,
+  recommendInstruction,
+} from "../lib/game/instructions.ts";
+import { seasonTacticImpact } from "../lib/game/tacticImpact.ts";
 import { developmentPoints, EMPTY_SPEND } from "../lib/game/development.ts";
 import type { DevSpend } from "../lib/game/development.ts";
 import { teamStrengthScore } from "../lib/game/leagues.ts";
@@ -41,8 +57,20 @@ import {
   newTournament,
   simulateTournamentToEnd,
 } from "../lib/game/tournament.ts";
-import { ADJUST_MAX, ADJUST_MIN, STARTING_REPUTATION } from "../lib/game/balance.ts";
-import type { GameTeam, Plan, SeasonState } from "../lib/game/types.ts";
+import {
+  ADJUST_MAX,
+  ADJUST_MIN,
+  SCOUT_LEVEL_MAX,
+  STARTING_REPUTATION,
+} from "../lib/game/balance.ts";
+import type {
+  GameTeam,
+  Instruction,
+  OppStyle,
+  Plan,
+  SeasonState,
+  Trait,
+} from "../lib/game/types.ts";
 
 function arg(name: string, dflt: number): number {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -97,11 +125,20 @@ function leagueDifficulty() {
  * (nízká konfidence) → nemá cenu riskovat counter, jede se bezpečně.
  * Sdílí `recommendPlan` s tím, co skauti radí v UI – jeden zdroj pravdy.
  */
-function pickPlan(state: SeasonState, oppId: number): Plan {
-  const reported = scoutOpponent(state, oppId).reportedStyle;
+function pickPlan(state: SeasonState, oppId: number, youHome: boolean): Plan {
+  const scout = scoutOpponent(state, oppId);
   // Pod 55 % kondice se vyplatí ubrat, jinak by se tým uběhal.
-  if (state.fitness < 55) return reported === "attacking" ? "counter" : "low_block";
-  return reported ? recommendPlan(reported) : "balanced";
+  if (state.fitness < 55) return scout.reportedStyle === "attacking" ? "counter" : "low_block";
+  if (!scout.reportedStyle) return "balanced";
+  // Plán se měří vahami ZÁPASU (co odsud potřebuješ), ne gólovým rozdílem – viz stakes.ts.
+  return recommendPlan(
+    state,
+    oppId,
+    youHome,
+    scout.reportedStyle,
+    scout.reportedTraits,
+    matchStakes(state, oppId).weights
+  );
 }
 
 let clampHits = 0;
@@ -116,7 +153,7 @@ function playSeason(state: SeasonState): SeasonState {
     const f = fixtures.find((x) => x.homeId === s.yourTeamId || x.awayId === s.yourTeamId);
     if (f) {
       const oppId = f.homeId === s.yourTeamId ? f.awayId : f.homeId;
-      s = setPlan(s, pickPlan(s, oppId));
+      s = setPlan(s, pickPlan(s, oppId, f.homeId === s.yourTeamId));
       s = setInstruction(s, "wing_play");
       const adj = resolveYourAdjust(s, oppId);
       clampChecks++;
@@ -305,6 +342,270 @@ function tournaments() {
   }
 }
 
+// ───────────────── 6) agency: vynesou hráčova rozhodnutí vůbec něco? ─────────────────
+//
+// Sekce 3 měří, jestli páky nenarážejí na strop. Tahle měří opačný konec: jestli je vůbec
+// CÍTIT, že hráč něco zvolil. Čtyři strategie na TÝCHŽ seedech (stejná liga, stejný tým,
+// stejné RNG), takže je porovnání párové a šum ligy se z rozdílu odečte.
+//
+// Referenční stav při zavedení (300 sezón): nesaháš 51.3 b · podle skautů 53.8 · s pravdou
+// 54.4 · naschvál špatně 50.0. Rozpětí CELÉ agency je tedy ~4.4 bodu proti sd sezóny ±8.1 —
+// poměr signál/šum 0.38 sd. To je vědomě málo (efekty se drží malé kvůli `ADJUST_MIN/MAX`,
+// viz sekce 3) a právě proto appka dopad volby ukazuje explicitně (`lib/game/tacticImpact.ts`);
+// z tabulky by ho hráč nepřečetl. Když tenhle poměr spadne k nule, taktická vrstva přestala
+// existovat; když vyskočí, hra se stala deterministickou.
+
+/** Nejhorší možný plán podle TÉŽE metriky jako doporučení – dolní mez agency. */
+function pickWorstPlan(
+  state: SeasonState,
+  oppId: number,
+  youHome: boolean,
+  style: OppStyle,
+  traits: Trait[],
+  weights: { win: number; draw: number }
+): Plan {
+  const you = teamById(state.teams, state.yourTeamId);
+  const opp = teamById(state.teams, oppId);
+  let worst: Plan = "balanced";
+  let score = Infinity;
+  for (const p of PLANS) {
+    const adj = composeAdjust(state, style, traits, p, "none");
+    const pr = predictProbs(
+      youHome ? you : opp,
+      youHome ? opp : you,
+      youHome ? adj : NEUTRAL_ADJUST,
+      youHome ? NEUTRAL_ADJUST : adj
+    );
+    const v = outcomeValue(youHome ? pr.homeWin : pr.awayWin, pr.draw, weights);
+    if (v < score) {
+      score = v;
+      worst = p;
+    }
+  }
+  return worst;
+}
+
+/** Instrukce, jejíž `punishedBy` trait soupeř má (a `rewards` ne) – tedy čistý postih. */
+function pickInstruction(traits: Trait[], best: boolean): Instruction {
+  for (const i of INSTRUCTIONS) {
+    if (i === "none") continue;
+    const m = MATCHUP[i as Exclude<Instruction, "none">];
+    const hit = traits.includes(m.rewards);
+    const miss = traits.includes(m.punishedBy);
+    if (best ? hit && !miss : miss && !hit) return i;
+  }
+  return "none";
+}
+
+type Strategy = "nesaháš" | "podle skautů" | "s pravdou" | "naschvál špatně";
+
+function agency() {
+  const runs = Math.max(100, Math.round(SEASONS / 2));
+  const strategies: Strategy[] = ["nesaháš", "podle skautů", "s pravdou", "naschvál špatně"];
+  const points: Record<Strategy, number[]> = {
+    nesaháš: [],
+    "podle skautů": [],
+    "s pravdou": [],
+    "naschvál špatně": [],
+  };
+  let shiftSum = 0;
+  let shiftSeasons = 0;
+  let vague = 0;
+  let standard = 0;
+  let detailed = 0;
+  let scoutRounds = 0;
+
+  for (let i = 0; i < runs; i++) {
+    const seed = 900000 + i;
+    const teams = generateLeague(seed);
+    const byStrength = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    const you = byStrength[Math.floor(teams.length / 2)];
+
+    for (const strategy of strategies) {
+      let s = newSeason(seed, you.id, { teams });
+      while (!isSeasonOver(s)) {
+        const f = s.schedule[s.round].find(
+          (x) => x.homeId === s.yourTeamId || x.awayId === s.yourTeamId
+        );
+        if (f) {
+          const oppId = f.homeId === s.yourTeamId ? f.awayId : f.homeId;
+          const scout = scoutOpponent(s, oppId);
+          if (strategy === "podle skautů") {
+            scoutRounds++;
+            if (scout.quality === "vague") vague++;
+            else if (scout.quality === "standard") standard++;
+            else detailed++;
+          }
+          const youHome = f.homeId === s.yourTeamId;
+          const weights = matchStakes(s, oppId).weights;
+          let plan: Plan = "balanced";
+          let instruction: Instruction = "none";
+          if (strategy === "podle skautů") {
+            // Přesně to, co UI hráči nabízí: hlášený styl a odhalené traity, ne pravda.
+            plan = scout.reportedStyle
+              ? recommendPlan(s, oppId, youHome, scout.reportedStyle, scout.reportedTraits, weights)
+              : "balanced";
+            instruction = recommendInstruction(scout.reportedTraits);
+          } else if (strategy === "s pravdou") {
+            plan = recommendPlan(s, oppId, youHome, scout.style, scout.traits, weights);
+            instruction = pickInstruction(scout.traits, true);
+          } else if (strategy === "naschvál špatně") {
+            plan = pickWorstPlan(s, oppId, youHome, scout.style, scout.traits, weights);
+            instruction = pickInstruction(scout.traits, false);
+          }
+          s = setInstruction(setPlan(s, plan), instruction);
+        }
+        // Event ve všech větvích stejně (první volba) – ať se neměří štěstí na eventy.
+        if (s.pendingEvent) s = applyEventChoice(s, 0);
+        s = playRound(s);
+      }
+      const row = currentTable(s).find((r) => r.teamId === you.id)!;
+      points[strategy].push(row.points);
+      if (strategy === "podle skautů") {
+        const impact = seasonTacticImpact(s.results, s.yourTeamId);
+        if (impact.matches) {
+          shiftSum += impact.avgShift;
+          shiftSeasons++;
+        }
+      }
+    }
+  }
+
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+  const sd = (a: number[]) => {
+    const m = mean(a);
+    return Math.sqrt(a.reduce((acc, v) => acc + (v - m) ** 2, 0) / (a.length - 1));
+  };
+
+  console.log(`\n── 6) Agency — vynesou rozhodnutí něco? (${runs} sezón, párově na týchž seedech) ──`);
+  for (const st of strategies) {
+    console.log(`   ${st.padEnd(16)} Ø ${mean(points[st]).toFixed(1).padStart(5)} b`);
+  }
+  const noise = sd(points["nesaháš"]);
+  const real = mean(points["podle skautů"]) - mean(points["nesaháš"]);
+  const span = mean(points["s pravdou"]) - mean(points["naschvál špatně"]);
+  console.log(
+    `   pozorná hra nad „nesaháš": +${real.toFixed(2)} b/sezónu   (ref ~+2.5)`
+  );
+  console.log(`   rozpětí celé agency:        ${span.toFixed(2)} b   (ref ~4.4)`);
+  console.log(
+    `   šum sezóny (sd):            ±${noise.toFixed(1)} b → signál/šum ${(real / noise).toFixed(2)} sd   (ref ~0.31)`
+  );
+  console.log(
+    `   Ø posun šance na výhru:     ${(shiftSum / Math.max(1, shiftSeasons)).toFixed(1)} p.b./zápas   (ref ~+2.2)`
+  );
+  console.log(
+    `   kvalita scoutingu:          vague ${((100 * vague) / scoutRounds).toFixed(0)} % · ` +
+      `standard ${((100 * standard) / scoutRounds).toFixed(0)} % · detailed ${((100 * detailed) / scoutRounds).toFixed(0)} %` +
+      `   (ref 10/85/4 — hráč BEZ investice do skautingu; detailed jen z eventu)`
+  );
+
+  // Náběh podle investice. Tohle je ta podstatná osa: dřív byl podíl detailních hlášení
+  // `0 · 0 · 50 · 50 · 84 · 87 %`, tedy tři z pěti bodů byly němé. Musí růst na každém kroku.
+  const ramp: number[] = [];
+  for (let level = 0; level <= SCOUT_LEVEL_MAX; level++) {
+    let d = 0;
+    let n = 0;
+    for (let i = 0; i < 40; i++) {
+      const seed = 6000 + i;
+      const teams = generateLeague(seed);
+      const byStrength = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+      let s = newSeason(seed, byStrength[Math.floor(teams.length / 2)].id, {
+        teams,
+        scouting: level,
+      });
+      // Průměr přes CELOU sezónu, ne jeden okamžik: po ~20. kole má každý soupeř plný
+      // vzorek i odvetu, takže by se měřil jen strop a všechny úrovně by vyšly stejně.
+      while (!isSeasonOver(s)) {
+        const oppId = s.schedule[s.round].find(
+          (f) => f.homeId === s.yourTeamId || f.awayId === s.yourTeamId
+        );
+        if (oppId) {
+          const id = oppId.homeId === s.yourTeamId ? oppId.awayId : oppId.homeId;
+          n++;
+          if (scoutOpponent({ ...s, scoutBoostUntilRound: null }, id).quality === "detailed") d++;
+        }
+        s = playRound(s);
+      }
+    }
+    ramp.push((100 * d) / n);
+  }
+  console.log(
+    `   detailed dle investice:     ${ramp.map((x) => `${x.toFixed(0)} %`).join(" → ")}` +
+      `   (musí růst na KAŽDÉM kroku; ref 0 → 50 → 84 → 89 → 95 → 100)`
+  );
+}
+
+// ───────────────── 7) autoplay: kolik kliků sezóna stojí ─────────────────
+//
+// „Hrát dál" (`autoplay.ts`) je střed mezi „Odehrát kolo" (38 kliků, 38 rozhodnutí) a
+// „Dohrát sezónu" (0 kliků, 0 rozhodnutí). Měří se dvě věci, které jdou proti sobě:
+// kolik kliků sezóna stojí a kolik bodů to pohodlí stojí. Referenční stav při zavedení:
+// 19.5 kliku/sezónu (z toho jen ~9 administrativy, zbytek jsou volby v událostech),
+// Ø dávka 1.95 kola, cena ~1.0 b/sezónu.
+//
+// Tu cenu je potřeba číst proti sekci 6: pozorná ruční hra vynese +2.9 b nad „nesaháš",
+// takže autoplay vrací zhruba TŘETINU taktické výhody za polovinu kliků. Je to nabídka,
+// ne past – „Odehrát kolo" zůstává a dá plnou hodnotu. Klesne-li „administrativa" k nule,
+// zastávky přestaly fungovat; vyskočí-li cena nad ~1.5 b, autoplay bere hráči příliš.
+
+function autoplayErgonomics() {
+  const runs = Math.max(100, Math.round(SEASONS / 2));
+  const reasons: Record<string, number> = {};
+  let clicks = 0;
+  let rounds = 0;
+  let ptsAuto = 0;
+  let ptsManual = 0;
+
+  for (let i = 0; i < runs; i++) {
+    const seed = 900000 + i;
+    const teams = generateLeague(seed);
+    const byStrength = [...teams].sort((a, b) => teamStrengthScore(b) - teamStrengthScore(a));
+    const you = byStrength[Math.floor(teams.length / 2)];
+
+    // Hráč rozhoduje JEN na zastávkách; mezi nimi jede stávající plán.
+    let s = newSeason(seed, you.id, { teams });
+    while (!isSeasonOver(s)) {
+      if (s.pendingEvent) s = applyEventChoice(s, 0);
+      const f = s.schedule[s.round].find(
+        (x) => x.homeId === s.yourTeamId || x.awayId === s.yourTeamId
+      );
+      if (f) {
+        s = setPlan(s, pickPlan(s, f.homeId === s.yourTeamId ? f.awayId : f.homeId, f.homeId === s.yourTeamId));
+        s = setInstruction(s, "wing_play");
+      }
+      clicks++;
+      const out = playUntilDecision(s);
+      rounds += out.rounds;
+      reasons[out.reason] = (reasons[out.reason] ?? 0) + 1;
+      s = out.state;
+    }
+    ptsAuto += currentTable(s).find((r) => r.teamId === you.id)!.points;
+
+    // Kontrola: tentýž hráč, ale rozhoduje každé kolo.
+    ptsManual += currentTable(playSeason(newSeason(seed, you.id, { teams }))).find(
+      (r) => r.teamId === you.id
+    )!.points;
+  }
+
+  const admin = clicks - (reasons["event"] ?? 0);
+  console.log(`\n── 7) Autoplay „Hrát dál" (${runs} sezón) ──`);
+  console.log(
+    `   kliků na sezónu     ${(clicks / runs).toFixed(1)}   (ruční hra 38)   z toho administrativa ${(admin / runs).toFixed(1)}   (ref 19.5 / 9.0)`
+  );
+  console.log(`   Ø délka dávky       ${(rounds / clicks).toFixed(2)} kola   (ref ~1.9)`);
+  console.log(
+    `   cena pohodlí        ${((ptsManual - ptsAuto) / runs).toFixed(2)} b/sezónu   (ref ~1.0 = třetina agency; nad 1.5 b moc)`
+  );
+  console.log(
+    `   důvody zastávek     ` +
+      Object.entries(reasons)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k} ${((100 * v) / clicks).toFixed(0)} %`)
+        .join(" · ")
+  );
+}
+
 // ───────────────────────── main ─────────────────────────
 
 leagueDifficulty();
@@ -318,3 +619,5 @@ console.log(
 );
 areaValue();
 tournaments();
+agency();
+autoplayErgonomics();

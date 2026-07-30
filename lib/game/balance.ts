@@ -227,25 +227,44 @@ export const SCOUT_CONFIDENCE_BOOSTED = SCOUT_CONFIDENCE_MAX;
 export const SCOUT_SAMPLE_FULL = 6;
 /** Maximální příspěvek vzorku ke konfidenci. */
 export const SCOUT_SAMPLE_WEIGHT = 0.25;
-/** Skokový bonus, když jste se v téhle sezóně/turnaji už potkali (odveta). */
-export const SCOUT_FAMILIARITY_BONUS = 0.08;
+/**
+ * Skokový bonus, když jste se v téhle sezóně/turnaji už potkali (odveta).
+ *
+ * Sníženo 0.08 → 0.04: vzorek se nasytí po 6 kolech, takže od 7. kola do odvety byla
+ * konfidence PLOCHÁ a pak skočila. Ten skok byl tak velký, že o kvalitě hlášení
+ * rozhodovala jediná binární věc (jestli je po odvetě) víc než celá investice do
+ * skautingu — a dvě sousední úrovně skautingu proto vycházely identicky.
+ */
+export const SCOUT_FAMILIARITY_BONUS = 0.04;
 
 /**
  * Investice do skautského oddělení (5. rozvojová oblast). **Nesahá na λ** – kupuje si
- * informaci, ne sílu. Celý strop (5 bodů ≈ 1,5 sezóny rozpočtu) koupí +0.20 konfidence:
- * znatelné (posune tě o kvalitativní stupeň dřív), ale bodově nekonkurenceschopné vůči
- * útoku/obraně. Skauting je pojistka, ne dominantní strategie.
+ * informaci, ne sílu. Celý strop (5 bodů ≈ 1,5 sezóny rozpočtu) koupí +0.35 konfidence.
  * ⚠️ `npm run sim-game` sekce 4 to NEZMĚŘÍ (žádný λ efekt) – ladí se playtestem.
+ *
+ * **Zvednuto 0.04 → 0.07, protože tři z pěti bodů nedělaly NIC.** Podíl kol s detailním
+ * hlášením podle úrovně byl `0 · 0 · 50 · 50 · 84 · 87 %` — schodiště s mrtvými schody:
+ * první bod nezměnil nic, třetí nic, pátý skoro nic. Příčina je hrubá mřížka: vzorek
+ * přispívá po skocích 1/6 × 0.25 = 0.042 a odveta rovnou 0.08, takže krok 0.04 se mezi
+ * ně nevešel a práh `DETAILED` se křížil jen na několika málo kombinacích.
+ * Dnes `0 · 50 · 84 · 89 · 95 · 100 %` — monotónní, bez mrtvého schodu (změřeno gridem
+ * přes reálné situace ze 40 sezón). Nulu na úrovni 0 držíme schválně: **bez investice
+ * se hráč k doporučení nedostane** (strop 0.45 + 0.25 + 0.04 = 0.74 < 0.80).
  */
-export const SCOUT_LEVEL_STEP = 0.04;
+export const SCOUT_LEVEL_STEP = 0.07;
 export const SCOUT_LEVEL_MAX = 5;
 
 /**
  * Prahy kvality hlášení (viz `ScoutQuality` ve `scouting.ts`). Pod `VAGUE` skauti styl
  * vůbec neurčí; nad `DETAILED` vidí všechno a doporučí protitah.
+ *
+ * `DETAILED` sníženo 0.85 → 0.80 spolu se zvětšením `SCOUT_LEVEL_STEP` – jinak by první
+ * investovaný bod pořád nic neudělal. Turnaj se tím nemění: tam je scouting nedefinovaný
+ * a strop konfidence 0.45 + 0.25 + 0.04 = 0.74, tedy pořád pod prahem (doporučení je
+ * odměna za KLUBOVOU investici, kterou reprezentace nemá).
  */
 export const SCOUT_QUALITY_VAGUE = 0.6;
-export const SCOUT_QUALITY_DETAILED = 0.85;
+export const SCOUT_QUALITY_DETAILED = 0.8;
 
 /**
  * Jak výrazný musí trait být, aby ho skauti při dané kvalitě vůbec zmínili (0–1, viz
@@ -272,11 +291,54 @@ export const INSTRUCTION_PENALTY = 0.02;
  * Snížení na 0.88 zkoušeno – posunulo podlahu (0.88 × counter 0.90 × morálka × instrukce ×
  * event) pod `ADJUST_MIN` a `sim-game` sekce 3 vyskočila z 0.1 % na 0.28 % clampnutých zápasů.
  * Kryto testem „žádný plán nedominuje balanced".
+ *
+ * **`low_block` útok 0.82 → 0.87: plán platil za přínos, který mu clamp bral.** Proti
+ * útočnému soupeři (tedy přesně tam, kde má nízký blok smysl) vychází jeho `concede` na
+ * `0.80 × 0.88 = 0.704`, což je prakticky `ADJUST_MIN` (0.70) – a jakmile má tým morálku
+ * nad 50, dělení `moraleFactor` ho pod podlahu dorazí. Obranný zisk se tedy **ořízne**,
+ * zatímco útočnou cenu (0.82 × 0.95 = 0.779) plán platil celou. Výsledek: `low_block`
+ * nebyl nejlepší volbou v ŽÁDNÉ situaci – ani pod cílem „neprohrát" (0 % proti silnějším).
+ * Řešení není snižovat `concede` (to clampne ještě víc, měřeno: 0.76 zvedne podíl
+ * clampnutých vyhodnocení z 25 % na 51 %) ani ho zvyšovat (0.84 plán rovnou zabije zpátky
+ * na 0 % – obranná identita zmizí a `counter` ho zase pohltí), ale **nebrat tak vysokou
+ * cenu vepředu** a **nestohovat obranu counterem přes podlahu**.
+ *
+ * Proto ZÁROVEŇ `COUNTER_MATRIX.low_block.attacking.conc` 0.88 → 0.98: „ustojíš tlak" je
+ * už v základu (`concede` 0.80) a druhé započtení téhož efektu jen protlačilo součin pod
+ * `ADJUST_MIN`, kde se stejně ořízl. Změkčením se přínos konečně DORUČÍ místo utnutí.
+ *
+ * Měřeno (40 kariér pro clamp, všechny dvojice ligy pro argmax; `low_block` proti
+ * SILNĚJŠÍMU soupeři pod vahami „drž bod" / „běžné body"):
+ *   0.82 (původní)        clamp 0.12 %   volen  0 % kol    0 % /  0 %
+ *   0.88 × counter 0.88   clamp 2.04 %   volen 27 % kol   39 % / 22 %
+ *   0.88 × counter 0.98   clamp 0.99 %   volen 27 % kol   39 % / 22 %
+ *   0.87 × counter 0.98   clamp 0.66 %   volen 19 % kol   26 % /  8 %   ← zvoleno
+ *   0.86 × counter 0.98   clamp 0.66 %   volen 10 % kol   13 % /  0 %
+ * Zvoleno **0.87 × 0.98**: plán má zřetelný vlastní obor (čtvrtina situací, kdy chceš uhrát
+ * bod), ale pod běžnými body zůstává menšinový (8 %), takže nepřebíjí `counter`. Výš nejít –
+ * od 0.88 roste clamp o polovinu a při `PLAN_FATIGUE = 0` (jediný regenerující plán) by
+ * `low_block` začal vyhrávat i na kondici.
+ *
+ * **`open` útok 1.15 → 1.12: jakmile se plán začal doporučovat, saturoval horní mez.**
+ * Se sázkami zápasu (`stakes.ts`) přestal být `open` mrtvou volbou – jenže rovnou spolkl
+ * většinu kol (53 %) a u rozvinutého klubu s dobrou morálkou narážel jeho útok na
+ * `ADJUST_MAX`: 1.15 × counter 1.12 (proti zataženému) × morálka 1.06 × event = přes 1.4,
+ * kde se rozdíl mezi „otevřít" a „presovat" přestane počítat. Měřeno (60 kariér × 12 sezón,
+ * clamp celkem / rozložení voleb):
+ *   1.15 → 2.35 %   open 53 · counter 26 · balanced 10 · low_block 6 · press 5
+ *   1.12 → 0.43 %   open 33 · counter 30 · press 22 · balanced 10 · low_block 4   ← zvoleno
+ *   1.10 → 0.22 %   press 39 · counter 33 · open 15 · balanced 10 · low_block 4
+ * Při 1.10 se kyvadlo přehoupne k `press`; 1.12 drží všech pět plánů v provozu a clamp nízko.
+ *
+ * **Clamp 0.12 % → 0.43 % je vědomě zaplacená cena.** Původní číslo platilo pro svět, kde
+ * se nejobrannější plán NEVOLIL; jakmile se volí v pětině kol, musí se nejobrannější
+ * kombinace ve hře podlahy občas dotknout. Rozpočet `COUNTER_MAX_EFFECT` zůstává nedotčený
+ * (0.98 leží uvnitř) a sekce 3 v `npm run sim-game` to hlídá dál.
  */
 export const PLAN_BASE: Record<Plan, { attack: number; concede: number }> = {
   balanced: { attack: 1.0, concede: 1.0 },
-  open: { attack: 1.15, concede: 1.15 }, // otevřená hra: víc dáš i dostaneš
-  low_block: { attack: 0.82, concede: 0.8 }, // nízký blok: zavři obranu, míň dáš
+  open: { attack: 1.12, concede: 1.15 }, // otevřená hra: víc dáš i dostaneš
+  low_block: { attack: 0.87, concede: 0.8 }, // nízký blok: zavři obranu, míň dáš
   press: { attack: 1.08, concede: 1.05 }, // presink: aktivní, mírné riziko vzadu
   counter: { attack: 0.94, concede: 0.9 }, // kontry: pevná obrana, oportunní útok
 };
@@ -314,7 +376,7 @@ export const COUNTER_MATRIX: Record<
     balanced: { atk: 1.0, conc: 1.03 },
   },
   low_block: {
-    attacking: { atk: 0.95, conc: 0.88 }, // ustojíš tlak, ale nemáš čím trestat
+    attacking: { atk: 0.95, conc: 0.98 }, // ustojíš tlak, ale nemáš čím trestat
     defensive: { atk: 0.9, conc: 1.0 }, // dva zatažené týmy = nuda, ztrácíš čas
     balanced: { atk: 1.0, conc: 0.98 },
   },
@@ -362,6 +424,32 @@ export const SCOUT_STRENGTH_GAP = 0.25;
  */
 export const ADJUST_MIN = 0.7;
 export const ADJUST_MAX = 1.4;
+
+// ───────────────────────── autoplay („Hrát dál") ─────────────────────────
+//
+// Kolik kol se smí odehrát na jeden klik a co si vynutí zastávku (`autoplay.ts`).
+// Cíl: z 38 kliků za sezónu udělat řádově deset, aniž by se ztratilo rozhodování —
+// zastavuje se tam, kde na volbě opravdu záleží, ne pravidelně.
+
+/**
+ * Strop kol na jeden klik. Bez něj by klidný úsek spolkl půlku sezóny naslepo; s ním má
+ * hráč vždycky kontrolní bod. Laděno na Ø délku dávky ~3 kola (viz `sim-game` sekce 7).
+ */
+export const AUTOPLAY_MAX_ROUNDS = 6;
+/** Poslední kola sezóny se hrají vždycky ručně – tam se rozhoduje. */
+export const AUTOPLAY_FINALE_ROUNDS = 3;
+/** Soupeř do tolika příček od tebe = šestibodový zápas → zastávka. */
+export const AUTOPLAY_RIVAL_RANKS = 2;
+/** Než tabulka něco znamená (na nule je pořadí dané id týmu), soused se neřeší. */
+export const AUTOPLAY_TABLE_WARMUP = 5;
+/**
+ * Pod touhle kondicí se hráč musí podívat na plán. Sedí na `fitnessLabel` („Vyčerpaní"),
+ * ať zastávka odpovídá tomu, co appka píše. Zvyšovat nemá smysl: dávky jsou krátké
+ * (Ø ~2 kola), takže kondice uvnitř dávky skoro nespadne – měřeno, práh 45/55/60/70 hýbe
+ * cenou pohodlí jen mezi 1.04 a 0.96 b. Cena nepramení z únavy, ale z toho, že plán
+ * v dávce neodpovídá dalšímu soupeři, a to je záměr (viz `autoplay.ts`).
+ */
+export const AUTOPLAY_FITNESS_FLOOR = 45;
 
 /** Šance, že v kole nastane náhodný event (deterministicky dle seedu+kola). */
 export const EVENT_CHANCE = 0.3;

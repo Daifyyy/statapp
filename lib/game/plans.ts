@@ -19,8 +19,8 @@ export const PLAN_LABEL: Record<Plan, string> = {
 
 export const PLAN_HINT: Record<Plan, string> = {
   balanced: "Bez úprav a bez rizika. Když o soupeři nic nevíš, nic neztratíš.",
-  open: "Nejvíc gólů na obou stranách. Otevře zataženého, proti útočnému je to divočina.",
-  low_block: "Zavři obranu a šetři síly (jediný plán, který regeneruje). Vepředu skoro nic.",
+  open: "Nejvíc gólů na obou stranách — volba, když remíza k ničemu není. Otevře zataženého, proti útočnému je to divočina.",
+  low_block: "Když ti stačí bod: zavři obranu a šetři síly (jediný plán, který regeneruje). Vepředu skoro nic.",
   press: "Vysoký presink rozebere pasivní tým. Proti ofenzivnímu necháš díry za obranou.",
   counter: "Vzadu pevný, vepředu opatrný. Proti otevřenému soupeři nejsilnější protitah.",
 };
@@ -41,29 +41,9 @@ export function resolvePlan(
   };
 }
 
-/**
- * Jak dobře plán sedí na daný styl – proxy na gólový rozdíl (útok − obdržené na škále λ).
- * Slouží jen k **doporučení pro hráče** (`recommendPlan`), ne k simulaci.
- * Vědomě ignoruje kondici: doporučení je zápasové, únava je rozpočet přes sezónu.
- */
-export function planScore(plan: Plan, oppStyle: OppStyle): number {
-  const r = resolvePlan(plan, oppStyle);
-  return r.attack - r.concede;
-}
-
-/**
- * Který plán skauti doporučí proti nahlášenému stylu. Bere **hlášený** styl, ne pravdu –
- * doporučení je proto stejně omylné jako hlášení a nejde jím obejít nejistotu scoutingu.
- */
-export function recommendPlan(oppStyle: OppStyle): Plan {
-  let best: Plan = "balanced";
-  let bestScore = -Infinity;
-  for (const p of PLANS) {
-    const s = planScore(p, oppStyle);
-    if (s > bestScore) {
-      bestScore = s;
-      best = p;
-    }
-  }
-  return best;
-}
+// Pozn.: doporučení plánu (`recommendPlan`) žije v `planChoice.ts`, ne tady. Dřív to byl
+// argmax `planScore = útok − obdržené`, tedy proxy na gólový rozdíl na škále λ – jenže ta
+// proxy má JEDNU správnou odpověď na styl bez ohledu na situaci (naměřeno: `counter` 62 %,
+// `press` 28 %, `balanced` 10 %, `open` a `low_block` NIKDY) a navíc není monotonní vůči
+// šanci na výhru. Dnes se plány porovnávají na skutečné 1X2 predikci a váženě podle toho,
+// co ze zápasu potřebuješ (`stakes.ts`). Druhá, jednodušší škála by se s ní rozešla.

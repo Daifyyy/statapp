@@ -21,8 +21,8 @@ import { teamStrengthScore } from "./leagues";
 // by cyklus. Ze `teamSeasonStats` se tu stejně používalo jen `.form`.
 import { hasMet, playedCount, teamForm } from "./form";
 import { deriveSeed, mulberry32 } from "./rng";
-import { recommendPlan, PLAN_LABEL } from "./plans";
-import { recommendInstruction, INSTRUCTION_LABEL } from "./instructions";
+import { planSuggestion } from "./planChoice";
+import type { OutcomeWeights } from "./planChoice";
 import {
   SCOUT_CONFIDENCE_BOOSTED,
   SCOUT_CONFIDENCE_MAX,
@@ -151,11 +151,23 @@ export function scoutQuality(confidence: number): ScoutQuality {
   return "detailed";
 }
 
-/** Kolik síly musí trait mít, aby ho skauti při dané kvalitě zmínili. */
-function revealThreshold(quality: ScoutQuality): number {
-  if (quality === "vague") return SCOUT_REVEAL_VAGUE;
-  if (quality === "standard") return SCOUT_REVEAL_STANDARD;
-  return 0; // detailed: všechno
+/**
+ * Kolik síly musí trait mít, aby ho skauti zmínili — **spojitě v konfidenci**, ne po
+ * stupních kvality.
+ *
+ * Dřív to byla schodovitá funkce (0.6 / 0.25 / 0) a hlášení se proto měnilo JEN při
+ * přechodu mezi stupni. Investovaný bod, který konfidenci zvedl uvnitř stupně, neudělal
+ * viditelně nic — a protože stupně jsou tři, byla většina investic němá. Teď práh klesá
+ * plynule z `SCOUT_REVEAL_VAGUE` (na dolní hranici konfidence) na `SCOUT_REVEAL_STANDARD`
+ * (na prahu detailního hlášení), takže **každý bod odhalí o kus slabší traity**.
+ *
+ * `detailed` zůstává skokem na nulu: „vidíme všechno" je smysl toho stupně a drží ho test.
+ */
+function revealThreshold(quality: ScoutQuality, confidence: number): number {
+  if (quality === "detailed") return 0;
+  const span = SCOUT_QUALITY_DETAILED - SCOUT_CONFIDENCE_MIN;
+  const t = span > 0 ? clamp((confidence - SCOUT_CONFIDENCE_MIN) / span, 0, 1) : 0;
+  return SCOUT_REVEAL_VAGUE + (SCOUT_REVEAL_STANDARD - SCOUT_REVEAL_VAGUE) * t;
 }
 
 /**
@@ -214,7 +226,15 @@ function scoredTraits(
  * Scout report soupeře z pohledu tvého týmu. `style`/`traits` je pravda (pro `resolvePlan`
  * a `resolveInstruction`), `reportedStyle`/`reportedTraits` je to, co uvidí hráč.
  */
-export function scoutOpponent(state: AgencyState, oppId: number): ScoutReport {
+export function scoutOpponent(
+  state: AgencyState,
+  oppId: number,
+  /**
+   * Kontext pro doporučení skautů. Chybí-li, report doporučení neobsahuje – tak ho volá
+   * `resolveAdjust`, kterému jde jen o pravdu (styl a traity), ne o radu hráči.
+   */
+  advice?: { youHome: boolean; weights?: OutcomeWeights }
+): ScoutReport {
   const opp = teamById(state.teams, oppId);
   const you = teamById(state.teams, state.yourTeamId);
   const meanAtk =
@@ -245,7 +265,7 @@ export function scoutOpponent(state: AgencyState, oppId: number): ScoutReport {
 
   const confidence = scoutConfidence(state, oppId);
   const quality = scoutQuality(confidence);
-  const minStrength = revealThreshold(quality);
+  const minStrength = revealThreshold(quality, confidence);
   const reportedTraits = scored
     .filter((s) => s.strength >= minStrength)
     .map((s) => s.trait);
@@ -258,10 +278,19 @@ export function scoutOpponent(state: AgencyState, oppId: number): ScoutReport {
     ? reportedTraits.map((t) => TRAIT_LABEL[t]).join(", ")
     : "bez výrazných rysů";
 
-  // Doporučení jen v detailním hlášení – a jen z toho, co skauti nahlásili.
+  // Doporučení jen v detailním hlášení – a jen z toho, co skauti nahlásili. Bez `advice`
+  // (volání kvůli PRAVDĚ, např. `resolveAdjust`) se nestaví vůbec: porovnání plánů potřebuje
+  // vědět, na čím hřišti se hraje a co ze zápasu potřebuješ, a to `scoutOpponent` samo neví.
   const suggestion =
-    quality === "detailed" && reportedStyle
-      ? buildSuggestion(reportedStyle, reportedTraits)
+    advice && quality === "detailed" && reportedStyle
+      ? planSuggestion(
+          state,
+          oppId,
+          advice.youHome,
+          reportedStyle,
+          reportedTraits,
+          advice.weights
+        )
       : undefined;
 
   return {
@@ -276,19 +305,6 @@ export function scoutOpponent(state: AgencyState, oppId: number): ScoutReport {
     // Popis se řídí HLÁŠENÝM stylem – hráč nesmí z textu vyčíst pravdu.
     note: `${reportedStyle ? STYLE_NOTE[reportedStyle] : UNKNOWN_STYLE_NOTE} (${traitText})`,
   };
-}
-
-function buildSuggestion(
-  reportedStyle: OppStyle,
-  reportedTraits: Trait[]
-): ScoutSuggestion {
-  const plan = recommendPlan(reportedStyle);
-  const instruction = recommendInstruction(reportedTraits);
-  const text =
-    instruction === "none"
-      ? PLAN_LABEL[plan]
-      : `${PLAN_LABEL[plan]} + ${INSTRUCTION_LABEL[instruction]}`;
-  return { plan, instruction, text };
 }
 
 function clamp(v: number, lo: number, hi: number): number {

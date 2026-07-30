@@ -44,6 +44,7 @@ import {
   simulateTournamentToEnd,
   yourFixture,
 } from "./tournament";
+import { KNOCKOUT_WEIGHTS, POINTS_WEIGHTS } from "./planChoice";
 import type { Stage, TournamentFormat, TournamentState } from "./tournament";
 import {
   NATIONAL_TEAMS,
@@ -593,7 +594,15 @@ export function runPreview(run: TournamentRun): RunPreview | null {
     you: teamById(active.teams, run.yourTeamId),
     opponent: teamById(active.teams, oppId),
     probs,
-    scout: scoutOpponent(active, oppId),
+    // Kvalifikační skupina i skupina turnaje se hrají o body; ve vyřazovací fázi je
+    // remíza prodloužení (≈ půl postupu), ne bod. Viz `planChoice.ts`.
+    scout: scoutOpponent(active, oppId, {
+      youHome: isHome,
+      weights:
+        run.phase === "final" && run.tournament && run.tournament.stage !== "group"
+          ? KNOCKOUT_WEIGHTS
+          : POINTS_WEIGHTS,
+    }),
     neutral: run.phase === "final",
   };
 }

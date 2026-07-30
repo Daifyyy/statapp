@@ -4,20 +4,21 @@
 // morálka a eventy hýbou λ TVÉHO týmu; AI soupeři jedou neutrálně (NEUTRAL_ADJUST).
 
 import { deriveSeed, mulberry32, shuffle } from "./rng";
-import { ADJUST_MAX, ADJUST_MIN } from "./balance";
+import { composeAdjust } from "./adjust";
+import { matchStakes } from "./stakes";
+import type { MatchStakes } from "./stakes";
 import { generateLeague, teamById } from "./teams";
 import { roundRobin } from "./schedule";
 import { simulateMatch, predictProbs, NEUTRAL_ADJUST } from "./simulate";
 import { expectedPointsOf } from "./expectedPoints";
+import { winProbOf } from "./tacticImpact";
 import type { SideAdjust } from "./simulate";
 import { buildTable } from "./standings";
 import { MOCK_LEAGUE, seasonObjective, teamStrengthScore } from "./leagues";
-import { resolvePlan } from "./plans";
 import { scoutOpponent } from "./scouting";
 import type { ScoutReport } from "./scouting";
-import { moraleFactor, updateMorale } from "./morale";
-import { fitnessFactor, updateFitness } from "./fitness";
-import { resolveInstruction } from "./instructions";
+import { updateMorale } from "./morale";
+import { updateFitness } from "./fitness";
 import { maybeEvent } from "./events";
 import { RNG_SALT_LEAGUE } from "./agency";
 import type { AgencyState } from "./agency";
@@ -143,28 +144,7 @@ export function resolveAdjust(
   instruction: Instruction
 ): SideAdjust {
   const scout = scoutOpponent(state, oppId);
-  const base = resolvePlan(plan, scout.style);
-  const instr = resolveInstruction(instruction, scout.traits);
-  const mf = moraleFactor(state.morale);
-  const ff = fitnessFactor(state.fitness);
-  let attack = base.attack * instr.attack * mf * ff;
-  let concede = (base.concede * instr.concede) / mf / ff; // vyšší morálka/kondice = míň obdržených
-  for (const m of state.modifiers) {
-    if (m.untilRound >= state.round) {
-      if (m.attack) attack *= m.attack;
-      if (m.concede) concede *= m.concede;
-    }
-  }
-  // Strop na kombinované stohování (plán×counter×instrukce×morálka×kondice×eventy) – žádná
-  // kombinace by neměla poslat attack/concede mimo tento rozsah, ani při "perfektní bouři".
-  return {
-    attack: clampAdjust(attack),
-    concede: clampAdjust(concede),
-  };
-}
-
-function clampAdjust(v: number): number {
-  return Math.min(ADJUST_MAX, Math.max(ADJUST_MIN, v));
+  return composeAdjust(state, scout.style, scout.traits, plan, instruction);
 }
 
 /** Úprava λ tvého týmu se SKUTEČNĚ zvolenou taktikou – používá se při odehrání kola. */
@@ -204,13 +184,10 @@ export function playRound(state: SeasonState): SeasonState {
       // counter, instrukce, morálka, kondice, eventy jsou v `homeAdj`/`awayAdj`).
       // Ne z náhledu `yourNextMatch`, ten jede neutrálně kvůli anti-exploitu a rozdíl
       // proti němu by měřil „zabrala taktika", ne smůlu. Viz `expectedPoints.ts`.
+      // `r.probs` je z TÉŽE mřížky, jakou se sampluje skóre – druhé `predictProbs`
+      // by počítalo totéž znovu a mohlo se rozejít.
       ...(youHome || youAway
-        ? {
-            xp: expectedPointsOf(
-              predictProbs(home, away, homeAdj, awayAdj),
-              youHome
-            ),
-          }
+        ? matchTacticFields(state, home, away, youHome, r.probs)
         : {}),
     };
     results.push(mr);
@@ -252,6 +229,38 @@ export function playRound(state: SeasonState): SeasonState {
   };
 }
 
+/**
+ * Pole `xp`/`xpBase`/`win`/`winBase` pro TVŮJ zápas: skutečná predikce + kontrafaktuál
+ * „co kdybys nechal `balanced`/`none`".
+ *
+ * Základna se počítá ze **stejného stavu** (tedy s toutéž morálkou, kondicí i eventovými
+ * modifikátory) – v rozdílu se proto vyruší a zůstane čistý efekt tvé volby. Je to zároveň
+ * přesně ten výpočet, který hráč viděl v náhledu (`yourNextMatch`), takže hlášení po zápase
+ * navazuje na číslo, které mu appka ukázala. Viz `tacticImpact.ts`.
+ */
+function matchTacticFields(
+  state: SeasonState,
+  home: GameTeam,
+  away: GameTeam,
+  youHome: boolean,
+  probs: MatchProbs
+): Pick<MatchResult, "xp" | "xpBase" | "win" | "winBase"> {
+  const oppId = youHome ? away.id : home.id;
+  const baseAdj = resolveAdjust(state, oppId, "balanced", "none");
+  const baseProbs = predictProbs(
+    home,
+    away,
+    youHome ? baseAdj : NEUTRAL_ADJUST,
+    youHome ? NEUTRAL_ADJUST : baseAdj
+  );
+  return {
+    xp: expectedPointsOf(probs, youHome),
+    xpBase: expectedPointsOf(baseProbs, youHome),
+    win: winProbOf(probs, youHome),
+    winBase: winProbOf(baseProbs, youHome),
+  };
+}
+
 /** Dohraje celou sezónu (současný plán platí pro zbývající zápasy; eventy se přeskočí). */
 export function simulateToEnd(state: SeasonState): SeasonState {
   let s = state;
@@ -274,6 +283,8 @@ export function yourNextMatch(state: SeasonState): {
   opponent: GameTeam;
   probs: MatchProbs;
   scout: ScoutReport;
+  /** Co ze zápasu potřebuješ – kontext pro hráče i váhy pro doporučení skautů. */
+  stakes: MatchStakes;
 } | null {
   if (isSeasonOver(state)) return null;
   const fixtures = state.schedule[state.round];
@@ -293,12 +304,16 @@ export function yourNextMatch(state: SeasonState): {
   const homeAdj = isHome ? yourAdj : NEUTRAL_ADJUST;
   const awayAdj = isHome ? NEUTRAL_ADJUST : yourAdj;
   const probs = predictProbs(home, away, homeAdj, awayAdj);
+  // Sázky řídí, čím se v tomhle zápase měří úspěch – doporučení skautů se pak neptá
+  // „kde bude největší gólový rozdíl", ale „co odsud potřebuju odvézt".
+  const stakes = matchStakes(state, oppId);
   return {
     fixture,
     isHome,
     opponent: isHome ? away : home,
     probs,
-    scout: scoutOpponent(state, oppId),
+    scout: scoutOpponent(state, oppId, { youHome: isHome, weights: stakes.weights }),
+    stakes,
   };
 }
 

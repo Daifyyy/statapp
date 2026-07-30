@@ -108,6 +108,20 @@ export interface MatchResult {
    * přírůstkové a serverové zod schéma jede na `passthrough()`.
    */
   xp?: number;
+  /**
+   * **Kontrafaktuál k `xp`: očekávané body, kdybys nechal `"balanced"`/`"none"`.**
+   *
+   * Morálka, kondice i eventové modifikátory jsou v obou stejné, takže `xp − xpBase`
+   * izoluje čistý efekt TVÉ volby (plán × counter × instrukce). Viz `tacticImpact.ts`.
+   */
+  xpBase?: number;
+  /** Šance tvého týmu na výhru se skutečně zvolenou taktikou (z téže predikce jako `xp`). */
+  win?: number;
+  /**
+   * Šance tvého týmu na výhru bez tvé volby = **přesně ten náhled, který hráč viděl
+   * před zápasem** (`yourNextMatch` jede neutrálně kvůli anti-exploitu).
+   */
+  winBase?: number;
 }
 
 /** Řádek ligové tabulky (odvozený z výsledků). */
