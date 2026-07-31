@@ -41,6 +41,31 @@ describe("computeSummary – forma", () => {
     expect(s.formSampleSize).toBe(5);
   });
 
+  it("do formy nepustí zápasy minulé sezóny", () => {
+    // Proužek W/D/L (i s logy soupeřů) je tvrzení o FORMĚ. Na startu sezóny je správná
+    // odpověď „zatím nic", ne květnové výsledky – ty patří do okna SEASON u metrik.
+    const matches = [
+      match(1, 1, 2, 0),
+      ...Array.from({ length: 5 }, (_, i) =>
+        match(100 + i, 60 + i * 7, 0, 3, { isBaseline: true })
+      ),
+    ];
+    const s = computeSummary(matches, "TOTAL");
+    expect(s.form).toEqual(["W"]);
+    expect(s.sampleSize).toBe(1); // i jmenovatel čistých kont je z aktuální sezóny
+    expect(s.cleanSheetPct).toBe(100);
+  });
+
+  it("před prvním kolem je forma prázdná", () => {
+    const preseason = Array.from({ length: 5 }, (_, i) =>
+      match(i, 60 + i * 7, 1, 1, { isBaseline: true })
+    );
+    const s = computeSummary(preseason, "TOTAL");
+    expect(s.form).toEqual([]);
+    expect(s.sampleSize).toBe(0);
+    expect(s.cleanSheetPct).toBeNull();
+  });
+
   it("vrátí kratší formu, když je zápasů méně než 5", () => {
     const s = computeSummary([match(1, 1, 1, 0), match(2, 2, 0, 1)], "TOTAL");
     expect(s.form).toEqual(["W", "L"]);

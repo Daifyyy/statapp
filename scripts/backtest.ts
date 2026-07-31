@@ -78,6 +78,12 @@ const minMatches = Number(arg("minMatches") ?? 0);
 const refresh = process.argv.includes("--refresh");
 const noStats = process.argv.includes("--no-stats");
 const noOdds = process.argv.includes("--no-odds");
+/**
+ * `--form-current-season`: formová okna λ (LAST10/LAST5) **nesmí** do minulé sezóny.
+ * Zobrazení tak jede od 31. 7. 2026 (jinak „posl. 5" znamená v srpnu květen), λ zatím ne –
+ * váhy 70/25/5 se fitovaly PŘES hranici sezóny. Tenhle přepínač to dá změřit místo hádat.
+ */
+const crossSeasonForm = !process.argv.includes("--form-current-season");
 
 /**
  * Zápasy ligy+sezóny s diskovou cache: iterace nad modelem pak běží úplně offline
@@ -1052,8 +1058,18 @@ async function main() {
   const ratings = ratingsFromArgs();
   if (ratings) console.log(`Ratingy (C2): ${JSON.stringify(ratings)}`);
 
+  if (!crossSeasonForm) {
+    console.log("Formová okna λ: JEN aktuální sezóna (--form-current-season)");
+  }
+
   console.time("backtest");
-  const rows = backtest(history, { seasons, minMatches, tuning, ratings });
+  const rows = backtest(history, {
+    seasons,
+    minMatches,
+    tuning,
+    ratings,
+    crossSeasonForm,
+  });
   console.timeEnd("backtest");
 
   // ── TÝMOVÉ TOTALY (`--team-totals`) ─────────────────────────────────────────────

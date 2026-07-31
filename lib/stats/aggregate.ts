@@ -13,7 +13,7 @@ import { WINDOW_WEIGHTS } from "./weights";
 /** Váhy oken pro jeden typ entity (zobrazení vs. predikce – viz `weights.ts`). */
 export type WindowWeights = Record<WindowKey, number>;
 import { matchWeight } from "./matchWeight";
-import { selectWindowMatches, windowsFor } from "./windows";
+import { selectWindowMatches, windowsFor, type WindowOptions } from "./windows";
 import { weightedAverage, type WindowValue } from "./weightedAverage";
 
 /** Pod kolik klesne efektivní vzorek, než hodnotu označíme „nízká spolehlivost". §3.4c */
@@ -56,7 +56,6 @@ function metricOf(m: MatchStat, metric: Metric): number | undefined {
 function aggregateWindow(
   matches: MatchStat[],
   metric: Metric,
-  entityType: EntityType,
   seen?: Map<number, number>
 ): WindowAgg {
   let weightSum = 0;
@@ -64,7 +63,7 @@ function aggregateWindow(
   for (const m of matches) {
     const raw = metricOf(m, metric);
     if (raw === undefined) continue; // např. chybějící xG
-    const w = matchWeight(m, entityType);
+    const w = matchWeight(m);
     seen?.set(m.fixtureId, w);
     weightSum += w;
     valueSum += w * raw;
@@ -83,7 +82,9 @@ export function computeMetricValue(
   entityType: EntityType,
   now: Date = new Date(),
   /** Bez nich zobrazovací váhy; predikce si předává vlastní (`PREDICTION_WINDOW_WEIGHTS`). */
-  weights: WindowWeights = WINDOW_WEIGHTS[entityType]
+  weights: WindowWeights = WINDOW_WEIGHTS[entityType],
+  /** Rozsah formových oken – λ si zatím drží starý (přes hranici sezóny), viz `compare.ts`. */
+  windowOpts: WindowOptions = {}
 ): MetricValue {
   const windowValues: WindowValue[] = [];
   const breakdown: WindowBreakdown[] = [];
@@ -98,10 +99,10 @@ export function computeMetricValue(
   const sampleByFixture = new Map<number, number>();
 
   for (const window of windowsFor(entityType)) {
-    const selected = selectWindowMatches(matches, window, now).filter((m) =>
-      matchesVenue(m, venue)
+    const selected = selectWindowMatches(matches, window, now, windowOpts).filter(
+      (m) => matchesVenue(m, venue)
     );
-    const agg = aggregateWindow(selected, metric, entityType, sampleByFixture);
+    const agg = aggregateWindow(selected, metric, sampleByFixture);
     const weight = weights[window];
     windowValues.push({ weight, value: agg.value });
     breakdown.push({
@@ -135,13 +136,16 @@ export function computeAllValues(
   metrics: readonly Metric[],
   entityType: EntityType,
   now: Date = new Date(),
-  weights: WindowWeights = WINDOW_WEIGHTS[entityType]
+  weights: WindowWeights = WINDOW_WEIGHTS[entityType],
+  windowOpts: WindowOptions = {}
 ): MetricValue[] {
   const venues: Venue[] = ["HOME", "AWAY", "TOTAL"];
   const out: MetricValue[] = [];
   for (const metric of metrics) {
     for (const venue of venues) {
-      out.push(computeMetricValue(matches, metric, venue, entityType, now, weights));
+      out.push(
+        computeMetricValue(matches, metric, venue, entityType, now, weights, windowOpts)
+      );
     }
   }
   return out;

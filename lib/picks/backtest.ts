@@ -174,6 +174,12 @@ export interface BacktestOptions {
    * (`home`/`away`) doplní backtest sám z tabulky předchozí sezóny.
    */
   ratings?: Omit<RatingOptions, "home" | "away">;
+  /**
+   * Smí formová okna λ (LAST10/LAST5) sáhnout do minulé sezóny? Produkce dnes ano
+   * (`true` = dosavadní chování, se kterým se fitovaly váhy 70/25/5). `false` měří
+   * variantu, kterou od 31. 7. 2026 používá **zobrazení** – viz `docs/data-okna.md`.
+   */
+  crossSeasonForm?: boolean;
 }
 
 /**
@@ -261,11 +267,13 @@ export function backtest(
     }
 
     // `now` = datum zápasu → časová okna (reprezentace) i vše ostatní se dívají do minulosti.
-    const p = compareTeams(home, away, new Date(m.date), {
-      baseline,
-      tuning: opts.tuning,
-      strength,
-    }).prediction;
+    const p = compareTeams(
+      home,
+      away,
+      new Date(m.date),
+      { baseline, tuning: opts.tuning, strength },
+      { crossSeasonForm: opts.crossSeasonForm ?? true }
+    ).prediction;
     if (!p) continue;
 
     rows.push({

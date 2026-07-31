@@ -1,4 +1,5 @@
 import type {
+  EntityType,
   FormMatchQuality,
   FormQuality,
   MatchResult,
@@ -13,25 +14,43 @@ import { TeamLogo } from "./TeamLogo";
  *
  * Kvalita formy je **popisný kontext, ne tip**: pět zápasů je z valné části šum, proto
  * se nikde netváří jako signál a bez xG (reprezentace, část Fortuna ligy) prostě zmizí.
+ *
+ * Forma se počítá **jen z aktuální sezóny**, takže na jejím startu je prázdná. Prázdný
+ * proužek bez vysvětlení vypadá jako rozbité UI, proto se v tu chvíli řekne, čím to je
+ * a odkud tedy metriky níž vycházejí.
  */
 export function FormSummary({
   home,
   away,
   homeQuality,
   awayQuality,
+  mode = "CLUB",
 }: {
   home: TeamSummary | null;
   away: TeamSummary | null;
   homeQuality?: FormQuality | null;
   awayQuality?: FormQuality | null;
+  mode?: EntityType;
 }) {
   if (!home && !away) return null;
 
   const showQuality =
     (homeQuality?.xgSampleSize ?? 0) > 0 || (awayQuality?.xgSampleSize ?? 0) > 0;
+  // Reprezentace mají časová okna, ne sezónní baseline – u nich prázdná forma znamená
+  // „žádné zápasy", ne „sezóna ještě nezačala", takže se hláška netýká jich.
+  const seasonNotStarted =
+    mode === "CLUB" &&
+    (home?.form.length ?? 0) === 0 &&
+    (away?.form.length ?? 0) === 0;
 
   return (
     <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm sm:p-6">
+      {seasonNotStarted && (
+        <p className="mb-3 rounded-lg bg-background px-3 py-2 text-[11px] text-muted">
+          ℹ Nová sezóna zatím nemá odehrané zápasy – forma je prázdná schválně. Metriky
+          níž proto vycházejí z okna <strong>Minulá sezóna</strong>.
+        </p>
+      )}
       <div className="space-y-3">
         <Row label="Forma">
           <FormBadges

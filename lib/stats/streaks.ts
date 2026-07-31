@@ -44,7 +44,6 @@ function points(r: MatchResult): number {
 export function pointsPerGame(
   matches: MatchStat[],
   window: WindowKey,
-  entityType: EntityType,
   now: Date
 ): number | null {
   const selected = selectWindowMatches(matches, window, now);
@@ -55,7 +54,7 @@ export function pointsPerGame(
     const ga = m.metrics.GOALS_AGAINST;
     if (gf == null || ga == null) continue;
     const r: MatchResult = gf > ga ? "W" : gf < ga ? "L" : "D";
-    const mw = matchWeight(m, entityType);
+    const mw = matchWeight(m);
     w += mw;
     p += mw * points(r);
   }
@@ -70,7 +69,7 @@ export function formTrend(
 ): { form: number | null; base: number | null } {
   const windows = windowsFor(entityType);
   return {
-    base: pointsPerGame(matches, windows[0], entityType, now),
-    form: pointsPerGame(matches, windows[windows.length - 1], entityType, now),
+    base: pointsPerGame(matches, windows[0], now),
+    form: pointsPerGame(matches, windows[windows.length - 1], now),
   };
 }

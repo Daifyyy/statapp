@@ -35,6 +35,36 @@ describe("selectWindowMatches", () => {
     expect(selectWindowMatches(matches, "LAST5", NOW)).toHaveLength(5);
   });
 
+  it("LAST5/LAST10 NEsahají do minulé sezóny", () => {
+    // Start sezóny: dvě odehraná kola, zbytek poolu je loňsko. „Posl. 5 zápasů" nesmí
+    // znamenat květen – od minulé sezóny je tu okno SEASON.
+    const matches = [
+      clubMatch(1, 1),
+      clubMatch(2, 8),
+      ...Array.from({ length: 10 }, (_, i) => clubMatch(100 + i, 60 + i * 7, {
+        isBaseline: true,
+      })),
+    ];
+    expect(selectWindowMatches(matches, "LAST5", NOW)).toHaveLength(2);
+    expect(selectWindowMatches(matches, "LAST10", NOW)).toHaveLength(2);
+    // λ si zatím drží staré chování (váhy 70/25/5 jsou fitnuté přes hranici sezóny).
+    expect(
+      selectWindowMatches(matches, "LAST5", NOW, { crossSeasonForm: true })
+    ).toHaveLength(5);
+  });
+
+  it("před prvním kolem je forma prázdná a hodnota spadne na SEASON", () => {
+    const preseason = Array.from({ length: 6 }, (_, i) =>
+      clubMatch(i, 60 + i * 7, { isBaseline: true, metrics: { GOALS_FOR: 3 } })
+    );
+    expect(selectWindowMatches(preseason, "LAST5", NOW)).toHaveLength(0);
+    // Váhy se přerozdělí (`weightedAverage`) → číslo je přiznaně z minulé sezóny.
+    const v = computeMetricValue(preseason, "GOALS_FOR", "TOTAL", "CLUB", NOW);
+    expect(v.value).toBe(3);
+    expect(v.breakdown.find((b) => b.window === "LAST5")!.value).toBeNull();
+    expect(v.breakdown.find((b) => b.window === "SEASON")!.value).toBe(3);
+  });
+
   it("SEASON vezme jen zápasy baseline (minulé) sezóny", () => {
     const matches = [
       clubMatch(1, 7),
@@ -147,14 +177,23 @@ describe("computeMetricValue", () => {
 });
 
 describe("matchWeight", () => {
-  it("klub má vždy váhu 1", () => {
-    expect(matchWeight(clubMatch(1, 5, { competitive: false }), "CLUB")).toBe(1);
+  it("přátelák má FRIENDLY_WEIGHT, soutěžní zápas 1 – bez ohledu na typ entity", () => {
+    // Kluby dřív dostávaly natvrdo 1.0. Na hlavní cestě to nevadilo (ligové fixtures
+    // jsou soutěžní vždy), ale fallback nováčka tahá zápasy napříč soutěžemi a v srpnu
+    // je to z půlky letní příprava – ta se počítala jako plnohodnotné ligové kolo.
+    expect(matchWeight(clubMatch(1, 5, { competitive: false }))).toBe(FRIENDLY_WEIGHT);
+    expect(matchWeight(clubMatch(2, 5, { competitive: true }))).toBe(1);
   });
-  it("reprezentace: přátelák má FRIENDLY_WEIGHT, soutěžní 1", () => {
-    expect(matchWeight(clubMatch(1, 5, { competitive: false }), "NATIONAL")).toBe(
-      FRIENDLY_WEIGHT
-    );
-    expect(matchWeight(clubMatch(2, 5, { competitive: true }), "NATIONAL")).toBe(1);
+
+  it("klubová letní příprava táhne průměr míň než soutěžní zápas", () => {
+    const matches: MatchStat[] = [
+      clubMatch(1, 5, { competitive: true, metrics: { GOALS_FOR: 3 } }),
+      clubMatch(2, 12, { competitive: false, metrics: { GOALS_FOR: 1 } }),
+    ];
+    const v = computeMetricValue(matches, "GOALS_FOR", "TOTAL", "CLUB", NOW);
+    const expected =
+      Math.round(((3 + FRIENDLY_WEIGHT) / (1 + FRIENDLY_WEIGHT)) * 100) / 100;
+    expect(v.value).toBe(expected); // 2.43 > prostý průměr 2.0
   });
 });
 
@@ -231,6 +270,34 @@ describe("compareTeams (smoke)", () => {
     expect(res.metrics).toContain("XG");
     expect(res.home.values.length).toBeGreaterThan(0);
     expect(res.away.values.length).toBeGreaterThan(0);
+  });
+
+  it("na startu sezóny: zobrazení má formu prázdnou, λ pořád stojí na minulé sezóně", () => {
+    // Dvě vědomě oddělené věci. Zobrazení nesmí vydávat květen za formu; λ má váhy
+    // 70/25/5 fitnuté backtestem PŘES hranici sezóny, takže se jí tenhle řez nedotýká,
+    // dokud to nezměří `npm run backtest`.
+    const preseason = Array.from({ length: 12 }, (_, i) =>
+      clubMatch(i, 40 + i * 7, {
+        isBaseline: true,
+        isHome: i % 2 === 0,
+        metrics: { GOALS_FOR: 2, GOALS_AGAINST: 1 },
+      })
+    );
+    const team = (id: number): Team => ({
+      id, name: `T${id}`, logoUrl: "", country: "Anglie",
+      entityType: "CLUB", leagueId: 39, leagueMatches: preseason,
+    });
+    const res = compareTeams(team(1), team(2), NOW);
+
+    const gf = res.home.values.find(
+      (v) => v.metric === "GOALS_FOR" && v.venue === "TOTAL"
+    )!;
+    expect(gf.breakdown.find((b) => b.window === "LAST5")!.value).toBeNull();
+    expect(gf.value).toBe(2); // z okna SEASON, přiznaně
+    expect(res.home.summary.every((s) => s.form.length === 0)).toBe(true);
+    // Predikce se ale nerozpadne – λ má z čeho počítat.
+    expect(res.prediction!.available).toBe(true);
+    expect(res.prediction!.lambdaHome).toBeGreaterThan(0);
   });
 
   // Reprezentacím se vynechává POUZE xG (má ho jen ~31 % zápasů se statistikami, u přáteláků

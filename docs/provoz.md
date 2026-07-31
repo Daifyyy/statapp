@@ -27,6 +27,11 @@
   znamenalo sken celé ligy při každém volání); prázdná odpověď na plné TTL zase umí
   na startu sezóny **oslepit ligu na 24 h**, když se na `teams:<liga>:<sezóna>` sáhne
   pár dní před publikací nové sezóny.
+- **Seznam týmů padá na loňskou sezónu** (`getTeamsByLeague`). Než API vydá soupisku nové
+  sezóny, byl výběr týmů v Porovnání **prázdný** – ne nepřesný, prázdný. Loňský seznam je
+  nepřesný jinak (chybí nováčci, jsou v něm sestupující), ale to je pořád lepší než nic.
+  V ustáleném stavu 0 volání navíc – fallback se sáhne jen na prázdný seznam, a krátké TTL
+  prázdné odpovědi (3 h) zajistí, že se to samo přepne, jakmile API sezónu publikuje.
 - **`/fixtures/statistics` vrací OBA týmy v jedné odpovědi.** `assemble` (`realRepository`)
   proto z ní ukládá i **soupeřův** `MatchStat` – dřív se druhá půlka zahodila a týž zápas se
   stáhl podruhé, až přišel na řadu soupeř (**2× dražší**). Nejdražší opakující se položka

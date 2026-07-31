@@ -46,6 +46,6 @@ describe("pointsPerGame", () => {
   it("vážené body na zápas v okně LAST5", () => {
     // 5 výher → 3 body/zápas
     const wins = Array.from({ length: 5 }, (_, i) => m(i, i, 2, 0));
-    expect(pointsPerGame(wins, "LAST5", "CLUB", NOW)).toBeCloseTo(3, 5);
+    expect(pointsPerGame(wins, "LAST5", NOW)).toBeCloseTo(3, 5);
   });
 });

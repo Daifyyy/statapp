@@ -10,10 +10,16 @@ const RATE_SIZE = 10;
  * Exportováno, aby `formQuality.ts` počítalo nad **týmiž zápasy ve stejném pořadí**;
  * dvě nezávislé kopie tohoto filtru by se mohly tiše rozejít a UI by pak kreslilo
  * hodnocení výkonu k jinému zápasu, než ukazuje badge formy.
+ *
+ * Bere **jen aktuální sezónu** (`isBaseline` = minulá, u reprezentací vždy `false` → pro
+ * ně se nic nemění). Proužek W/D/L i „čisté konto z posl. 10" jsou tvrzení o **formě**;
+ * dokud nová sezóna nezačala, správná odpověď je „zatím nic", ne květnové výsledky
+ * s logy soupeřů, které od té doby půlka kádru opustila. Minulá sezóna má vlastní
+ * okno (SEASON) a čísla z ní tečou do metrik přes ně – přiznaně.
  */
 export function orderedMatches(matches: MatchStat[], venue: Venue): MatchStat[] {
   return matches
-    .filter((m) => matchesVenue(m, venue))
+    .filter((m) => !m.isBaseline && matchesVenue(m, venue))
     .sort((a, b) => b.date.localeCompare(a.date)); // nejnovější první
 }
 

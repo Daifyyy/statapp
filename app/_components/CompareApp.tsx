@@ -744,6 +744,7 @@ function ResultPanel({
         away={summaryFor("away")}
         homeQuality={qualityFor("home")}
         awayQuality={qualityFor("away")}
+        mode={entityMode}
       />
 
       <StandingContext home={homeStanding} away={awayStanding} venue={venue} />

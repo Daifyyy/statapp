@@ -211,11 +211,23 @@ export async function getTeamsByLeague(leagueId: number): Promise<TeamLite[]> {
     );
   }
 
-  const teams = await cachedJson(
+  const current = await cachedJson(
     `teams:${leagueId}:${CURRENT_SEASON}`,
     LIST_TTL,
     () => fetchLeagueTeams(leagueId, CURRENT_SEASON)
   );
+  // Na přelomu sezóny nemusí mít API novou soupisku publikovanou → výběr týmů
+  // v Porovnání by byl **prázdný**, ne jen nepřesný. Loňský seznam je nepřesný jinak
+  // (chybí nováčci, jsou v něm sestupující), ale prázdné pole je horší. `cachedJson`
+  // drží prázdnou odpověď jen 3 h, takže se to samo přepne, jakmile API sezónu vydá;
+  // v ustáleném stavu je to 0 volání navíc (fallback se sáhne jen na prázdný seznam).
+  const teams = current.length
+    ? current
+    : await cachedJson(
+        `teams:${leagueId}:${PREVIOUS_SEASON}`,
+        LIST_TTL,
+        () => fetchLeagueTeams(leagueId, PREVIOUS_SEASON)
+      );
   return teams
     .map((t) => ({
       id: t.team.id,
@@ -940,21 +952,30 @@ async function buildClubTeam(
     baselinePool = previousFinished;
   }
 
-  // Nováček z nižší soutěže nemá v TÉTO lize žádnou historii (ani loni, ani letos) →
-  // obě okna by zůstala prázdná, všechny metriky `null` a predikce by se uložila jako
-  // `available: false` s nulami. To potká v 1. kole ~3 kluby v každé lize, a je to horší
-  // než přiznaně nepřesný odhad. Vezmeme proto formu **napříč soutěžemi** (`fetchLastFixtures`
-  // – tentýž zdroj, ze kterého staví formu reprezentace): zápasy z druhé ligy a poháru.
-  // Měřítko soupeřů je jiné, ale zápasy nováčka do ligových ratingů stejně nespadnou
-  // (není v jejich mapě → λ se počítá okenním modelem), takže jde o čistý zisk oproti
-  // prázdnu. Přátelák se do soutěžních čísel nepřimíchá (`competitive` dole).
-  if (formPool.length === 0) {
+  // Nováček z nižší soutěže nemá v TÉTO lize žádnou historii → okna by zůstala prázdná,
+  // všechny metriky `null` a predikce by se uložila jako `available: false` s nulami.
+  // To potká v 1. kole ~3 kluby v každé lize, a je to horší než přiznaně nepřesný odhad.
+  // Vezmeme proto formu **napříč soutěžemi** (`fetchLastFixtures` – tentýž zdroj, ze
+  // kterého staví formu reprezentace): zápasy z druhé ligy a poháru. Měřítko soupeřů je
+  // jiné, ale zápasy nováčka do ligových ratingů stejně nespadnou (není v jejich mapě →
+  // λ se počítá okenním modelem), takže jde o čistý zisk oproti prázdnu.
+  //
+  // Podmínka jde na BASELINE, ne na `formPool`: ten se naplní hned prvním odehraným kolem,
+  // kdežto ligová historie nováčkovi chybí celý podzim. Se starou podmínkou
+  // (`formPool.length === 0`) tým spadl po 1. kole z 20 zápasů kontextu na jediný zápas
+  // a okno SEASON (15 % zobrazení, **70 % λ**) mu zůstalo prázdné.
+  if (baselinePool.length === 0) {
     const recent = onlyFinished(
       await cachedJson(`fixlast:${teamId}`, LIST_TTL, () =>
         fetchLastFixtures(teamId, CLUB_FALLBACK_LAST)
       )
     );
-    formPool = recent;
+    // Doplnit, ne nahradit: odehraná ligová kola musí zůstat a s tím, jak přibývají,
+    // se váha překlopí na ně sama (LAST10/LAST5 jsou řezy podle data). Do okna SEASON
+    // se pak dostanou jen zápasy baseline sezóny – `tagBaseline` třídí podle `season`,
+    // takže druholigový ročník ano, letní příprava (už nová sezóna) ne. Ta zůstane
+    // jen ve formě, a to se sníženou váhou (`matchWeight` – přátelák).
+    formPool = dedupeFixtures([...formPool, ...recent]);
     baselinePool = recent;
   }
 

@@ -37,6 +37,37 @@ u karet je zhruba polovina přínosu z **rozhodčího** – informace známé p�
 rekreační kniha do linie často nedává. To je jediný trh, kde nemáme jen lépe spočítané
 průměry. Zároveň je tam nejvyšší marže (5–9 %), takže verdikt stejně padne až z CLV.
 
+### Hotovo 31. 7. — připravenost POROVNÁNÍ na start sezóny
+Revize datové cesty porovnání proti situaci „7. 8. začínají ligy". Tři díry opravené:
+- **Fallback nováčka se řídí baselinem, ne formou** (`buildClubTeam`). Po 1. kole se dřív
+  vypnul a tým spadl z 20 zápasů kontextu na jediný; okno SEASON (70 % λ) zůstalo prázdné.
+  Nově doplňuje, nenahrazuje. Detail v `docs/data-okna.md`.
+- **Přátelák má sníženou váhu i u klubů** (`matchWeight`). Letní příprava tažená fallbackem
+  se počítala jako plnohodnotné ligové kolo.
+- **Seznam týmů padá na loňskou sezónu**, když API novou ještě nevydalo (jinak prázdný
+  výběr týmů v Porovnání). Detail v `docs/provoz.md`.
+
+Čtvrtá, věcně největší změna: **forma je jen z aktuální sezóny.** Okna LAST10/LAST5,
+proužek W/D/L i „čisté konto z posl. 10" braly N nejnovějších zápasů dle data, takže v srpnu
+ukazovaly květen — s vahou 55 %. Od minulé sezóny je tu okno SEASON. Detail v `docs/data-okna.md`.
+**λ zůstalo nezměněné** (`crossSeasonForm: true`) — a tentokrát to je **změřené rozhodnutí**,
+ne odložení. `npm run backtest -- --form-current-season` (9 909 zápasů, identický vzorek):
+1X2 log-loss 1.0219 → **1.0210**, ECE 0.0087 → **0.0079**, ztráta na trh 0.0479 → 0.0472;
+znaménko konzistentní po sezónách (2024 −0.0016, 2025 −0.0001). Tedy **neškodí, ale je to šum**
+— a sjednocení by znamenalo bump `MODEL_VERSION`, který **vynuluje dataset predikcí**.
+Za −0.001 log-lossu se dataset neresetuje → **sjednotit až u nejbližšího bumpu z jiného důvodu**.
+Přepínač zůstává v backtestu jako ablace.
+
+`realRepository` dostal **první testový soubor** (`realRepository.test.ts`, API i cache
+nahrazené fakem); první test mutačně ověřen proti staré podmínce.
+
+**Otevřené, k ZMĚŘENÍ (ne k opravě od stolu): `BASELINE_SAMPLE = 10`.** Backtest, který
+nafitoval váhu **70 %** na okno SEASON, dostával **celou** minulou sezónu; produkce mu dává
+`spreadSample(…, 10)` (mimo start sezóny ~5 zápasů na venue). Při `shrinkMatches = 6` to
+znamená citelně silnější smrštění k ligovému průměru, než jaké bylo změřené. Postup: přidat
+`--baseline-sample=N` do `npm run backtest`, proběhnout `10` vs. neomezeno na tomtéž hold-outu
+a teprve podle log-lossu/ECE rozhodnout. Offline, 0 volání API.
+
 ### Hotovo 28. 7. (vše nasazené)
 - **Zavírací linie je konečně zavírací**: okno 12 h → **3 h**, cron **hodinově**
   (`20 * * * *`). Dřív padal „zavírací" snímek 9–12 h před výkopem. 0 volání navíc.
