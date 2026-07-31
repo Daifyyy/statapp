@@ -49,7 +49,20 @@
   Program, (b) `!document.hidden` (pauza při skryté záložce) a (c) je plausibilně živo (aspoň jeden
   zápas dne má výkop v `[now−2.5 h, now]`) → offseason = 0 pollů. `mergeLive` je **autoritativní**:
   přepíše minutu/skóre ze SSR a zápas, který ze živé sady vypadl (dohráno), z Programu **odebere**
-  (opraví i stale SSR); dokud poll neproběhl, věří SSR. `LiveScore` typ, mock vrací `[]`.
+  (opraví i stale SSR); dokud poll neproběhl, věří SSR. `LiveScore` nese i **stav o přestávce**
+  (`halftimeHome/Away`, jde stejnou odpovědí = 0 volání navíc). Mock **není prázdný** –
+  `MOCK_LIVE` (`lib/data/mock/fixtures.ts`) dělá živé zápasy z prvních tří dnů rozpisu
+  (12' / 38' / 72'), jinak by živý režim nešel v `npm run dev` vůbec zobrazit a regrese
+  vzniklá mimo zápasové okno by byla neviditelná až do dalšího kola.
+- **Průběh probíhajícího zápasu** (`lib/stats/liveReport.ts` – čisté + testy, endpoint
+  `/api/live-report`, UI `LiveReportPanel.tsx`): rozbalením živého řádku („▸ Průběh zápasu",
+  tlačítko **mimo `<Link>`**, jinak by klik navigoval do Porovnání) se ukáže, **kdo zatím určuje
+  hru** – jedna věta, chipy povahy, tři pruhy (Kontrola hry / Nebezpečnost / Důraz) a max
+  3 pozorování. Rozměry sdílí s dohraným přehledem (`buildMatchDimensions`), **prahy ne** –
+  ty jsou v `matchReport.ts` kalibrované na 90 minut a živě se škálují uplynulou minutou.
+  Detail a zdůvodnění prahů viz docstring `liveReport.ts`; kvóta a TTL viz `docs/provoz.md`.
+  Ověřeno proti živému API 31. 7. 2026 (`npm run probe-live`): statistiky rozehraného zápasu
+  chodí včetně **xG**, hodnoty jsou kumulativní k aktuální minutě.
 - **Data (Výsledky):** `getRecentResults()` (`repository.ts`) = posledních ~14 dní settlnutých
   predikcí (`getRecentSettledPredictions` z `predictionStore`, jen čte DB) → čistý mapper
   **`summarizeSettled`** (`lib/picks/results.ts`, testy `results.test.ts`) na `SettledMatch`

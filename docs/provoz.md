@@ -32,6 +32,22 @@
   nepřesný jinak (chybí nováčci, jsou v něm sestupující), ale to je pořád lepší než nic.
   V ustáleném stavu 0 volání navíc – fallback se sáhne jen na prázdný seznam, a krátké TTL
   prázdné odpovědi (3 h) zajistí, že se to samo přepne, jakmile API sezónu publikuje.
+- **Živé statistiky (`/api/live-report`) jsou jediná cesta, kterou řídí chování uživatele.**
+  Statistiky běžícího zápasu se **nedají sdílet mezi zápasy** (1 volání na zápas) ani dlouho
+  cachovat, takže na rozdíl od živého skóre (1 sdílené volání pro všechny ligy) roste jejich
+  cena s počtem otevřených panelů. Tři pojistky, v tomhle pořadí:
+  1. **Jen po rozkliknutí.** Nikdy automaticky pro seznam – zájem uživatele je jediná záminka
+     pro volání. Sbalení řádku panel odmontuje → poll skončí.
+  2. **TTL podle stavu** (`liveStatsTtl`): 120 s běžně, **600 s o poločase** (nic se nemění),
+     180 s v závěru. To je **tvrdý strop**: jeden zápas nestojí víc než ~30 volání za hodinu,
+     ať se dívá kdokoli.
+  3. **Denní čítač** (`lib/data/liveBudget.ts`, `LIVE_STATS_DAILY_MAX = 600`) → nad limitem
+     `reason: "budget"` a hláška v UI. Na serverless je **per-instance a padá se studeným
+     startem**, takže je to měkká pojistka a hlídač do logu, ne garance.
+  Odhad: zápas s nepřetržitě otevřeným panelem ≈ 47 volání; realistický provoz ~40–80/den
+  (1 % volné rezervy), těžký den ~470 (14 %).
+  **Rozehraná statistika se NIKDY nezapisuje do `MatchStatCache`** (vlastní klíč
+  `fixstatlive:` v `ApiCache`) – poloviční čísla by otrávila okna, na kterých stojí λ.
 - **`/fixtures/statistics` vrací OBA týmy v jedné odpovědi.** `assemble` (`realRepository`)
   proto z ní ukládá i **soupeřův** `MatchStat` – dřív se druhá půlka zahodila a týž zápas se
   stáhl podruhé, až přišel na řadu soupeř (**2× dražší**). Nejdražší opakující se položka

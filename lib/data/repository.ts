@@ -19,6 +19,7 @@ import type {
 } from "@/lib/types";
 import type { Metric } from "@/lib/types";
 import { buildMatchReport, type MatchReport } from "@/lib/stats/matchReport";
+import { buildLiveReport, type LiveReport } from "@/lib/stats/liveReport";
 import type { LeagueBaseline } from "@/lib/stats/predict";
 import type { TeamStrength } from "@/lib/stats/ratings";
 import { isRealDataConfigured } from "@/lib/db";
@@ -26,7 +27,7 @@ import { generateLeague } from "@/lib/game/teams";
 import type { GameTeam, LeagueAccess } from "@/lib/game/types";
 import { LEAGUES, buildTeams } from "./mock/seed";
 import { mockUpcomingPredictions, mockSettledPredictions } from "./mock/predictions";
-import { mockFixturesByDates } from "./mock/fixtures";
+import { mockFixturesByDates, MOCK_LIVE } from "./mock/fixtures";
 import { mockLeagueTransfers, mockClubBalances } from "./mock/transfers";
 import {
   getUpcomingPredictionRows,
@@ -99,9 +100,83 @@ export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]>
   return days;
 }
 
-/** Živé skóre našich lig (real = sdílené API+cache; mock = prázdno). */
+/**
+ * Živé skóre našich lig (real = sdílené API+cache; mock = pevná sada `MOCK_LIVE`).
+ * Mock schválně **není prázdný**: bez něj se živý režim v `npm run dev` nedá zobrazit
+ * a mimo zápasové okno by se na něm nedalo nic ověřit.
+ */
 export async function getLiveFixtures(): Promise<LiveScore[]> {
-  return useReal ? real.getLiveFixtures() : [];
+  if (useReal) return real.getLiveFixtures();
+  return MOCK_LIVE.map((l) => ({
+    fixtureId: l.fixtureId,
+    status: l.status,
+    elapsed: l.elapsed,
+    homeGoals: l.homeGoals,
+    awayGoals: l.awayGoals,
+    halftimeHome: l.halftimeHome,
+    halftimeAway: l.halftimeAway,
+  }));
+}
+
+/**
+ * **Přehled probíhajícího zápasu.** Stejná dělba jako u `getMatchReport`: repozitář dodá
+ * data, čisté jádro (`buildLiveReport`) rozhoduje. Vrací i `reason`, aby UI umělo rozlišit
+ * „ještě je brzy" od „statistiky nedorazily" – a aby se tiché selhání parsování nedalo
+ * splést s legitimně chybějícími daty.
+ */
+export async function getLiveMatchReport(input: {
+  fixtureId: number;
+  home: { id: number; name: string };
+  away: { id: number; name: string };
+  goals: { home: number; away: number } | null;
+  elapsed: number | null;
+  status: string;
+  halftime?: { home: number; away: number } | null;
+}): Promise<{ report: LiveReport | null; reason: string | null }> {
+  const stats = useReal
+    ? await real.getLiveMatchStatsPair(
+        input.fixtureId,
+        input.home.id,
+        input.away.id,
+        input.status,
+        input.elapsed
+      )
+    : ({ ok: true, ...mockLiveMatchStats(input.fixtureId, input.elapsed) } as const);
+
+  if (!stats.ok) return { report: null, reason: stats.reason };
+
+  const report = buildLiveReport({
+    home: stats.home,
+    away: stats.away,
+    teams: { home: input.home.name, away: input.away.name },
+    goals: input.goals,
+    elapsed: input.elapsed,
+    status: input.status,
+    halftime: input.halftime ?? null,
+  });
+  return { report, reason: report.reason };
+}
+
+/**
+ * Mock živých statistik: tytéž deterministické hodnoty jako u dohraného zápasu, jen
+ * **zkrácené poměrem odehraného času**. Díky tomu se dá offline proklikat i to, jak se
+ * přehled v čase mění (ve 12. minutě mlčí, v 72. mluví).
+ */
+function mockLiveMatchStats(
+  fixtureId: number,
+  elapsed: number | null
+): { home: Partial<Record<Metric, number>>; away: Partial<Record<Metric, number>> } {
+  const full = mockMatchStats(fixtureId);
+  const share = Math.min(1, Math.max(0, (elapsed ?? 0) / 90));
+  // Držení je podíl, ne objem – to se časem nekrátí.
+  const scale = (side: Partial<Record<Metric, number>>) => {
+    const out: Partial<Record<Metric, number>> = {};
+    for (const [k, v] of Object.entries(side) as [Metric, number][]) {
+      out[k] = k === "POSSESSION" ? v : k === "XG" ? Number((v * share).toFixed(2)) : Math.round(v * share);
+    }
+    return out;
+  };
+  return { home: scale(full.home), away: scale(full.away) };
 }
 
 /** Doplní klubovým zápasům pozici obou týmů v tabulce (FREE kontext; reprezentace přeskočí). */

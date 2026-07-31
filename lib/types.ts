@@ -248,6 +248,11 @@ export interface UpcomingFixture {
   /** Živé skóre (jen když `live`). */
   liveHome?: number | null;
   liveAway?: number | null;
+  /** Stav zápasu z API (`1H`/`HT`/`2H`…) – živý přehled podle něj váží, co smí tvrdit. */
+  liveStatus?: string;
+  /** Stav o přestávce; smysluplný až od druhého poločasu (viz `LiveScore`). */
+  halftimeHome?: number | null;
+  halftimeAway?: number | null;
 }
 
 /** Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". */
@@ -267,6 +272,13 @@ export interface LiveScore {
   elapsed: number | null;
   homeGoals: number | null;
   awayGoals: number | null;
+  /**
+   * Stav o přestávce – jde s toutéž odpovědí, tedy **0 volání navíc**. Platí až od
+   * druhého poločasu: v prvním API do tohohle pole sype průběžné skóre (viz komentář
+   * u `fixtureItemSchema`). Živý přehled ho proto používá jen podle stavu zápasu.
+   */
+  halftimeHome: number | null;
+  halftimeAway: number | null;
 }
 
 export interface Team {

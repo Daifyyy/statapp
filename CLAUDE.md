@@ -61,6 +61,8 @@ npm run reprice      # přepočet uložených predikcí z λ (0 API) — MÍSTO 
 npm run resettle     # přepočet výsledků na skóre po 90 min (AET/PEN)
 npm run backfill-stats      # xG/střely k historii
 npm run probe        # živá sonda API; probe-odds -- <fixtureId> --markets
+npm run probe-live   # živé statistiky + přehled průběhu tak, jak ho uvidí uživatel
+                     # -- <fixtureId> | --watch <s> (diff dvou snímků = důkaz kumulativnosti)
 npm run sim-game     # balanc Manažera (bez API/DB)
 npm run audit-leagues       # herní ligy: odvozené vs. kurátorované příčky
 npm run refresh-transfers   # přestupy z API-Football
@@ -89,6 +91,10 @@ binárku přes TLS proxy.
   `MIN_READABLE_CACHE_VERSION` (co se ještě čte). **Práh zvedej jen když by starší řádky dávaly
   špatná čísla**, ne kvůli kosmetickému poli — jinak zahodíš ~9 000 cachovaných zápasů.
 - `cachedJson` neukládá `null` a prázdné pole cachuje krátce (3 h).
+- **Statistika ROZEHRANÉHO zápasu nesmí do `MatchStatCache`** (`getLiveMatchStatsPair` má
+  vlastní klíč `fixstatlive:` v `ApiCache` s TTL v řádu minut). Poloviční čísla zapsaná jako
+  hotový zápas by tiše otrávila okna, na kterých stojí λ — a v track-recordu by to vypadalo
+  jako „model má horší měsíc".
 
 **Verzování modelu**
 - `MODEL_VERSION` verzuje **jen to, co generuje λ**. Bump **vynuluje dataset**.
@@ -111,6 +117,12 @@ binárku přes TLS proxy.
   matcher **mlčí**. `runSnapshotOdds` proto počítá, u kolika zápasů šel který trh vytáhnout,
   a nulu napříč vzorkem hlásí do logu (`missingMarkets`). Jedna kniha bez trhu je normální;
   **nula napříč všemi knihami a zápasy** je podezření na parsování — a jde poznat jen v agregátu.
+- **Živý a dohraný přehled zápasu sdílí ROZMĚRY, ne PRAHY.** Relativní normalizace je jediná
+  (`buildMatchDimensions` v `matchReport.ts`) — druhá kopie `share`/`pairOf` by se rozešla
+  a rozbila invariant „součet je 10". Absolutní prahy jsou naopak kalibrované na 90 minut,
+  takže si je `liveReport.ts` **škáluje uplynulou minutou** a má vlastní objemové brány;
+  rozměr Proměňování (góly − xG) živě **není** (gól z xG 0.11 ve 12. minutě dá kraj škály).
+  Živé věty navíc nesmí slibovat výsledek — kryto testem zakázaného slovníku.
 - **Relativní skóre se zaokrouhluje JEN na jedné straně**, druhá se dopočítá z té zaokrouhlené
   (`categories.ts`, `matchReport.ts`). Nezávislé zaokrouhlení dá 3.8 + 6.3 = 10.1 na reálných
   datech (držení 30:50, fauly 8.5:11.5) a pruh pak neodpovídá číslům.

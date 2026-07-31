@@ -14,6 +14,7 @@ import { AppHeader } from "./AppHeader";
 import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
 import { MatchReportPanel } from "./MatchReportPanel";
+import { LiveReportPanel } from "./LiveReportPanel";
 import { buildTipHref } from "./tipHref";
 import { useCurrentUser } from "./useCurrentUser";
 
@@ -123,6 +124,9 @@ function mergeLive(
         elapsed: l.elapsed,
         liveHome: l.homeGoals,
         liveAway: l.awayGoals,
+        liveStatus: l.status,
+        halftimeHome: l.halftimeHome,
+        halftimeAway: l.halftimeAway,
       };
     });
 }
@@ -789,6 +793,7 @@ function FixtureRow({
         ) : (
           <div className={cardClass}>{inner}</div>
         )}
+        {fixture.live && <LiveReportToggle fixture={fixture} />}
       </div>
       {!fixture.live && (
         <Link
@@ -806,6 +811,32 @@ function FixtureRow({
         label={isFavorite ? "Odebrat zápas z oblíbených" : "Přidat zápas do oblíbených"}
       />
     </li>
+  );
+}
+
+/**
+ * Rozbalení průběhu u živého zápasu. Tlačítko je **mimo** `<Link>` karty – uvnitř by klik
+ * navigoval do Porovnání místo rozbalení (stejný důvod jako u „Přehled zápasu" ve
+ * Výsledcích). Sbalením se panel odmontuje, takže se zastaví i jeho poll.
+ */
+function LiveReportToggle({ fixture }: { fixture: UpcomingFixture }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="px-1 text-[11px] font-medium text-muted transition hover:text-foreground"
+      >
+        {open ? "▾" : "▸"} Průběh zápasu
+      </button>
+      {open && (
+        <div className="mt-1.5">
+          <LiveReportPanel fixture={fixture} />
+        </div>
+      )}
+    </div>
   );
 }
 

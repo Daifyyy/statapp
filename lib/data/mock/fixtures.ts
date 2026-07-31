@@ -15,6 +15,32 @@ function leagueMeta(leagueId: number): { name: string; logoUrl: string } {
   };
 }
 
+/**
+ * Mock **živých** zápasů. Bez nich se živý režim nedá v `npm run dev` vůbec zobrazit
+ * (mock `getLiveFixtures` vracel prázdno) a regrese vzniklá mimo zápasové okno by byla
+ * neviditelná až do dalšího víkendu.
+ *
+ * Minuty jsou zvolené tak, aby pokryly všechny tři stavy živého přehledu: **12'** je pod
+ * prahem („na přehled je zatím brzy"), **38'** je běžný průběh a **72'** závěr, kde se
+ * zapínají i pozorování vázaná na čas.
+ *
+ * `fixtureId` se čísluje od 9 000 000 vzestupně přes dny, takže při běžném sedmidenním
+ * okně padne každý z těchhle tří na **první zápas jiného dne** (dnes / zítra / pozítří).
+ * Pro vývoj to stačí – stavy se proklikají záložkami dnů; „živý" zápas na zítřejší kartě
+ * je artefakt mocku, ne chování produkce.
+ */
+export const MOCK_LIVE = [
+  { fixtureId: 9_000_000, elapsed: 12, homeGoals: 0, awayGoals: 0, status: "1H", halftimeHome: 0, halftimeAway: 0 },
+  { fixtureId: 9_000_001, elapsed: 38, homeGoals: 1, awayGoals: 0, status: "1H", halftimeHome: 1, halftimeAway: 0 },
+  // Ve druhém poločase je poločasový stav skutečně poločasový → v přehledu se objeví
+  // věta o vývoji po přestávce (tady 1:1 → 1:2, tedy jeden gól).
+  { fixtureId: 9_000_002, elapsed: 72, homeGoals: 1, awayGoals: 2, status: "2H", halftimeHome: 1, halftimeAway: 1 },
+] as const;
+
+const MOCK_LIVE_BY_ID = new Map<number, (typeof MOCK_LIVE)[number]>(
+  MOCK_LIVE.map((l) => [l.fixtureId, l])
+);
+
 export function mockFixturesByDates(dates: string[]): FixtureDay[] {
   const clubs = buildTeams().filter((t) => t.entityType === "CLUB");
 
@@ -41,8 +67,20 @@ export function mockFixturesByDates(dates: string[]): FixtureDay[] {
       .map((p, i) => {
         const meta = leagueMeta(p.leagueId);
         const hour = String(16 + (i % 5)).padStart(2, "0");
+        const id = fixtureId++;
+        // Živý stav nese už SSR snapshot – jinak by se klientský poll vůbec nespustil
+        // (`plausiblyLive` chce buď běžící zápas, nebo výkop v posledních 2.5 h).
+        const liveState = MOCK_LIVE_BY_ID.get(id);
         return {
-          fixtureId: fixtureId++,
+          fixtureId: id,
+          ...(liveState
+            ? {
+                live: true,
+                elapsed: liveState.elapsed,
+                liveHome: liveState.homeGoals,
+                liveAway: liveState.awayGoals,
+              }
+            : {}),
           leagueId: p.leagueId,
           leagueName: meta.name,
           leagueLogoUrl: meta.logoUrl,

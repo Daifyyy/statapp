@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { SettledMatch } from "@/lib/types";
-import type { MatchDimension, MatchReport } from "@/lib/stats/matchReport";
+import type { MatchReport } from "@/lib/stats/matchReport";
+import { Chip, DimensionBar } from "./MatchDimensionBar";
 
 /**
  * Kategorický přehled odehraného zápasu ve Výsledcích – kdo dominoval, o jaký typ zápasu
@@ -54,38 +55,6 @@ function useMatchReport(match: SettledMatch): ReportState {
   }, [match]);
 
   return data;
-}
-
-/** Jeden rozměr jako protilehlé pruhy – vizuálně shodné s Kategoriemi v Porovnání. */
-function DimensionBar({ dim }: { dim: MatchDimension }) {
-  if (!dim.available) return null;
-  const homeShare = dim.home * 10;
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2 text-[11px]">
-        <span className="font-semibold tabular-nums text-home">{dim.home.toFixed(1)}</span>
-        <span className="min-w-0 flex-1 truncate text-center uppercase tracking-wide text-muted">
-          {dim.label}
-        </span>
-        <span className="font-semibold tabular-nums text-away">{dim.away.toFixed(1)}</span>
-      </div>
-      <div className="relative mt-1 flex h-2 overflow-hidden rounded-full bg-border/60">
-        <div className="bar-fill bg-home/80" style={{ width: `${homeShare}%` }} />
-        <div className="bar-fill bg-away/80" style={{ width: `${100 - homeShare}%` }} />
-      </div>
-      {dim.detail && (
-        <p className="mt-0.5 text-center text-[10px] text-muted">{dim.detail}</p>
-      )}
-    </div>
-  );
-}
-
-function Chip({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
-      {children}
-    </span>
-  );
 }
 
 export function MatchReportPanel({ match }: { match: SettledMatch }) {

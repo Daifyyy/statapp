@@ -158,6 +158,18 @@ const fixtureItemSchema = z.object({
   }),
   score: z
     .object({
+      /**
+       * **Pozor na sémantiku u živého zápasu:** v prvním poločase tohle pole zrcadlí
+       * PRŮBĚŽNÉ skóre, ne stav po 45 minutách (ověřeno na živých zápasech – Motor Lublin
+       * ve 40. minutě už měl `halftime` 0:1). Smysl „stav o přestávce" má až od druhého
+       * poločasu dál. Kdo z toho počítá, musí si stav zápasu ohlídat.
+       */
+      halftime: z
+        .object({
+          home: z.number().nullable().optional(),
+          away: z.number().nullable().optional(),
+        })
+        .optional(),
       fulltime: z
         .object({
           home: z.number().nullable().optional(),

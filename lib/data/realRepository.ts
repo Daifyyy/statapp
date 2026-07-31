@@ -45,6 +45,11 @@ import {
   type MatchContext,
 } from "./cache";
 import { prisma } from "@/lib/db";
+import {
+  LiveBudgetError,
+  liveStatsUsage,
+  tryConsumeLiveStats,
+} from "./liveBudget";
 import { selectCurrentInjuries } from "./injuries";
 import {
   computeLeagueBaseline,
@@ -830,6 +835,8 @@ export async function getLiveFixtures(): Promise<LiveScore[]> {
         elapsed: f.fixture.status.elapsed ?? null,
         homeGoals: f.goals.home,
         awayGoals: f.goals.away,
+        halftimeHome: f.score?.halftime?.home ?? null,
+        halftimeAway: f.score?.halftime?.away ?? null,
       }));
   } catch (e) {
     // Živé skóre v Programu prostě přestane svítit a `mergeLive` se vrátí k SSR datům –
@@ -1275,4 +1282,84 @@ export async function getMatchStatsPair(
   const away = statsToMetrics(teamStats(awayId));
   if (Object.keys(home).length === 0 && Object.keys(away).length === 0) return null;
   return { home, away };
+}
+
+/** Metriky obou stran jednoho zápasu, nebo důvod, proč nejsou. */
+export type LiveStatsResult =
+  | { ok: true; home: Partial<Record<Metric, number>>; away: Partial<Record<Metric, number>> }
+  | { ok: false; reason: "nostats" | "budget" | "error" };
+
+/**
+ * TTL živých statistik podle stavu zápasu. **Tohle je hlavní nástroj na kvótu** – při
+ * 120 s nemůže jeden zápas stát víc než ~30 volání za hodinu, ať se dívá kdokoli.
+ * O poločase se nemění nic, tak proč se ptát; v závěru se hraje o dost a stojí to za
+ * hustší obnovu jen chvíli.
+ */
+export function liveStatsTtl(status: string, elapsed: number | null): number {
+  if (status === "HT" || status === "BT") return 600;
+  if (status === "P" || (elapsed ?? 0) >= 88) return 180;
+  return 120;
+}
+
+/**
+ * Statistiky **rozehraného** zápasu. Vlastní cesta vedle `getMatchStatsPair`, ne její
+ * varianta – ze dvou důvodů, které míří proti sobě:
+ *
+ *  - `getMatchStatsPair` **čte** `MatchStatCache`, kde u běžícího zápasu z principu nic
+ *    není → každé zavolání by šlo upstream, a panel se pollí po minutě.
+ *  - Rozehraná statistika se ale **nikdy nesmí zapsat** do `MatchStatCache`: poloviční
+ *    čísla by otrávila okna, na kterých stojí λ predikcí. Proto vlastní klíč v `ApiCache`
+ *    s krátkým TTL, který se sám protočí, plus `cachedJsonMemo` na tlumení pollu více
+ *    klientů nad týmž zápasem.
+ *
+ * **Rozlišuje „nemáme" od „rozbilo se".** `logError` se volá i tehdy, když fetch projde,
+ * ale nenamapuje se ani jedna metrika – to je přesně ten tichý případ, kdy by rozbité
+ * parsování vypadalo jako „tahle liga statistiky živě nemá" (CLAUDE.md: best-effort cesta
+ * musí mít vlastní ověření; `catch` nikdy nesmí mlčet).
+ */
+export async function getLiveMatchStatsPair(
+  fixtureId: number,
+  homeId: number,
+  awayId: number,
+  status: string,
+  elapsed: number | null
+): Promise<LiveStatsResult> {
+  let stats: ApiFixtureStats;
+  try {
+    stats = await cachedJsonMemo(
+      `fixstatlive:${fixtureId}`,
+      30,
+      liveStatsTtl(status, elapsed),
+      () => {
+        // Odečítá se až tady, tedy jen při skutečném missu cache.
+        if (!tryConsumeLiveStats()) throw new LiveBudgetError();
+        return fetchFixtureStatistics(fixtureId);
+      }
+    );
+  } catch (e) {
+    if (e instanceof LiveBudgetError) {
+      logError("realRepository.getLiveMatchStatsPair", e, {
+        fixtureId,
+        usage: liveStatsUsage(),
+      });
+      return { ok: false, reason: "budget" };
+    }
+    logError("realRepository.getLiveMatchStatsPair", e, { fixtureId, status });
+    return { ok: false, reason: "error" };
+  }
+
+  const teamStats = (id: number) => stats.find((s) => s.team.id === id) ?? null;
+  const home = statsToMetrics(teamStats(homeId));
+  const away = statsToMetrics(teamStats(awayId));
+  if (Object.keys(home).length === 0 && Object.keys(away).length === 0) {
+    // Odpověď dorazila, ale nic se z ní nenamapovalo – buď je zápas úplně čerstvý, nebo
+    // se rozešly názvy typů. Druhé je tiché selhání, proto to jde do logu vždy.
+    logError(
+      "realRepository.getLiveMatchStatsPair",
+      new Error("živé statistiky bez použitelných metrik"),
+      { fixtureId, status, teams: stats.length }
+    );
+    return { ok: false, reason: "nostats" };
+  }
+  return { ok: true, home, away };
 }

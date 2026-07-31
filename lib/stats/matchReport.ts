@@ -59,6 +59,10 @@ export interface MatchReport {
 /**
  * Prahy na jednom místě (zásada z `lib/insights/`). Vztažené k typickému zápasu top ligy:
  * ~25 střel, ~2.7 xG, ~22 faulů a ~4 karty dohromady.
+ *
+ * **Jsou kalibrované na 90 minut** – proto si je `liveReport.ts` škáluje podle uplynulé
+ * minuty (`FULL_TIME_THRESHOLDS`) místo aby je přebíral. Relativní rozměry se sdílí,
+ * absolutní prahy ne.
  */
 const T = {
   /** Součet xG obou stran: nad = otevřený, pod = uzavřený. */
@@ -81,11 +85,18 @@ const T = {
   possessionDominant: 58,
 } as const;
 
-const num = (v: number | undefined): number | null =>
+/**
+ * Prahy dohraného zápasu pro moduly, které si je **škálují** (dnes `liveReport.ts`).
+ * Vystavené schválně jako read-only konstanta, ne k přepisu – kdo je potřebuje jinak,
+ * ať si drží vlastní sadu odvozenou z těchhle, aby bylo v kódu vidět, odkud vzešly.
+ */
+export const FULL_TIME_THRESHOLDS = T;
+
+export const num = (v: number | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
 /** Součet dostupných metrik; `null`, když ani jedna není. */
-function sumOf(side: MatchSide, metrics: Metric[]): number | null {
+export function sumOf(side: MatchSide, metrics: Metric[]): number | null {
   let sum = 0;
   let seen = false;
   for (const m of metrics) {
@@ -102,7 +113,7 @@ function sumOf(side: MatchSide, metrics: Metric[]): number | null {
  * `categories.ts`): 5.0 = vyrovnané. Obě nuly → `null` (nula ku nule není 50/50 remíza,
  * je to „nedělo se nic" a rozměr se má skrýt).
  */
-function share(home: number | null, away: number | null): number | null {
+export function share(home: number | null, away: number | null): number | null {
   if (home == null || away == null) return null;
   const total = home + away;
   if (total <= 0) return null;
@@ -116,13 +127,13 @@ const round1 = (x: number) => Math.round(x * 10) / 10;
  * zaokrouhlovat obě zvlášť by dalo součet 10.1 (6.35 → 6.4 a 3.65 → 3.7) a rozbilo by to
  * invariant, na kterém stojí vykreslení protilehlých pruhů.
  */
-function pairOf(value: number | null): { home: number; away: number } {
+export function pairOf(value: number | null): { home: number; away: number } {
   const home = value == null ? 5 : round1(Math.min(10, Math.max(0, value)));
   return { home, away: round1(10 - home) };
 }
 
 /** Karty jedné strany (žluté + červené), `null` když ani jedno není. */
-function cardsOf(side: MatchSide): number | null {
+export function cardsOf(side: MatchSide): number | null {
   return sumOf(side, ["YELLOW_CARDS", "RED_CARDS"]);
 }
 
@@ -238,6 +249,30 @@ function physicalDimension(home: MatchSide, away: MatchSide): MatchDimension {
     ...pairOf(value),
     detail: parts.join(", "),
     available: value != null,
+  };
+}
+
+/**
+ * Všechny rozměry naráz z už připravených stran (góly do nich vsypal volající).
+ *
+ * Sdílí ji `buildMatchReport` i `buildLiveReport` (`liveReport.ts`). **Relativní
+ * normalizace smí existovat jen jednou** – druhá kopie `share`/`pairOf` by se dřív nebo
+ * později rozešla a rozbila invariant „součet obou stran je 10", na kterém stojí
+ * vykreslení protilehlých pruhů (CLAUDE.md). Absolutní prahy se naopak nesdílí: ty jsou
+ * u živého zápasu jiné, protože jsou vztažené k objemu za 90 minut.
+ *
+ * Živý report si z výsledku bere jen CONTROL/THREAT/PHYSICAL – FINISHING (góly − xG) je
+ * v rozehraném zápase šum (gól z xG 0.11 ve 12. minutě dá kraj škály).
+ */
+export function buildMatchDimensions(
+  home: MatchSide,
+  away: MatchSide
+): Record<MatchDimensionKey, MatchDimension> {
+  return {
+    CONTROL: controlDimension(home, away),
+    THREAT: threatDimension(home, away),
+    FINISHING: finishingDimension(home, away),
+    PHYSICAL: physicalDimension(home, away),
   };
 }
 
@@ -439,11 +474,8 @@ export function buildMatchReport(
     away: goals ? { ...away, GOALS_FOR: goals.away } : away,
   };
 
-  const control = controlDimension(withGoals.home, withGoals.away);
-  const threat = threatDimension(withGoals.home, withGoals.away);
-  const finishing = finishingDimension(withGoals.home, withGoals.away);
-  const physical = physicalDimension(withGoals.home, withGoals.away);
-  const dimensions = [control, threat, finishing, physical];
+  const dims = buildMatchDimensions(withGoals.home, withGoals.away);
+  const dimensions = [dims.CONTROL, dims.THREAT, dims.FINISHING, dims.PHYSICAL];
 
   const available = dimensions.some((d) => d.available);
   if (!available) {
@@ -459,13 +491,8 @@ export function buildMatchReport(
   return {
     available: true,
     dimensions,
-    character: characterOf(withGoals.home, withGoals.away, threat),
-    verdict: verdictOf(teams, goals, threat),
-    notes: notesOf(teams, withGoals.home, withGoals.away, {
-      CONTROL: control,
-      THREAT: threat,
-      FINISHING: finishing,
-      PHYSICAL: physical,
-    }),
+    character: characterOf(withGoals.home, withGoals.away, dims.THREAT),
+    verdict: verdictOf(teams, goals, dims.THREAT),
+    notes: notesOf(teams, withGoals.home, withGoals.away, dims),
   };
 }
