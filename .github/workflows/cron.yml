@@ -32,8 +32,16 @@ on:
     - cron: "0 4 * * *" # warm
     - cron: "30 4 * * *" # predict-upcoming
     - cron: "0 5 * * *" # refresh-transfers
+    # Vypořádání jede DVAKRÁT denně (ráno + večer). S jediným ranním během čekal zápas
+    # s výkopem v 18:00 UTC na ✓/✗ ~17 h – a protože `schedule` v Actions se opožďuje,
+    # v praxi to bylo až 08:30 UTC následujícího dne. Večerní běh chytí i pozdní zápasy
+    # (grace `getUnsettledPredictions` = 3 h → výkop 18:00 UTC je v 22:00 UTC zralý).
+    # Skóre samotné na tomhle nestojí – to jde do Výsledků z denního rozpisu –, ale
+    # odznak „trefili jsme to" ano. Cena je pár volání (`fetchFixturesByIds` po 20).
     - cron: "0 6 * * *" # settle-results
     - cron: "15 6 * * *" # settle-tips
+    - cron: "0 22 * * *" # settle-results (večerní zápasy týž den)
+    - cron: "15 22 * * *" # settle-tips
   # Ruční spuštění (Actions → Cron → Run workflow), např. po výpadku.
   workflow_dispatch:
     inputs:
@@ -80,6 +88,8 @@ jobs:
             "0 5 * * *")    path="refresh-transfers" ;;
             "0 6 * * *")    path="settle-results" ;;
             "15 6 * * *")   path="settle-tips" ;;
+            "0 22 * * *")   path="settle-results" ;;
+            "15 22 * * *")  path="settle-tips" ;;
             # Neznámý rozvrh = někdo přidal `- cron:` a zapomněl na větev tady.
             # Radši hlasitě spadnout než tiše zavolat špatný endpoint.
             *) echo "Neznámý rozvrh: '$SCHEDULE' (událost: $EVENT)" >&2; exit 1 ;;

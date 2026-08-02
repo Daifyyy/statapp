@@ -216,9 +216,20 @@
     s kurzem na rohy **a nic by nekřičelo**. `teamTotalSide` proto ostatní veličiny
     (corner/card/booking/offside/foul/shot/throw) odfiltruje **jmenovitě dřív**, než hledá
     stranu, a „Goals Over/Under" bez home/away vrací `null` (to je total zápasu).
+- **OD 2. 8. 2026 BĚŽÍ ROHY I KARTY V PRODUKCI** (`runPredictUpcoming` → sloupce
+  `lambdaCorners*`, `lambdaCards*`, `refereeFactor`, `refereeSample` na `FixturePrediction`).
+  Do té doby je volal **jen backtest**, takže se na oba trhy sbíraly kurzy a **nebylo proti
+  čemu měřit CLV** — tedy přesně to, na čem visel verdikt o nich. Počítají se z týchž zápasů,
+  ze kterých vzniká gólová λ (`Team.leagueMatches` → `cornerValues`/`cardValues`), tedy
+  **0 volání API navíc**; ligové měřítko dodává `getLeagueCountBaseline` z cachovaných zápasů
+  (generický default posouvá λ ligám s jiným standardem — Fortuna liga má fauly 12.4/13.6
+  proti defaultu 10.8/11.3). **Mimo `MODEL_VERSION`**: je to paralelní stopa, ne jiný výpočet
+  1X2, a bump by zbytečně vynuloval dataset. **Faktor rozhodčího je zatím neutrální** (1 /
+  vzorek 0) — `buildRefereeIndex` potřebuje korpus se jmény rozhodčích, který produkce
+  nestaví, a u karet je to ~polovina změřeného přínosu. Uživatel je vidí v přehledu
+  odehraného zápasu (sekce „Rohy a karty", `lib/picks/matchReview.ts`).
 - **MODEL ROHŮ** (`lib/picks/corners.ts`, čisté + testy; `npm run backtest -- --corners`)
-  — **jediný trh, kde model má doložený skill A je kalibrovaný.** Zatím jen změřený,
-  **v produkci se nepoužívá** (`compareTeams` se nemění, nic se neukládá, 0 API volání).
+  — **jediný trh, kde model má doložený skill A je kalibrovaný.**
   - **Konstrukce je TÁŽ jako u gólů**, jen nad jinou metrikou: `λ = ref × (rohy týmu / ref)
     × (rohy inkasované soupeřem / ref)`. Sdílí **`strengthRatio`** (proto je vyexportovaná
     z `predict.ts`), okna i `PREDICTION_WINDOW_WEIGHTS` → není to druhá implementace, která
@@ -257,8 +268,8 @@
     na rohy a měřit **CLV**, ne rovnou sázet.
 - **MODEL KARET** (`lib/picks/cards.ts`, čisté + testy; `npm run backtest -- --cards`)
   — **nejlepší trh, jaký jsme zatím změřili**, a jediný, kde má model vstup, který trh
-  systematicky podvažuje. Zatím jen změřený, **v produkci se nepoužívá** (`compareTeams`
-  se nemění, nic se neukládá, 0 API volání).
+  systematicky podvažuje. Od 2. 8. 2026 běží i v produkci (viz výše) — ale **bez faktoru
+  rozhodčího**, tedy zhruba s polovinou změřeného přínosu.
   - **Konstrukce je TÁŽ jako u gólů a rohů**, jen nad jinou metrikou:
     `λ = ref × (karty týmu / ref) × (karty, které tým vyvolá u soupeřů / ref) × rozhodčí`.
     Sdílí `strengthRatio`, okna i `PREDICTION_WINDOW_WEIGHTS`, rozdělení počtu událostí

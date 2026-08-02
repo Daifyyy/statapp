@@ -100,6 +100,23 @@ binárku přes TLS proxy.
 - `MODEL_VERSION` verzuje **jen to, co generuje λ**. Bump **vynuluje dataset**.
 - **ρ, `LAMBDA_SHARPEN` a Platt kalibrace pod něj NEPATŘÍ** — jsou to post-parametry nad λ.
   Po jejich změně jeď **`npm run reprice`** (0 API, historie zůstane).
+- **λ rohů a karet (`lambdaCorners*`/`lambdaCards*`) pod něj NEPATŘÍ taky** — je to paralelní
+  stopa vedle gólové λ, ne jiný výpočet 1X2.
+- **Track-record, kalibrace a benchmark čtou JEN aktuální verzi.** `getSettledPredictionRows`
+  filtruje defaultně (`MODEL_VERSION` žije v leaf `lib/data/modelVersion.ts` kvůli cyklu).
+  Bez toho počítalo `/predikce` z 69 řádků, kde bylo **62 z verze 1** — čísla neměřila model,
+  který běží. Verze je **parametr s defaultem**, ne volitelný filtr.
+
+**Výsledky a přehled zápasu**
+- **Záložka Výsledky se čte z ROZPISU, ne z `FixturePrediction`.** Náš tip je překryv
+  (`mergeTips`), ne podmínka zobrazení. Předtím zápas bez predikce nešel vidět nikdy a
+  čerstvě dohraný až po nočním settle (u večerního výkopu ~17 h). Nevracet zpátky.
+- **Rohové a kartové λ se počítají v `runPredictUpcoming`** z `Team.leagueMatches` čistými
+  funkcemi (`cornerValues`/`cardValues` → `predictCorners`/`predictCards`) — **0 volání API**.
+  Do 2. 8. 2026 tyhle modely v produkci **nikdy neběžely** (volal je jen backtest), takže se na
+  ně sbíraly kurzy bez čehokoli, proti čemu měřit CLV. Ligové měřítko dodává
+  `getLeagueCountBaseline` z cachovaných zápasů; generický default ligám s jiným rozhodcovským
+  standardem posouvá λ (Fortuna liga: fauly 12.4/13.6 vs. default 10.8/11.3).
 
 **Vercel Hobby (dvakrát to tiše kazilo provoz)**
 - **`maxDuration` je stropovaná na 60 s a vyšší hodnota se ignoruje.** Nezvyšovat bez Pro plánu;
@@ -112,6 +129,11 @@ binárku přes TLS proxy.
 - `AUTH_URL` musí být stabilní doména (jinak Google `redirect_uri_mismatch`).
 
 **Kurzy a trhy**
+- **Brána má vlastní prahy a `insufficient` NENÍ `fail`** (`lib/picks/gate.ts`). Kritérium
+  bez dost velkého vzorku **nesmí vydat verdikt**: na dnešních 7 zápasech vychází náš
+  log-loss 0.910 vs. trh 1.031 (= „porážíme trh"), ačkoli SE je ±0.26 a skutečný rozdíl je
+  0.048 **opačně**. Prahy: kalibrace ≥ 100 bodů křivky, vs. trh ≥ 200 zápasů, CLV ≥ 200 tipů
+  a ⌀ posun ≥ **1.5 p. b. = zaplacená marže**, ne nula.
 - **Sběr kurzů hlídá POKRYTÍ TRHŮ** (`lib/data/oddsCoverage.ts` + testy). `bookOddsOf`
   vynechává trh, který nenajde (`...(corners.length ? {corners} : {})`), takže rozbitý
   matcher **mlčí**. `runSnapshotOdds` proto počítá, u kolika zápasů šel který trh vytáhnout,
@@ -176,16 +198,18 @@ binárku přes TLS proxy.
 Nové vstupy (sestavy, shot-level xG) tenhle seznam otevírají znovu. Přeskládání téhož ne.
 
 ## Kde stojíme (detail v `docs/stav.md`)
-Všechno je commitnuté a nasazené. **Blokuje jen start lig 7. 8. 2026** — model je změřený tak
-daleko, jak to bez čerstvých dat jde.
+**Fortuna liga běží od 25. 7. 2026**, top ligy startují 7. 8. Sběr kurzů je proti živému API
+ověřený: rohy a týmové totaly **8/8 zápasů**, karty **3/8** (matcher chytá, trh nabízí míň).
 
 Odpověď na hlavní otázku „dá se z našich dat postavit profitabilní sázecí model?" →
 **na gólových trzích ne**. Model má **skill, ale ne hranu**; mezi tím stojí marže.
 Otevřená zůstává jediná větev: **trhy, kde model něco umí a kde jsme ještě neviděli cenu**
 (týmové totaly, karty, rohy) — a verdikt o nich přijde z **CLV, ne z ROI**.
 
-**První věc po startu lig:** `npm run probe-odds -- <fixtureId> --markets` — parsování rohů,
-karet a týmových totalů vzniklo v mezisezóně a **nikdy neběželo proti živému API**.
+**Zbývá ověřit už jen KARTY:** `npm run probe-odds -- <fixtureId> --markets` — 3/8 pokrytí může
+být realita trhu i špatný název; projít i trhy se slovem „card", které se vědomě nesnímají.
+Od 2. 8. 2026 se **λ rohů a karet konečně ukládá v produkci** (dřív je volal jen backtest),
+takže na tyhle trhy je poprvé proti čemu měřit CLV.
 
 **Brána:** do stakingu, bankrollu ani Kelly **neinvestovat**, dokud aspoň jeden trh nemá kladné
 CLV nebo ROI s intervalem spolehlivosti mimo nulu. Kelly je násobič hrany — na záporné hraně

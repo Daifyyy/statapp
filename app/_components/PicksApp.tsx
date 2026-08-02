@@ -16,13 +16,26 @@ import type {
 } from "@/lib/picks/reliability";
 import type { MarketBenchmark } from "@/lib/picks/market";
 import type { ClvSummary } from "@/lib/picks/clv";
+import {
+  evaluateEdgeGate,
+  type EdgeGate,
+  type GateCriterion,
+  type GateStatus,
+} from "@/lib/picks/gate";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
 import { ProLock } from "./ProLock";
 import { PickRow } from "./PickRow";
+import { ViewTabs } from "./ViewTabs";
 import type { SessionUser } from "./sessionUser";
 
 type Venue = "home" | "away" | "any";
+
+/**
+ * Dva pohledy nad **týmiž** načtenými daty: „Tipy" = k čemu tam člověk jde, „Model" =
+ * jestli se tomu dá věřit. Přepnutí nic nedotahuje.
+ */
+type View = "picks" | "model";
 
 const MARKET_LABELS: Record<PickMarket, string> = {
   win: "Výhra",
@@ -72,6 +85,7 @@ async function loadPicks(
 }
 
 export function PicksApp({ user }: { user: SessionUser | null }) {
+  const [view, setView] = useState<View>("picks");
   const [market, setMarket] = useState<PickMarket>("win");
   const [venue, setVenue] = useState<Venue>("home");
   const [minProb, setMinProb] = useState(0.65);
@@ -161,67 +175,224 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
         ]}
       />
 
-      <h1 className="mt-4 text-lg font-semibold text-foreground">Predikční tipy</h1>
+      <h1 className="mt-4 text-lg font-semibold text-foreground">Predikce</h1>
+      {/* Rozpor „jmenuje se to tipy, ale nesázej podle toho" se řeší TADY, ne až ve
+          třetím panelu, kam se doroluje málokdo. */}
       <p className="mt-1 text-sm text-muted">
-        Nadcházející zápasy vybrané podle pravidla z předpočítaných predikcí.
+        Které zápasy má model za nejjistější.{" "}
+        <span className="font-medium text-foreground">Není to sázkové doporučení</span> —
+        na gólových trzích model nepřekonává kurzy sázkovek.
       </p>
 
-      {/* Agregátní/historické panely (track-record, benchmark, backtest) jsou FREE –
-          budují důvěru. Zamčený je jen seznam konkrétních nadcházejících tipů. */}
-      {backtest && (
-        <StrategyPanel backtest={backtest} market={market} venue={venue} minProb={minProb} />
-      )}
-      {track && <TrackRecordPanel track={track} />}
-      {marketBench && marketBench.n > 0 && <MarketPanel market={marketBench} />}
-      {clv && clv.n > 0 && <ClvPanel clv={clv} />}
-      {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
-      {reliability && <ReliabilityPanel reliability={reliability} />}
-
-      <RuleControls
-        market={market}
-        venue={venue}
-        minProb={minProb}
-        valueOnly={valueOnly}
-        hideUnready={hideUnready}
-        onMarket={setMarket}
-        onVenue={setVenue}
-        onMinProb={setMinProb}
-        onValueOnly={setValueOnly}
-        onHideUnready={setHideUnready}
-        onPreset={applyPreset}
+      <ViewTabs
+        tabs={[
+          { value: "picks", label: "Tipy" },
+          { value: "model", label: "Jak si model vede" },
+        ]}
+        active={view}
+        onSelect={setView}
       />
 
-      {/* Sekce nadcházejících tipů = PRO. FREE/anonym → ProLock místo seznamu. */}
-      {locked ? (
-        <div className="mt-4">
-          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
-        </div>
-      ) : loading && !picks ? (
-        <PicksSkeleton />
-      ) : error ? (
-        <Empty>
-          <p>{error}</p>
-          <button
-            type="button"
-            onClick={retry}
-            className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
-          >
-            ↻ Zkusit znovu
-          </button>
-        </Empty>
-      ) : picks && picks.length > 0 ? (
-        <ul className="mt-4 space-y-2">
-          {picks.map((p) => (
-            <PickRow key={p.fixtureId} pick={p} />
-          ))}
-        </ul>
+      {view === "picks" ? (
+        <>
+          <RuleControls
+            market={market}
+            venue={venue}
+            minProb={minProb}
+            valueOnly={valueOnly}
+            hideUnready={hideUnready}
+            onMarket={setMarket}
+            onVenue={setVenue}
+            onMinProb={setMinProb}
+            onValueOnly={setValueOnly}
+            onHideUnready={setHideUnready}
+            onPreset={applyPreset}
+          />
+
+          {/* Backtest NAVOLENÉHO pravidla patří k tipům, ne do diagnostiky: je to jediné
+              číslo, které k rozhodnutí „mám tomuhle pravidlu věřit" stačí. */}
+          {backtest && (
+            <StrategyPanel
+              backtest={backtest}
+              market={market}
+              venue={venue}
+              minProb={minProb}
+              settled={track?.n ?? 0}
+            />
+          )}
+
+          {/* Sekce nadcházejících tipů = PRO. FREE/anonym → ProLock místo seznamu. */}
+          {locked ? (
+            <div className="mt-4">
+              <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+            </div>
+          ) : loading && !picks ? (
+            <PicksSkeleton />
+          ) : error ? (
+            <Empty>
+              <p>{error}</p>
+              <button
+                type="button"
+                onClick={retry}
+                className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
+              >
+                ↻ Zkusit znovu
+              </button>
+            </Empty>
+          ) : picks && picks.length > 0 ? (
+            <ul className="mt-4 space-y-2">
+              {picks.map((p) => (
+                <PickRow key={p.fixtureId} pick={p} />
+              ))}
+            </ul>
+          ) : (
+            <Empty>
+              Žádné nadcházející zápasy neodpovídají pravidlu. Mimo sezónu (léto) nemají
+              top ligy naplánované zápasy – zkus jiné pravidlo nebo se vrať během sezóny.
+            </Empty>
+          )}
+        </>
       ) : (
-        <Empty>
-          Žádné nadcházející zápasy neodpovídají pravidlu. Mimo sezónu (léto) nemají
-          top ligy naplánované zápasy – zkus jiné pravidlo nebo se vrať během sezóny.
-        </Empty>
+        <ModelView
+          reliability={reliability}
+          marketBench={marketBench}
+          clv={clv}
+          track={track}
+          benchmark={benchmark}
+        />
       )}
     </main>
+  );
+}
+
+/**
+ * Záložka „Jak si model vede" = **brána z `CLAUDE.md`, vykreslená**. Nahoře jedna
+ * odpověď, pod ní tři kritéria v řetězci; původní panely v nich sedí jako důkaz pod
+ * rozbalovačem. Dřív to bylo pět nesouvisejících čísel bez měřítka — u žádného nebylo
+ * poznat, co je dobře a od jakého vzorku mu věřit.
+ */
+function ModelView({
+  reliability,
+  marketBench,
+  clv,
+  track,
+  benchmark,
+}: {
+  reliability: ReliabilityReport | null;
+  marketBench: MarketBenchmark | null;
+  clv: ClvSummary | null;
+  track: TrackRecord | null;
+  benchmark: BenchmarkTrackRecord | null;
+}) {
+  const gate = evaluateEdgeGate({ reliability, market: marketBench, clv });
+  const evidence: Record<GateCriterion["key"], React.ReactNode> = {
+    calibration: reliability ? <ReliabilityPanel reliability={reliability} /> : null,
+    vsMarket: (
+      <>
+        {marketBench && marketBench.n > 0 && <MarketPanel market={marketBench} />}
+        {track && <TrackRecordPanel track={track} />}
+      </>
+    ),
+    clv: clv && clv.n > 0 ? <ClvPanel clv={clv} /> : null,
+  };
+
+  return (
+    <div className="mt-4 space-y-3">
+      <GateHeadline gate={gate} />
+      {gate.criteria.map((c, i) => (
+        <CriterionCard key={c.key} index={i + 1} criterion={c} evidence={evidence[c.key]} />
+      ))}
+      {/* Mimo bránu schválně: porazit predikce API-Footballu o ničem nerozhoduje –
+          rozhodčím je trh (kritérium 2). Je to doplněk, ne kritérium. */}
+      {benchmark && benchmark.n > 0 && <BenchmarkPanel benchmark={benchmark} />}
+    </div>
+  );
+}
+
+const GATE_TONE: Record<GateStatus, string> = {
+  pass: "border-positive/40 bg-positive/10",
+  fail: "border-border bg-surface",
+  insufficient: "border-border bg-surface",
+};
+
+const GATE_ANSWER: Record<GateStatus, string> = {
+  pass: "ZATÍM ANO",
+  fail: "ZATÍM NE",
+  insufficient: "ZATÍM NEVÍME",
+};
+
+function GateHeadline({ gate }: { gate: EdgeGate }) {
+  return (
+    <section className={`rounded-2xl border p-4 shadow-sm ${GATE_TONE[gate.status]}`}>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-semibold text-foreground">Má model hranu?</p>
+        <span className="shrink-0 text-sm font-bold tracking-wide text-foreground">
+          {GATE_ANSWER[gate.status]}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] leading-snug text-muted">
+        {gate.headline} Než se dá uvažovat o sázení, musí projít všechna tři kritéria
+        níž — a projít musí <em>v tomhle pořadí</em>.
+      </p>
+    </section>
+  );
+}
+
+const STATUS_MARK: Record<GateStatus, { icon: string; cls: string }> = {
+  pass: { icon: "✓", cls: "text-positive" },
+  fail: { icon: "✗", cls: "text-negative" },
+  insufficient: { icon: "—", cls: "text-muted" },
+};
+
+/** Jedno kritérium brány: otázka → odpověď → co by se muselo stát → důkaz pod rozbalovačem. */
+function CriterionCard({
+  index,
+  criterion,
+  evidence,
+}: {
+  index: number;
+  criterion: GateCriterion;
+  evidence: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const mark = STATUS_MARK[criterion.status];
+  return (
+    <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
+      <div className="flex items-baseline gap-2">
+        <span className={`shrink-0 text-sm font-bold ${mark.cls}`} aria-hidden>
+          {mark.icon}
+        </span>
+        <h2 className="min-w-0 flex-1 text-sm font-semibold text-foreground">
+          {index}. {criterion.question}
+        </h2>
+      </div>
+      <p className="mt-1.5 text-[13px] leading-snug text-foreground">{criterion.summary}</p>
+      {criterion.requirement && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted">
+          <span className="font-semibold uppercase tracking-wide">Muselo by:</span>{" "}
+          {criterion.requirement}
+        </p>
+      )}
+      {criterion.caveat && (
+        <p className="mt-1.5 rounded-lg bg-background px-2.5 py-2 text-[11px] leading-snug text-muted">
+          <span aria-hidden>⚠ </span>
+          {criterion.caveat}
+        </p>
+      )}
+      {evidence && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="mt-2 text-[11px] text-muted transition hover:text-foreground"
+          >
+            {open ? "▾" : "▸"} Podrobně
+          </button>
+          {open && <div className="-mx-1">{evidence}</div>}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -230,6 +401,13 @@ const VENUE_LABELS: Record<Venue, string> = {
   away: "venku",
   any: "doma i venku",
 };
+
+/**
+ * Pod tolik tipů se úspěšnost **nevykresluje jako číslo**. „100 % (1/1)" ve velkém tučném
+ * fontu vypadá jako výsledek, ačkoli je to jeden zápas – a odznak „malý vzorek" pod tím
+ * to nezachrání, protože oko čte nejdřív to velké číslo.
+ */
+const STRATEGY_MIN_SAMPLE = 10;
 
 function strategyLabel(market: PickMarket, venue: Venue, minProb: number): string {
   const pct = Math.round(minProb * 100);
@@ -243,26 +421,39 @@ function StrategyPanel({
   market,
   venue,
   minProb,
+  settled,
 }: {
   backtest: BacktestResult;
   market: PickMarket;
   venue: Venue;
   minProb: number;
+  /** Kolik odehraných predikcí vůbec máme (na aktuální verzi modelu). */
+  settled: number;
 }) {
   const small = backtest.n > 0 && backtest.n < 30;
   return (
     <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-          Tvoje strategie v historii
+          Jak tohle pravidlo vycházelo
         </p>
         <span className="text-[11px] text-muted">{backtest.n} vsazených tipů</span>
       </div>
       <p className="mt-1 text-[11px] text-muted">{strategyLabel(market, venue, minProb)}</p>
-      {backtest.n === 0 ? (
+      {backtest.n < STRATEGY_MIN_SAMPLE ? (
+        // Rada „zkus nižší práh" je po filtru verze modelu ZAVÁDĚJÍCÍ, když ještě nemáme
+        // skoro žádné odehrané predikce – chyba není v prahu, ale v tom, že není co měřit.
+        // A velké „100 %" z jednoho zápasu je horší než žádné číslo: vypadá jako výsledek.
         <p className="mt-2 text-sm text-muted">
-          Žádné odehrané zápasy v historii neodpovídají tomuto pravidlu. Zkus nižší práh
-          nebo jiný trh.
+          {backtest.n > 0
+            ? `Zatím tomuhle pravidlu odpovídá ${backtest.n} odehraných ${
+                backtest.n === 1 ? "zápas" : backtest.n < 5 ? "zápasy" : "zápasů"
+              } – na úspěšnost je to málo. Číslo naskočí během sezóny.`
+            : settled < 30
+              ? `Na aktuální verzi modelu máme zatím ${settled} odehraných ${
+                  settled === 1 ? "zápas" : settled < 5 ? "zápasy" : "zápasů"
+                }. Číslo naskočí během sezóny.`
+              : "Žádný z odehraných zápasů neodpovídá tomuhle pravidlu. Zkus nižší práh nebo jiný trh."}
         </p>
       ) : (
         <>
@@ -436,11 +627,12 @@ function MarketPanel({ market }: { market: MarketBenchmark }) {
         )}
         {n < 100 && " Malý vzorek – orientační."}
       </p>
+      {/* „Nesázej podle toho" se říká v leadu stránky, ne až tady – doroloval se sem
+          málokdo. Zůstává jen tvrdé číslo z offline backtestu jako kontext k rozdílu. */}
       <p className="mt-2 text-[11px] text-muted">
-        Offline backtest na 9 271 zápasech se zavíracími kurzy: náš model 1.024, trh 0.976
-        a plochá sázka podle modelu skončila na −5 až −10 % ROI (interval spolehlivosti
-        nulu neobsahuje). Predikce jsou tu od toho, aby zápas vysvětlily — ne aby se podle
-        nich sázelo.
+        Pro měřítko: offline backtest na 9 271 zápasech se zavíracími kurzy dal náš model
+        1.024 vs. trh 0.976 a plochá sázka podle modelu −5 až −10 % ROI (interval
+        spolehlivosti nulu neobsahuje).
       </p>
     </section>
   );
@@ -681,6 +873,8 @@ function RuleControls({
   onHideUnready: (v: boolean) => void;
   onPreset: (rule: { market: PickMarket; venue: Venue; minProb: number }) => void;
 }) {
+  // Presety jsou vstupní bod pro laika; detailní ovládání je pro toho, kdo ví, co ladí.
+  const [advanced, setAdvanced] = useState(false);
   return (
     <section className="mt-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Rychlá volba</p>
@@ -707,7 +901,18 @@ function RuleControls({
         })}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <button
+        type="button"
+        onClick={() => setAdvanced((a) => !a)}
+        aria-expanded={advanced}
+        className="mt-3 text-[11px] text-muted transition hover:text-foreground"
+      >
+        {advanced ? "▾" : "▸"} ⚙ Upravit pravidlo
+      </button>
+
+      {advanced && (
+        <>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <label className="block">
           <span className="text-[10px] font-medium uppercase tracking-wide text-muted">Trh</span>
           <select
@@ -769,6 +974,13 @@ function RuleControls({
             <span className="font-normal text-muted">(nad férovou cenou, bez marže)</span>
           </span>
         </label>
+        {/* Varování patří k přepínači, ne jen do komentáře v kódu: bez něj to laik přečte
+            jako „ukaž mi value sázky", ačkoli měření říká pravý opak. */}
+        <p className="rounded-lg bg-warning/10 px-2.5 py-2 text-[11px] leading-snug text-muted">
+          <span aria-hidden>⚠ </span>
+          Větší neshoda s trhem znamenala v backtestu <strong>horší</strong> výsledek
+          (ROI −7,7 % → −8,9 %). Je to podnět k prozkoumání, ne výběr sázek.
+        </p>
         {/* Readiness gate: skryje tipy s tenkým vzorkem (start sezóny). Default ON. */}
         <label className="flex items-center gap-2">
           <input
@@ -782,6 +994,8 @@ function RuleControls({
           </span>
         </label>
       </div>
+        </>
+      )}
     </section>
   );
 }

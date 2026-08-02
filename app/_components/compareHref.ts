@@ -6,7 +6,7 @@ import type { EntityType } from "@/lib/types";
  * obou stran" – klub má `leagueId` u obou vždy, reprezentace má konfederaci
  * každého týmu (může chybět → `null` = neklikací řádek).
  *
- * Sdílí ho `FixtureRow` (Zápasy), `PickRow` (Tipy) i `ResultRow` (Výsledky).
+ * Sdílí ho `FixtureRow` (Zápasy), `PickRow` (Tipy) i `PlayedRow` (Výsledky).
  */
 export interface CompareLinkSource {
   compareMode: EntityType;

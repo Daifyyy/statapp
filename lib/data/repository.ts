@@ -33,8 +33,16 @@ import {
   getUpcomingPredictionRows,
   getSettledPredictions,
   getRecentSettledPredictions,
+  getPredictionByFixture,
 } from "./predictionStore";
+import { MODEL_VERSION } from "./modelVersion";
 import { summarizeSettled } from "@/lib/picks/results";
+import {
+  buildMatchReview,
+  type ActualCounts,
+  type MatchReview,
+} from "@/lib/picks/matchReview";
+import { logError } from "@/lib/logError";
 import { getLeagueTransfers, getClubBalances } from "./transferStore";
 import {
   ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
@@ -257,16 +265,36 @@ export async function getNationalConfedMap(): Promise<Map<number, number>> {
   return new Map();
 }
 
-/** Odehrané predikce s výsledkem pro track-record (real = DB, mock = generátor). */
-export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
-  if (useReal) return getSettledPredictions();
+/**
+ * Odehrané predikce s výsledkem pro track-record (real = DB, mock = generátor).
+ *
+ * **Filtruje na aktuální `MODEL_VERSION`, a to defaultně.** Bump verze vynuluje dataset
+ * (stará λ vznikla jiným výpočtem, takže se nedá srovnávat) – tenhle invariant respektuje
+ * `npm run calibrate` odjakživa, ale cesta do UI ne: volalo se `getSettledPredictions()`
+ * bez argumentu, takže track-record, kalibrace, benchmark i CLV na `/predikce` počítaly
+ * z **69 řádků, ze kterých bylo 62 z verze 1** a jen 7 z aktuální. Čísla tedy neměřila
+ * model, který běží.
+ *
+ * Verze je **parametr s defaultem**, ne volitelný filtr, který si volající zapne:
+ * volitelnost je přesně to, co tuhle chybu umožnilo. Přepsat ho má smysl jen tam, kde
+ * někdo vědomě zkoumá historickou verzi.
+ */
+export async function getSettledPredictionRows(
+  modelVersion: number = MODEL_VERSION
+): Promise<PredictionRow[]> {
+  if (useReal) return getSettledPredictions(modelVersion);
   return mockSettledPredictions();
 }
 
 /**
- * Nedávno dohrané zápasy s vyhodnocenou predikcí pro záložku „Výsledky".
- * Real = posledních pár dní z DB + dohledání konfederací pro reprezentační deep-link;
- * mock = generátor. FREE (jen historie, žádný konkrétní budoucí tip).
+ * Nedávno dohrané zápasy s vyhodnocenou predikcí – **překryv „náš tip" pro záložku
+ * „Výsledky"**. Real = posledních `days` dní z DB + dohledání konfederací pro
+ * reprezentační deep-link; mock = generátor. FREE (jen historie, žádný budoucí tip).
+ *
+ * **Tohle už není zdroj samotného seznamu Výsledků** – ten staví denní rozpis
+ * (`getFixturesByDates` → `PlayedFixture`), takže zápas se zobrazí i bez predikce a hned
+ * po dohrání, ne až po nočním settle. Odtud jde jen odznak ✓/✗ a „Tip: …", který
+ * `mergeTips` napáruje po `fixtureId`.
  *
  * **Filtruje klubové ligy na `isProgramClubLeague`** (Top 8 + ČR) – `PREDICTION_LEAGUES`
  * (odkud řádky pocházejí) běží nad všemi 18 `CLUB_LEAGUES`, ale Výsledky mají zrcadlit
@@ -277,10 +305,16 @@ export async function getSettledPredictionRows(): Promise<PredictionRow[]> {
  * Filtr jde **do dotazu** (`leagueIds`), ne až nad načtenými řádky – limit v DB by jinak
  * padl na nejnovější zápasy napříč všemi 18 ligami a ve dnech menších lig by ze záložky
  * zbylo pár řádků. Filtr níže zůstává jako pojistka (a kvůli mock větvi).
+ *
+ * `days` musí pokrýt celé okno, které Výsledky ukazují, a `limit` **počet zápasů v tom
+ * okně, ne velikost stránky** – překryv se nestránkuje a chybějící řádek se v UI projeví
+ * jako „u tohohle zápasu jsme netipovali", což je tiché a nepravdivé.
  */
-export async function getRecentResults(): Promise<SettledMatch[]> {
+export async function getRecentResults(days = 4): Promise<SettledMatch[]> {
   const rows = useReal
     ? await getRecentSettledPredictions({
+        days,
+        limit: 400,
         leagueIds: [
           ...PROGRAM_CLUB_LEAGUE_IDS,
           ...ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
@@ -372,30 +406,90 @@ export async function getNationalRatings(): Promise<Map<
 }
 
 /**
- * **Kategorický přehled odehraného zápasu** (kdo dominoval, typ zápasu, jak kdo zahrál).
+ * **Kategorický přehled odehraného zápasu** (kdo dominoval, typ zápasu, jak kdo zahrál)
+ * plus **model a trh vs. skutečnost**, pokud k zápasu máme uloženou predikci.
  *
  * Líný a na vyžádání: statistiky se tahají až při rozkliknutí (`getMatchStatsPair`,
- * 1 volání na zápas, pak trvale z `MatchStatCache`). Samotné vyhodnocení je čistá funkce
- * `buildMatchReport` – tedy stejná dělba jako všude jinde: repozitář dodá data, jádro
- * rozhoduje. `null` = statistiky nejsou (API je u části zápasů nemá) → UI ukáže prázdno.
+ * 1 volání na zápas, pak trvale z `MatchStatCache`). Samotné vyhodnocení jsou čisté
+ * funkce (`buildMatchReport`, `buildMatchReview`) – tedy stejná dělba jako všude jinde:
+ * repozitář dodá data, jádro rozhoduje.
+ *
+ * **Obě části jsou nezávislé.** `report: null` = nemáme statistiky (API je u části zápasů
+ * nemá); `review: null` = k zápasu nemáme predikci (cron nemusel ligu stihnout) nebo
+ * neznáme skóre. Ani jedno není chyba a jedno nesmí shodit druhé – zápas bez predikce má
+ * pořád smysl ukázat a zápas bez statistik pořád nese „řekli jsme 2:1, padlo 0:4".
+ *
+ * Predikční řádek je **jeden dotaz do DB, 0 volání API**; ceny za něj se neplatí v kvótě.
  */
 export async function getMatchReport(input: {
   fixtureId: number;
   home: { id: number; name: string };
   away: { id: number; name: string };
   goals: { home: number; away: number } | null;
-}): Promise<MatchReport | null> {
+}): Promise<{ report: MatchReport | null; review: MatchReview | null }> {
   const stats = useReal
     ? await real.getMatchStatsPair(input.fixtureId, input.home.id, input.away.id)
     : mockMatchStats(input.fixtureId);
-  if (!stats) return null;
-  const report = buildMatchReport(
-    stats.home,
-    stats.away,
-    { home: input.home.name, away: input.away.name },
-    input.goals
-  );
-  return report.available ? report : null;
+
+  let report: MatchReport | null = null;
+  if (stats) {
+    const built = buildMatchReport(
+      stats.home,
+      stats.away,
+      { home: input.home.name, away: input.away.name },
+      input.goals
+    );
+    report = built.available ? built : null;
+  }
+
+  return { report, review: await matchReviewOf(input.fixtureId, input.goals, stats) };
+}
+
+/**
+ * „Model a trh vs. skutečnost" k jednomu zápasu. Skutečné rohy a karty bere z **týchž**
+ * statistik, které si přehled hry stáhl – žádné volání navíc. Výpadek DB nesmí shodit
+ * přehled hry, ale nesmí ani mlčet (viz rok bez kurzů).
+ */
+async function matchReviewOf(
+  fixtureId: number,
+  goals: { home: number; away: number } | null,
+  stats: { home: Partial<Record<Metric, number>>; away: Partial<Record<Metric, number>> } | null
+): Promise<MatchReview | null> {
+  if (!useReal || !goals) return null;
+  try {
+    const row = await getPredictionByFixture(fixtureId);
+    if (!row) return null;
+    return buildMatchReview(row, goals, actualCountsOf(stats));
+  } catch (e) {
+    logError("repository.getMatchReport.review", e, { fixtureId });
+    return null;
+  }
+}
+
+/** Skutečné rohy a karty ze statistik zápasu; `null` u metriky, kterou zápas nemá. */
+function actualCountsOf(
+  stats: { home: Partial<Record<Metric, number>>; away: Partial<Record<Metric, number>> } | null
+): ActualCounts {
+  if (!stats) return { corners: null, cards: null };
+  const pair = (metric: Metric) => {
+    const h = stats.home[metric];
+    const a = stats.away[metric];
+    return h != null && a != null ? { home: h, away: a } : null;
+  };
+  const corners = pair("CORNERS");
+  // Karty = žluté + červené, shodně s tím, co modeluje `predictCards` (`cardCount`).
+  // Červené můžou v zápase chybět úplně → chybějící hodnota je nula, ne „neznámo“;
+  // u žlutých to naopak znamená, že statistiku nemáme vůbec.
+  const hy = stats.home.YELLOW_CARDS;
+  const ay = stats.away.YELLOW_CARDS;
+  const cards =
+    hy != null && ay != null
+      ? {
+          home: hy + (stats.home.RED_CARDS ?? 0),
+          away: ay + (stats.away.RED_CARDS ?? 0),
+        }
+      : null;
+  return { corners, cards };
 }
 
 /**

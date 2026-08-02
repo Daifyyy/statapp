@@ -183,6 +183,24 @@ model FixturePrediction {
   /// null = řádek z doby před zavedením (default a=1, b=0 = no-op).
   calibA        Float?
   calibB        Float?
+  /// λ ROHŮ a KARET (`lib/picks/corners.ts`, `cards.ts`) pro tentýž zápas. Modely
+  /// existovaly, ale volal je JEN backtest – v produkci se nikdy nic neuložilo, takže
+  /// jsme na tyhle trhy sbírali kurzy a **neměli je proti čemu měřit** (CLV = otevřená
+  /// otázka č. 1). Počítají se v `runPredictUpcoming` z týchž zápasů, ze kterých vzniká
+  /// gólová λ → **0 volání API navíc**. Jen klubové ligy; null = model neměl z čeho
+  /// (nováček bez historie rohů) nebo řádek vznikl před zavedením polí.
+  ///
+  /// **Pod `modelVersion` NEPATŘÍ**: verzuje se to, co vyrábí gólovou λ, a bump vynuluje
+  /// dataset predikcí. Tyhle sloupce jsou paralelní stopa, ne jiný výpočet 1X2.
+  lambdaCornersHome Float?
+  lambdaCornersAway Float?
+  lambdaCardsHome   Float?
+  lambdaCardsAway   Float?
+  /// Faktor rozhodčího použitý u karet a velikost vzorku, ze kterého vyšel. `1`/`0`
+  /// = rozhodčí se nepromítl (index se v produkci zatím nestaví) – ať je poznat
+  /// „neutrální faktor" od „změřeného faktoru, který vyšel 1".
+  refereeFactor     Float?
+  refereeSample     Int?
   predictedAt   DateTime  @default(now())
   // Výsledek (doplní settle cron po odehrání)
   status        String    @default("NS")

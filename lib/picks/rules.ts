@@ -113,18 +113,33 @@ function predictionOf(row: PredictionRow): MatchPrediction {
   };
 }
 
+/**
+ * Popisek pod řádkem tipu – **říká PROČ, ne to samé číslo podruhé.**
+ *
+ * Dřív to bylo „Sparta doma favorit · 74 % na výhru", přičemž `74 %` už na řádku je
+ * (`PickRow` ho tiskne vpravo tučně). Popisek tedy nenesl žádnou informaci navíc.
+ * Dnes nese **očekávané góly** – to je skutečný důvod, proč pravděpodobnost vyšla tak,
+ * jak vyšla, a laik z „2.1 : 0.8" pochopí zápas líp než z procenta.
+ *
+ * λ jsou ta **základní** (před zostřením), stejně jako je čte `predictionOf` – viz jeho
+ * komentář. `LAMBDA_SHARPEN = 1.0` je dokumentovaný no-op, takže zobrazené číslo sedí
+ * s tím, ze kterého vyšly pravděpodobnosti. Čistá funkce, 0 volání navíc.
+ */
 function explain(
   row: PredictionRow,
   market: PickMarket,
-  side: "home" | "away" | null,
-  prob: number
+  side: "home" | "away" | null
 ): string {
-  const pct = Math.round(prob * 100);
-  if (market === "over25") return `Přes 2.5 gólu · ${pct} %`;
-  if (market === "btts") return `Oba týmy skórují · ${pct} %`;
+  const g = (x: number) => x.toFixed(1);
+  if (market === "over25") {
+    return `Přes 2.5 gólu · čekáme ${g(row.lambdaHome + row.lambdaAway)} gólu celkem`;
+  }
+  if (market === "btts") {
+    return `Oba týmy skórují · čekáme ${g(row.lambdaHome)} : ${g(row.lambdaAway)} gólu`;
+  }
   const name = side === "home" ? row.homeName : row.awayName;
   const where = side === "home" ? "doma" : "venku";
-  return `${name} ${where} favorit · ${pct} % na výhru`;
+  return `${name} ${where} favorit · čekáme ${g(row.lambdaHome)} : ${g(row.lambdaAway)} gólu`;
 }
 
 /**
@@ -151,7 +166,7 @@ export function buildPick(
     side,
     prob,
     value: rowValue(row, market, side),
-    explanation: explain(row, market, side, prob),
+    explanation: explain(row, market, side),
     compareMode: national ? "NATIONAL" : "CLUB",
     homeCompareLeagueId: national ? null : row.leagueId,
     awayCompareLeagueId: national ? null : row.leagueId,

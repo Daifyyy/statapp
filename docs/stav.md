@@ -1,5 +1,57 @@
 # STAV projektu, známé problémy, go-to-market
 
+## STAV K 2. 8. 2026 — sezóna běží, ověřeno proti produkci
+
+**Fortuna liga začala 25. 7.** (top ligy 7. 8.), takže poprvé jde část otázek zodpovědět
+daty místo odhadem. Ověřeno **dotazy do produkční DB, 0 nových volání API**:
+
+| | stav |
+|---|---|
+| ČR (345) v `PROGRAM_CLUB_LEAGUE_IDS` i `PREDICTION_LEAGUES` | ✅ |
+| predikce se generují | ✅ **8/8** zápasů 1. kola, `modelVersion=7` |
+| **zavírací kurzy** | ✅ `oddsCloseAt` ~**T−2,5 h** (Plzeň: výkop 18:00 Z, snímek 15:31 Z) |
+| **parsování rohů** proti živému API | ✅ **8/8** zápasů má `corners` v `oddsBooks` |
+| **parsování týmových totalů** | ✅ **8/8** (`totalHome`/`totalAway`) |
+| **parsování karet** | ⚠️ **3/8** — matcher chytá (viděná linka 3.5), ale trh nabízí jen část knih |
+| statistiky Fortuna ligy | ✅ **letos i s xG** → přehled zápasu se vykreslí celý |
+
+Tím padá většina bloku „NEOVĚŘENO proti živému API" níže. **Zbývá z něj jediné:**
+`npm run probe-odds -- <fixtureId> --markets` kvůli **karetním** trhům — pokrytí 3/8 může
+být buď realita trhu, nebo špatný název; pasivní pojistka (`oddsCoverage`) řekne „nechytá
+se to", ne „správný název je jiný". U karet zvlášť projít sekci trhů se slovem „card",
+které se vědomě nesnímají (booking points, „jen žluté").
+
+### Hotovo 2. 8. — Výsledky ukazují všechno odehrané + report o zápase
+Uživatel neviděl v záložce Výsledky zápasy z 1. 8. Dvě příčiny, obě opravené:
+1. **Strukturální:** Výsledky byly track-record predikcí, ne výsledky. Četly výhradně
+   `FixturePrediction`, takže zápas bez uložené predikce v nich nebyl **nikdy**.
+2. **Provozní:** settle jel 1× denně a Actions ho pouštěly pozdě (`0 6 * * *` → reálně
+   `settledAt` ~08:26 UTC). Zápas s výkopem 1. 8. v 18:00 UTC byl neviditelný **~17 h**.
+
+Dnes: zdrojem Výsledků je **denní rozpis** (`normalizeFinishedFixtures` z týchž dat jako
+Program → 0 volání navíc; minulé dny s 24h TTL), tip je **překryv** (`mergeTips`), pásek
+dní jde dozadu a settle běží **dvakrát denně** (`0 6` + `0 22`). Detail v `docs/zapasy.md`.
+
+**Report o zápase** dostal čtyři sekce nad rámec obrazu hry — Model před výkopem (λ,
+nejpravděpodobnější skóre z `gridProbs`, Over 2.5/BTTS), Co říkal trh (odmaržovaná zavírací
+linie vs. naše pravděpodobnost), Rohy a karty (očekávané × skutečné) a Aktuálně v tabulce.
+Vše z už uložených dat = **0 volání API** (`lib/picks/matchReview.ts`, čisté + testy).
+
+### ⚠ Odblokované: rohové a kartové λ konečně vznikají v produkci
+`predictCorners`/`predictCards` do 2. 8. volal **jen backtest**. Kurzy na oba trhy se
+sbíraly, ale nebylo **proti čemu měřit CLV** — tedy přesně to, na čem visí otevřená otázka
+č. 1. Nově je počítá `runPredictUpcoming` z týchž zápasů, ze kterých vzniká gólová λ
+(0 volání API), a ukládá do `FixturePrediction` (`lambdaCorners*`, `lambdaCards*`).
+Ligové měřítko dodává `getLeagueCountBaseline` z cachovaných zápasů — a rozdíl proti
+generickému defaultu je věcný, ne kosmetický (Fortuna liga: fauly **12.4/13.6** vs. default
+10.8/11.3, rohy 5.62/4.66 vs. 5.5/4.5).
+
+**Co na tom zbývá:** faktor rozhodčího je zatím **neutrální** (`refereeFactor: 1`,
+`refereeSample: 0`) — `buildRefereeIndex` potřebuje korpus historie se jmény rozhodčích,
+který produkce nestaví. U karet je přitom rozhodčí ~polovina změřeného přínosu, takže je
+to největší otevřený kus modelu. Sloupce se ukládají i s vzorkem schválně, aby šlo poznat
+„neutrální faktor" od „změřeného, který vyšel 1".
+
 ## STAV K 28. 7. 2026 — kde jsme skončili a čím pokračovat
 
 **Všechno je commitnuté, nasazené a ověřené.** Pracovní strom je čistý, `main` je
@@ -107,7 +159,10 @@ a teprve podle log-lossu/ECE rozhodnout. Offline, 0 volání API.
 → Rozvrh je nově v `.github/workflows/cron.yml`, `maxDuration = 60`, rozpočet 50 s.
 **Nezvyšovat zpátky bez Pro plánu.** Detaily v sekci „Plánované úlohy".
 
-### ⚠ NEOVĚŘENO proti živému API (udělej to hned, jak bude první zápas s kurzy)
+### ⚠ NEOVĚŘENO proti živému API — **z velké části vyřešeno 2. 8., viz nahoře**
+> Rohy a týmové totaly se proti živému API parsují **8/8 zápasů**, karty **3/8**. Zbytek
+> téhle sekce platí už jen pro karty.
+
 Parsování **rohů, KARET i týmových totalů** vzniklo v mezisezóně, kdy `/odds` nevrací nic.
 Je psané obranně (hledá trh podle **názvu**, ne podle uhodnutého id; nesmysl → prázdno
 místo pádu) a matchery jsou kryté testy včetně vzájemné výlučnosti, ale **žádný test je

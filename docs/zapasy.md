@@ -63,12 +63,28 @@
   Detail a zdůvodnění prahů viz docstring `liveReport.ts`; kvóta a TTL viz `docs/provoz.md`.
   Ověřeno proti živému API 31. 7. 2026 (`npm run probe-live`): statistiky rozehraného zápasu
   chodí včetně **xG**, hodnoty jsou kumulativní k aktuální minutě.
-- **Data (Výsledky):** `getRecentResults()` (`repository.ts`) = posledních ~14 dní settlnutých
-  predikcí (`getRecentSettledPredictions` z `predictionStore`, jen čte DB) → čistý mapper
-  **`summarizeSettled`** (`lib/picks/results.ts`, testy `results.test.ts`) na `SettledMatch`
-  (skóre + predikovaná strana 1X2 + `outcomeHit`, sdílí `argmaxOutcome`/`actualOutcome` s
-  `trackRecord.ts`). **FREE** (jen historie, žádný budoucí tip). Reprezentačním řádkům dohledá
-  konfederace (`getNationalConfedMap`). Mock: `mockSettledPredictions` → funguje bez DB/API.
+- **Data (Výsledky): zdrojem je ROZPIS, ne naše predikce.** `getFixturesByDates` staví z týchž
+  syrových dat **oba** seznamy dne: `fixtures` (Program) a `played` (Výsledky) přes čistou
+  **`normalizeFinishedFixtures`** (`lib/data/fixtures.ts`, zrcadlo `normalizeUpcomingFixtures`,
+  testy) → `PlayedFixture`. Skóre bere **`fullTimeGoals`** (stav po 90 min, AET/PEN-safe, shodně
+  se settle); `PST`/`CANC`/`ABD`/`AWD`/`WO` **nejsou odehrané** a zápas bez použitelného skóre se
+  vynechá, nedopočítává se. `app/page.tsx` proto načítá **`RESULT_DAYS = 3` dnů zpět** navíc
+  (`dates` = `[dnes−3 … dnes+6]`); minulé dny mají v cache **`FIX_PAST_TTL` = 24 h** (den, který
+  skončil, se už nezmění) → po prvním naplnění stojí Výsledky ~0 volání navíc.
+  - **Náš tip je PŘEKRYV, ne podmínka zobrazení.** `getRecentResults(days)` (jen čte DB) →
+    `summarizeSettled` → čistá **`mergeTips(days, settled)`** (`lib/picks/results.ts`, testy)
+    napáruje po `fixtureId` `tip = {side, prob, hit}`. Zápas bez predikce projde beze změny.
+  - **Proč se to předělalo:** Výsledky dřív četly **výhradně** `FixturePrediction`, takže zápas
+    bez uložené predikce v nich nebyl nikdy a zápas čerstvě dohraný až po nočním settle
+    (`0 6 * * *`, reálně ~08:25 UTC kvůli zpoždění Actions) — u večerního výkopu **~17 h**.
+    Doloženo na 1. kole Fortuna ligy: výkopy 1. 8. 15:00/18:00 UTC, `settledAt` 2. 8. 08:26.
+    Skóre dnes naskočí **do hodiny** po konci; ✓/✗ dorazí se settlem, který nově jede
+    **dvakrát denně** (`0 6` + `0 22`).
+  - `getRecentResults` má proto `days`/`limit` dimenzované na **počet zápasů v okně, ne na
+    velikost stránky** — chybějící řádek by se v UI tvářil jako „netipovali jsme", což je tiché
+    a nepravdivé. Reprezentačním zápasům se dohledá konfederace (`getNationalConfedMap`).
+    Mock: `mockFixturesByDates` plní minulé dny odehranými zápasy (vlastní řada `fixtureId`
+    od 9 500 000, aby živé mocky zůstaly na prvních **budoucích** dnech).
 - **Přehled zápasu ve Výsledcích** (`lib/stats/matchReport.ts` – čisté + testy, endpoint
   `/api/match-report`, UI `MatchReportPanel.tsx`): po rozkliknutí řádku **kategorický obraz
   odehraného zápasu** místo devatenácti řádků syrových čísel – verdikt jednou větou, chipy
@@ -88,6 +104,26 @@
     `season`/`isNeutral`/`competitive`, které tahle cesta nezná, a špatná `season` by tiše
     otrávila okna, na kterých stojí λ predikcí. Repeat views pokrývá CDN cache routy
     (1 h / 24 h stale) a většina prokliknutých zápasů v cache už je (dotáhlo je Porovnání).
+  - **Sekce „Model před výkopem" / „Co říkal trh" / „Rohy a karty"** (`lib/picks/matchReview.ts`
+    – čisté + testy `matchReview.test.ts`): co jsme před výkopem řekli vs. co se stalo.
+    Staví se z **už uloženého** řádku `FixturePrediction` (`getPredictionByFixture`, jeden
+    dotaz do DB) → **0 volání API**. Obsah: tip 1X2 + ✓/✗, λ, **nejpravděpodobnější skóre**
+    (`gridProbs(...).topScores` – **jediná** implementace mřížky, tatáž jako `reprice`),
+    Over 2.5 / BTTS, odmaržovaná zavírací linie vs. naše pravděpodobnost (`rowClv`, tedy
+    **`sharpFair`, ne `bestPrice`**) a očekávané vs. skutečné rohy/karty.
+    - **Práh 2 p. b. u pohybu linie**: pod ním je pohyb v šumu odmaržování a věta „trh šel
+      s námi" by tvrdila signál tam, kde není.
+    - **`available: false` → `model: null`.** Predikci, kterou jsme sami označili za
+      nepoužitelnou, zpětně neprezentujeme jako tip – ani když vyšla.
+    - **Časová řada (`oddsSeries`) se schválně nepoužívá**: `rowClv` už dává dvojici
+      otevření→zavření a je to ta dvojice, na které je CLV definované.
+    - **Obraz hry a review jsou nezávislé.** Statistiky chybí u části zápasů, predikce nemusela
+      vzniknout; prázdný stav patří jen tam, kde není **ani jedno**.
+  - **Sekce „Aktuálně v tabulce"**: druhý líný fetch na existující `/api/standings` (FREE,
+    jen CLUB). Popisek je **„aktuálně"**, ne „po zápase" – tabulka je dnešní a u zápasu
+    starého tři dny už mezitím proběhlo další kolo.
+  - **Skloňování počtů je v `lib/stats/czech.ts`**, sdílené s `liveReport.ts` – jinak vznikaly
+    věty „3 gólů" a „1 góly". Třetí kopii nezakládat.
   - Tlačítko je **mimo `Link`** řádku – uvnitř by klik navigoval do Porovnání.
   - **Verdikt NESMÍ mluvit o „ovládnutí" zápasu** – stojí na nebezpečnosti, ne na držení
     míče, a tým si může vytvořit dvakrát víc s třetinou míče (reálně: Bournemouth 33 %
@@ -114,9 +150,21 @@
   v rámci dne **rozbalovací kontejnery podle ligy** (`LeagueContainer`): klikací hlavička
   (logo + název + počet + nejbližší výkop + **pulzující červená tečka**, má-li liga živý zápas),
   **výchozí = vše sbaleno, žádné auto-rozbalení** (rozhodnutí uživatele). Živý řádek ukazuje místo
-  času výkopu **🔴 minutu + živé skóre** (`LiveDot` blik = `bg-negative` + `animate-ping`). Ve
-  Výsledcích plochý seznam nejnovější první + souhrn „trefeno X z Y". Řádky klikací dle
-  `buildCompareHref` (klub vždy; reprezentace po dohledání konfederací).
+  času výkopu **🔴 minutu + živé skóre** (`LiveDot` blik = `bg-negative` + `animate-ping`).
+  Řádky klikací dle `buildCompareHref` (klub vždy; reprezentace po dohledání konfederací).
+  - **Výsledky jsou zrcadlo Programu**: týž `DayTabs`, ale **dozadu** (dnes první), a týž
+    ligový kontejner (`PlayedLeagueContainer`) – jen bez hvězdy a živé tečky (oblíbené řeší
+    Program, dohraný zápas živý není). Ve sbalené hlavičce místo nejbližšího výkopu **bilance
+    tipů ligy**. Seskupení dělá sdílená čistá `groupByLeague` (drží pořadí vstupu).
+  - **Oba pohledy jedou nad JEDNÍM polem `days`.** Do prvního renderu (SSR/hydratace) se
+    řeže **indexem** – Program `days.slice(RESULT_DAYS)`, Výsledky `days.slice(0, RESULT_DAYS+1)`
+    obráceně –, po mountu rozhoduje klientský pražský „dnes". **Nevracet na filtr datem i pro
+    SSR**: server a klient by se rozešly a hydratace by spadla. Každý pohled má **vlastní
+    `dayIdx`** (pásky jedou opačným směrem).
+  - Souhrn nad seznamem počítá jmenovatel ze **zápasů s predikcí** („trefeno X z Y zápasů,
+    kde jsme měli predikci"), ne ze všech odehraných – jinak by tiše tvrdil, že jsme tipovali
+    i to, co jsme netipovali.
+  - `useLiveScores`/`mergeLive` zůstává **jen v Programu**.
 - **Oblíbené zápasy + ligy + filtr (PRO):** tabulky **`FavoriteLeague`/`FavoriteFixture`** (userId FK,
   cascade; bez snapshot meta – filtr pracuje jen nad už načteným 7denním Programem, stačí id).
   Route **`GET/POST /api/fixtures/favorites`** (PRO přes `getEntitlement`; anon/FREE → `{locked}`/403,

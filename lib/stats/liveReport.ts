@@ -8,6 +8,7 @@ import {
   type MatchSide,
   type MatchTeams,
 } from "./matchReport";
+import { cardsWord, goalsWord, shotsWord } from "./czech";
 
 /**
  * **Přehled PROBÍHAJÍCÍHO zápasu** – co se zatím děje, ne jak to dopadne.
@@ -141,16 +142,7 @@ const round1 = (x: number) => Math.round(x * 10) / 10;
 const pct = (x: number) => Math.round(x);
 const xg = (x: number) => x.toFixed(2);
 
-/**
- * České skloňování počtu (1 / 2–4 / 0 a 5+). Bez něj vznikají věty typu „3 karet"
- * a „1 góly" – čísla se tu do textu dosazují z dat, takže je nejde napsat natvrdo.
- */
-const plural = (n: number, one: string, few: string, many: string): string =>
-  n === 1 ? one : n >= 2 && n <= 4 ? few : many;
-
-const shotsWord = (n: number) => `${n} ${plural(n, "střela", "střely", "střel")}`;
-const cardsWord = (n: number) => `${n} ${plural(n, "karta", "karty", "karet")}`;
-const goalsWord = (n: number) => `${n} ${plural(n, "gól", "góly", "gólů")}`;
+// Skloňování počtů žije v `lib/stats/czech.ts` – sdílené s přehledem odehraného zápasu.
 
 /** Součet metriky přes obě strany; `null`, když ji nemá ani jedna. */
 function totalOf(home: MatchSide, away: MatchSide, metric: Parameters<typeof sumOf>[1][number]): number | null {

@@ -67,6 +67,12 @@ function toRow(p: FixturePrediction): PredictionRow {
     sharpen: p.sharpen,
     calibA: p.calibA,
     calibB: p.calibB,
+    lambdaCornersHome: p.lambdaCornersHome,
+    lambdaCornersAway: p.lambdaCornersAway,
+    lambdaCardsHome: p.lambdaCardsHome,
+    lambdaCardsAway: p.lambdaCardsAway,
+    refereeFactor: p.refereeFactor,
+    refereeSample: p.refereeSample,
     status: p.status,
     homeGoals: p.homeGoals,
     awayGoals: p.awayGoals,
@@ -115,6 +121,12 @@ export async function upsertPrediction(row: PredictionUpsert): Promise<void> {
     lowConfidence: row.lowConfidence,
     readinessSample: row.readinessSample,
     modelVersion: row.modelVersion,
+    lambdaCornersHome: row.lambdaCornersHome ?? null,
+    lambdaCornersAway: row.lambdaCornersAway ?? null,
+    lambdaCardsHome: row.lambdaCardsHome ?? null,
+    lambdaCardsAway: row.lambdaCardsAway ?? null,
+    refereeFactor: row.refereeFactor ?? null,
+    refereeSample: row.refereeSample ?? null,
     // Čím byly pravděpodobnosti odvozeny z λ – `reprice` podle toho pozná zastaralý řádek.
     rho: PREDICT_PARAMS.rho,
     sharpen: PREDICT_PARAMS.sharpen,
@@ -364,6 +376,18 @@ export async function getRecentSettledPredictions(
     take: limit,
   });
   return rows.map(toRow);
+}
+
+/**
+ * Jeden uložený řádek predikce podle zápasu – vstup pro **přehled odehraného zápasu**
+ * (sekce „Model" a „Trh"). `null` = k zápasu jsme predikci nikdy neuložili, což je
+ * normální stav (cron nemusel ligu stihnout), ne chyba; přehled hry se ukáže i tak.
+ */
+export async function getPredictionByFixture(
+  fixtureId: number
+): Promise<PredictionRow | null> {
+  const row = await prisma.fixturePrediction.findUnique({ where: { fixtureId } });
+  return row ? toRow(row) : null;
 }
 
 /**

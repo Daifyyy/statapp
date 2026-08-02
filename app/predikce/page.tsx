@@ -3,8 +3,9 @@ import { getCurrentUser } from "@/lib/authUser";
 import type { SessionUser } from "../_components/sessionUser";
 
 export const metadata = {
-  title: "Predikční tipy — Predictapp",
-  description: "Nadcházející zápasy vybrané podle pravidel (PRO).",
+  title: "Predikce — Predictapp",
+  description:
+    "Které zápasy má statistický model za nejjistější a jak si zatím vede. Není to sázkové doporučení.",
 };
 
 export default async function PredikcePage() {

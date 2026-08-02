@@ -1,3 +1,5 @@
+import type { CountBaselines, Team } from "@/lib/types";
+import { MODEL_VERSION } from "./modelVersion";
 import {
   getCompareTeam,
   getLeagueBaseline,
@@ -7,7 +9,19 @@ import {
 import {
   getCompareNationalTeamFromFixture,
   getCompareNationalHomeAwayTeamFromFixture,
+  getLeagueCountBaseline,
 } from "./realRepository";
+import {
+  DEFAULT_CORNER_BASELINE,
+  cornerValues,
+  predictCorners,
+} from "@/lib/picks/corners";
+import {
+  DEFAULT_CARD_BASELINES,
+  DEFAULT_FOUL_BASELINE,
+  cardValues,
+  predictCards,
+} from "@/lib/picks/cards";
 import {
   ALL_NATIONAL_PREDICTION_LEAGUE_IDS,
   CLUB_LEAGUES,
@@ -59,14 +73,12 @@ import {
  */
 
 /**
- * Verze modelu = **co generuje λ** (okna, váhy, xG zpevnění, build týmů). Bump vynuluje
- * dataset (kalibrace i track-record běží per verzi), protože stará λ už nejde srovnávat.
- *
- * **NEbumpuj kvůli ρ / zostření λ** – to jsou post-parametry nad uloženými λ
- * (`PREDICT_PARAMS` v `lib/stats/predict.ts`). Změna konstanty + `npm run reprice`
- * přepočte historii čistou matematikou, bez API a bez ztráty nasbíraných zápasů.
+ * Verze modelu – bydlí v `./modelVersion` (leaf bez importů), protože tenhle modul
+ * importuje `./repository` a repozitář konstantu potřebuje k filtrování track-recordu.
+ * Re-export je tu proto, aby všechny existující importy (`calibrate`, `reprice`, …)
+ * i odkazy v dokumentaci platily beze změny.
  */
-export const MODEL_VERSION = 7;
+export { MODEL_VERSION };
 
 /**
  * Ligy, kde model **neporazil naivní konstantu** (45/26/29) – predikce pro ně nemá cenu
@@ -188,6 +200,68 @@ export interface PredictUpcomingResult {
  * predikci nikdy. Ruční běh s explicitním `leagueIds` (`?league=ID`) se **nerotuje** –
  * tam si pořadí volí volající.
  */
+/**
+ * λ rohů a karet pro jeden zápas z týmů, které už máme sestavené. **Čistá matematika
+ * nad `Team.leagueMatches`, 0 volání API** – proto to jde přidat do denního cronu
+ * bez dopadu na kvótu i na jeho rozpočet.
+ *
+ * Ligové měřítko se bere z cachovaných zápasů (`counts`); chybí-li (studená cache,
+ * rozjezd sezóny), padá se na publikovaný default. Míchá se **po metrikách**: liga může
+ * mít dost rohů a nemít fauly, a dopočítávat chybějící z těch druhých by byl odhad.
+ *
+ * `null` u strany = model neměl z čeho (nováček bez historie počtů) → sloupec zůstane
+ * prázdný. Nedopočítává se ligovým průměrem: „nevíme" a „průměrný tým" jsou dvě různá
+ * tvrzení a v CLV by se to druhé tvářilo jako signál.
+ *
+ * Faktor rozhodčího je zatím **neutrální** (1 / vzorek 0): `buildRefereeIndex` potřebuje
+ * korpus historie s jmény rozhodčích, který produkce nestaví. Ukládá se schválně,
+ * aby šlo poznat „neutrální faktor" od „změřeného, který vyšel 1" – u karet je přitom
+ * rozhodčí zhruba polovina změřeného přínosu, takže je to největší otevřený kus.
+ */
+function countPredictionsFor(
+  home: Team,
+  away: Team,
+  now: Date,
+  counts: CountBaselines | null
+): {
+  corners: { lambdaHome: number; lambdaAway: number } | null;
+  cards: {
+    lambdaHome: number;
+    lambdaAway: number;
+    refereeFactor: number;
+    refereeSample: number;
+  } | null;
+} {
+  const homeCorners = cornerValues(home.leagueMatches, now);
+  const awayCorners = cornerValues(away.leagueMatches, now);
+  const corner = predictCorners(
+    homeCorners,
+    awayCorners,
+    counts?.corners ?? DEFAULT_CORNER_BASELINE
+  );
+
+  const homeCards = cardValues(home.leagueMatches, now);
+  const awayCards = cardValues(away.leagueMatches, now);
+  const card = predictCards(homeCards, awayCards, undefined, {
+    cards: counts?.cards ?? DEFAULT_CARD_BASELINES.cards,
+    fouls: counts?.fouls ?? DEFAULT_FOUL_BASELINE,
+  });
+
+  return {
+    corners: corner.available
+      ? { lambdaHome: corner.lambdaHome, lambdaAway: corner.lambdaAway }
+      : null,
+    cards: card.available
+      ? {
+          lambdaHome: card.lambdaHome,
+          lambdaAway: card.lambdaAway,
+          refereeFactor: card.refereeFactor,
+          refereeSample: card.refereeSample,
+        }
+      : null,
+  };
+}
+
 export async function runPredictUpcoming(
   leagueIds?: number[],
   budgetMs: number = DEFAULT_BUDGET_MS
@@ -227,6 +301,9 @@ export async function runPredictUpcoming(
     const ratings = national
       ? await getNationalRatings()
       : await getLeagueRatings(leagueId);
+    // Měřítko rohů/karet ligy – 1× per liga z už cachovaných zápasů (0 API).
+    // Reprezentace ho nemají a `*_AGAINST` okna by stejně stála na přátelácích → null.
+    const counts = national ? null : await getLeagueCountBaseline(leagueId);
     // Turnaje se hrají na neutrální půdě (Liga národů a kvalifikace ne).
     const neutral = isNeutralNationalLeague(leagueId);
     const buildSide = (t: { id: number; name: string; logo: string }) => {
@@ -261,6 +338,15 @@ export async function runPredictUpcoming(
         });
         const p = result.prediction;
         if (!p) continue;
+        // λ ROHŮ A KARET vedle gólové – **čistá matematika nad zápasy, které už máme
+        // v ruce, tedy 0 volání API navíc**. Do teď tyhle modely v produkci nikdy
+        // neběžely (volal je jen backtest), takže jsme na oba trhy sbírali kurzy
+        // a neměli je proti čemu měřit – a CLV byl jediný způsob, jak o nich rozhodnout.
+        // Reprezentace vynechané: `CORNERS_AGAINST`/`CARDS_AGAINST` okna by u nich
+        // stála hlavně na přátelácích.
+        const countLambdas = national
+          ? null
+          : countPredictionsFor(home, away, new Date(), counts);
         await upsertPrediction({
           fixtureId: f.fixture.id,
           leagueId,
@@ -285,6 +371,12 @@ export async function runPredictUpcoming(
           lowConfidence: p.lowConfidence,
           readinessSample: p.readiness.sample,
           modelVersion: MODEL_VERSION,
+          lambdaCornersHome: countLambdas?.corners?.lambdaHome ?? null,
+          lambdaCornersAway: countLambdas?.corners?.lambdaAway ?? null,
+          lambdaCardsHome: countLambdas?.cards?.lambdaHome ?? null,
+          lambdaCardsAway: countLambdas?.cards?.lambdaAway ?? null,
+          refereeFactor: countLambdas?.cards?.refereeFactor ?? null,
+          refereeSample: countLambdas?.cards?.refereeSample ?? null,
         });
         predicted++;
 

@@ -1,4 +1,4 @@
-import type { RoundFixture, UpcomingFixture } from "@/lib/types";
+import type { PlayedFixture, RoundFixture, UpcomingFixture } from "@/lib/types";
 import { FINISHED_STATUSES, LIVE_STATUSES, type ApiFixture } from "./apiFootball";
 import {
   FIXTURE_LIST_LEAGUE_IDS,
@@ -8,6 +8,20 @@ import {
 } from "./catalog";
 
 const FIXTURE_LEAGUES = new Set(FIXTURE_LIST_LEAGUE_IDS);
+
+/**
+ * Den (`YYYY-MM-DD`) v **pražské** zóně – hranice dne, na které stojí rozpis i Výsledky.
+ * UTC by v létě posunulo večerní zápasy o den zpět (výkop 21:00 SELČ = 19:00 UTC je ještě
+ * dnešek, ale 00:30 SELČ = 22:30 UTC předchozího dne už ne).
+ */
+export function pragueDay(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Prague",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
 
 /**
  * Statusy, po kterých zápas do Programu nepatří: dohrané (`FINISHED_STATUSES`) plus
@@ -79,6 +93,49 @@ export function normalizeUpcomingFixtures(
       };
     })
     .sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+}
+
+/**
+ * Zrcadlo `normalizeUpcomingFixtures` pro záložku **Výsledky**: z téhož denního rozpisu
+ * vybere **dohrané** zápasy našich lig a seřadí je od nejnovějšího výkopu.
+ *
+ * Proč ze stejného zdroje: Výsledky se dřív četly výhradně z uložených predikcí, takže
+ * zápas bez predikce (nebo settlnutý až ranním cronem) v nich nebyl vůbec. Rozpis den
+ * zná hned – tip je až **překryv** (`mergeTips`), ne podmínka zobrazení.
+ *
+ * Bere jen `FINISHED_STATUSES` (FT/AET/PEN); `PST`/`CANC`/`ABD`/`AWD`/`WO` sem nepatří –
+ * zrušený zápas není odehraný a skóre by u něj buď chybělo, nebo lhalo. Skóre bere
+ * `fullTimeGoals` (stav po 90 min, ne po prodloužení) – shodně se settle a s tím, co
+ * model predikuje. Zápas bez použitelného skóre se vynechá, ne aby se dopočítával.
+ */
+export function normalizeFinishedFixtures(raw: ApiFixture[]): PlayedFixture[] {
+  const out: PlayedFixture[] = [];
+  for (const f of raw) {
+    if (!FIXTURE_LEAGUES.has(f.league.id)) continue;
+    const status = f.fixture.status.short;
+    if (!FINISHED_STATUSES.has(status)) continue;
+    const ft = fullTimeGoals(f);
+    if (!ft) continue;
+    const national = isNationalTournamentLeague(f.league.id);
+    out.push({
+      fixtureId: f.fixture.id,
+      leagueId: f.league.id,
+      leagueName: catalogLeagueName(f.league.id, f.league.name),
+      leagueLogoUrl: leagueLogoUrl(f.league.id),
+      kickoff: f.fixture.date,
+      home: { id: f.teams.home.id, name: f.teams.home.name, logoUrl: f.teams.home.logo },
+      away: { id: f.teams.away.id, name: f.teams.away.name, logoUrl: f.teams.away.logo },
+      homeGoals: ft.home,
+      awayGoals: ft.away,
+      afterExtraTime: status === "AET" || status === "PEN",
+      national,
+      compareMode: national ? "NATIONAL" : "CLUB",
+      homeCompareLeagueId: national ? null : f.league.id,
+      awayCompareLeagueId: national ? null : f.league.id,
+    });
+  }
+  // Nejnovější první – ve Výsledcích čte člověk odshora to, co se dohrálo naposled.
+  return out.sort((a, b) => b.kickoff.localeCompare(a.kickoff));
 }
 
 /**

@@ -237,6 +237,15 @@ describe("chybějící data", () => {
 
   it("skóre se propíše do metrik (GOALS_FOR nemusí být ve statistikách)", () => {
     const r = buildMatchReport({ XG: 0.5 }, { XG: 0.4 }, TEAMS, { home: 3, away: 0 });
-    expect(r.notes.join(" ")).toContain("3 gólů z xG 0.50");
+    expect(r.notes.join(" ")).toContain("3 góly z xG 0.50");
+  });
+
+  it("počty se skloňují (sdílená `czech.ts`, ne „3 gólů“ a „6 karet“ natvrdo)", () => {
+    // Čísla se do vět dosazují z dat, takže bez skloňování vznikne „1 góly“.
+    const one = buildMatchReport({ XG: 0.1 }, { XG: 0.4 }, TEAMS, { home: 1, away: 0 });
+    expect(one.notes.join(" ")).toContain("1 gól z xG 0.10");
+
+    const many = buildMatchReport({ XG: 0.5 }, { XG: 0.2 }, TEAMS, { home: 5, away: 0 });
+    expect(many.notes.join(" ")).toContain("5 gólů z xG 0.50");
   });
 });

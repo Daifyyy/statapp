@@ -141,3 +141,52 @@ describe("filterPicks", () => {
     expect(picks[0].awayCompareLeagueId).toBeNull();
   });
 });
+
+describe("explain – popisek říká PROČ, ne to samé číslo podruhé", () => {
+  // `PickRow` tiskne pravděpodobnost vpravo tučně, takže popisek s procentem nenesl
+  // žádnou informaci navíc. Dnes nese očekávané góly = skutečný důvod.
+  it("výhra: jméno favorita, místo a očekávané góly", () => {
+    const picks = filterPicks([row({ homeWin: 0.7 })], {
+      market: "win",
+      venue: "home",
+      minProb: 0.65,
+    });
+    expect(picks[0].explanation).toBe("Domácí doma favorit · čekáme 1.6 : 1.0 gólu");
+  });
+
+  it("hostující favorit se popíše ze své strany", () => {
+    const picks = filterPicks([row({ awayWin: 0.7 })], {
+      market: "win",
+      venue: "away",
+      minProb: 0.65,
+    });
+    expect(picks[0].explanation).toBe("Hosté venku favorit · čekáme 1.6 : 1.0 gólu");
+  });
+
+  it("Přes 2.5 gólu popisuje SOUČET, ne strany", () => {
+    const picks = filterPicks([row({ over25: 0.7 })], {
+      market: "over25",
+      venue: "any",
+      minProb: 0.65,
+    });
+    expect(picks[0].explanation).toBe("Přes 2.5 gólu · čekáme 2.6 gólu celkem");
+  });
+
+  it("Oba skórují popisuje obě strany zvlášť", () => {
+    const picks = filterPicks([row({ bttsYes: 0.7 })], {
+      market: "btts",
+      venue: "any",
+      minProb: 0.65,
+    });
+    expect(picks[0].explanation).toBe("Oba týmy skórují · čekáme 1.6 : 1.0 gólu");
+  });
+
+  it("v popisku NENÍ procento (bylo by na řádku podruhé)", () => {
+    const picks = filterPicks([row({ homeWin: 0.7 })], {
+      market: "win",
+      venue: "home",
+      minProb: 0.65,
+    });
+    expect(picks[0].explanation).not.toContain("%");
+  });
+});

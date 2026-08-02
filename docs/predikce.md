@@ -1,5 +1,71 @@
 # Predikční záložka, pipeline, backtest, verzování a kalibrace
 
+## Záložka `/predikce`: dvě záložky, brána a prahy (přepracováno 2. 8. 2026)
+
+**Proč se to přepisovalo:** stránka vznikla, když bylo otevřené „dá se z našich dat
+postavit ziskový sázecí model?", proto měla sázkový slovník (*tipy, strategie, úspěšnost,
+value*). Odpověď mezitím přišla — na gólových trzích **ne** — ale stránka zůstala postavená
+jako sázecí nástroj a do třetího panelu dostala větu „nesázejte podle toho". Výsledek:
+pět diagnostických panelů (log-loss, ECE, ⌀ posun v p. b., overround) **před** ovládáním
+a seznamem zápasů, u žádného čísla měřítko, a řádek tipu, který jen přeříkal procento.
+
+- **Dvě záložky nad týmiž daty** (sdílený `ViewTabs`, vytknutý ze `ZapasyApp`):
+  **Tipy** (pravidlo → jedno číslo → seznam) a **Jak si model vede**. Přepnutí **nic
+  nedotahuje** — oba `useEffect` zůstávají v `PicksApp`.
+- **Lead říká rovnou, čím stránka je**: „Které zápasy má model za nejjistější. **Není to
+  sázkové doporučení** — na gólových trzích model nepřekonává kurzy sázkovek." Dřív bylo
+  totéž zahrabané uprostřed `MarketPanel`, kam se doroluje málokdo.
+- **Detailní ovládání je pod „⚙ Upravit pravidlo"**; presety zůstaly primární.
+  Přepínač **„Jen kde se lišíme od trhu" nese varování přímo u sebe** — měření říká, že
+  větší neshoda s trhem znamenala **horší** ROI (−7,7 % → −8,9 %), takže bez varování ho
+  laik čte přesně naopak, než jak to je.
+- **`StrategyPanel` patří k tipům**, ne do diagnostiky (je to backtest *navoleného*
+  pravidla). Pod `STRATEGY_MIN_SAMPLE = 10` tipů **nevykreslí procento**: „100 % (1/1)"
+  ve velkém fontu vypadá jako výsledek a odznak „malý vzorek" pod tím to nezachrání.
+
+### Brána (`lib/picks/gate.ts`, čisté + testy) = záložka „Jak si model vede"
+Vykreslený invariant z `CLAUDE.md` („do stakingu neinvestovat, dokud aspoň jeden trh nemá
+kladné CLV nebo ROI s intervalem mimo nulu"). `evaluateEdgeGate` je **čistá funkce nad tím,
+co už vrací `/api/picks/stats`** → 0 nových volání. Tři kritéria jako **řetěz**, každé se
+stavem, lidskou větou a větou „co by se muselo stát"; původní panely v nich sedí jako důkaz
+pod „▸ Podrobně". `BenchmarkPanel` (vs. API-Football) je **mimo bránu** — porazit jiný
+predikční web o ničem nerozhoduje, rozhodčím je trh.
+
+| # | otázka | práh |
+|---|---|---|
+| 1 | Říká model pravdu sám o sobě? | `ECE < 0.05` **a** ≥ 100 bodů křivky (~33 zápasů) |
+| 2 | Jsme přesnější než cena? | `our.logloss < market.logloss` **a** ≥ 200 zápasů s kurzy |
+| 3 | Hne se linie naším směrem? | ⌀ posun ≥ **1.5 p. b.**, beatRate > 50 % **a** ≥ 200 tipů |
+
+- **`insufficient` NENÍ `fail`.** „Zatím nevíme" a „neumíme to" jsou dvě různá tvrzení;
+  splynout nesmí, jinak vzniká falešný verdikt na trhu, kde se teprve sbírají data.
+- **Celkový verdikt je konjunkce**, ne skóre: model skvěle kalibrovaný, ale horší než
+  cena, hranu nemá. Jedno `fail` shodí bránu.
+- **Minimální vzorky u kritérií 1 a 2 nejsou formalita.** Po zapnutí filtru verze (níž)
+  stojí produkce na 7 zápasech a na nich vychází náš log-loss **0.910 vs. trh 1.031** —
+  tedy že trh porážíme. Je to šum: SE log-lossu je při n = 7 řádově **±0.26**, kdežto
+  skutečný rozdíl je **0.048 v opačném směru** (9 271 zápasů). Bez prahu by brána
+  ukázala ✓ a popřela vlastní lead. Kryto testem.
+
+### Prahy CLV — proč právě tyhle (`CLV_MIN_SAMPLE`, `CLV_MIN_EDGE_PB`)
+- **Práh není nula, ale zaplacená marže.** Kladné CLV je *nutná*, ne postačující podmínka:
+  na 1X2 sežere overround 3–4 % zhruba **1–1,5 p. b.** na stranu, na rozích a kartách
+  (marže 5–9 %) 2,5–4,5 p. b. „+0,3 p. b." je matematicky kladné a ekonomicky nula.
+- **Vzorek jsou nižší stovky, ne desítky.** SE podílu „tipů před trhem" je zhruba
+  `50/√n` p. b. → při n = 100 je ±5 p. b., takže 55 % je **jedna** směrodatná chyba.
+  ⌀ posun je efektivnější (nese i velikost pohybu), ale ani ten se dřív neustálí.
+- **Past, kterou kritérium hlásí v textu:** CLV se měří nad **jedním pravidlem**. Pravidlo,
+  které pořád bere stejný typ strany (domácí favority), může vykázat kladné CLV
+  z **mikrostruktury trhu** (pozdní peníze na favority), ne ze skillu. Kontrola: pustit
+  totéž pravidlo na **opačnou stranu** — vyjde-li kladné CLV i tam, neměříme skill.
+
+### Řádek tipu říká proč, ne totéž číslo podruhé
+`explain()` (`rules.ts`) vracel „Sparta doma favorit · 74 % na výhru", přičemž `74 %` už
+`PickRow` tiskne vpravo tučně. Dnes nese **očekávané góly** („čekáme 2.1 : 0.8 gólu") —
+skutečný důvod, proč pravděpodobnost vyšla tak, jak vyšla. λ jsou základní (před
+zostřením), stejně jako je čte `predictionOf`; `LAMBDA_SHARPEN = 1.0` je no-op. 0 volání
+navíc, propíše se i do `/digest` (sdílí `PickRow`).
+
 ## Predikční záložka (PRO) + dataset predikce-vs-skutečnost
 - **Princip:** predikce nadcházejících zápasů se počítají **jen na pozadí (cron), dávkově**
   a ukládají do tabulky `FixturePrediction` (predikce + po odehrání výsledek). Záložka
@@ -96,6 +162,15 @@
   `.cache/backtest` → iterace nad modelem běží **offline za ~8 s**. Model se tak ladí na tisících
   zápasů, ne rychlostí, jakou se plní DB. **Omezení:** bez xG (to je 1 volání/zápas → produkční λ
   má navíc xG složku) a bez pohárů. Fit ρ/zostření je sdílený (`lib/picks/fit.ts`) s `calibrate`.
+- **Track-record a kalibrace v UI čtou JEN aktuální verzi modelu.**
+  `getSettledPredictionRows(modelVersion = MODEL_VERSION)` (`repository.ts`) filtruje
+  **defaultně**. Dřív volal `getSettledPredictions()` bez argumentu, takže všech pět panelů
+  na `/predikce` počítalo z **69 řádků, ze kterých bylo 62 z verze 1** a jen 7 z aktuální —
+  čísla tedy neměřila model, který běží. `npm run calibrate` filtroval správně odjakživa,
+  cesta do UI ne. Verze je **parametr s defaultem**, ne volitelný filtr: volitelnost je
+  přesně to, co tuhle chybu umožnilo. `MODEL_VERSION` proto bydlí v leaf modulu
+  `lib/data/modelVersion.ts` (`predictions.ts` importuje `repository`, takže opačný import
+  by byl cyklus) a `predictions.ts` ji re-exportuje — všechny stávající importy platí dál.
 - **Dvě úrovně verzování (DŮLEŽITÉ):** `MODEL_VERSION` (`predictions.ts`) verzuje **jen to, co
   generuje λ** (okna, váhy, xG zpevnění, build týmů) – bump **vynuluje dataset** (kalibrace
   i track-record běží per verzi). **ρ a zostření λ pod něj nepatří**: jsou to post-parametry

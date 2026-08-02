@@ -1,4 +1,9 @@
-import type { PredictionRow, SettledMatch } from "@/lib/types";
+import type {
+  FixtureDay,
+  FixtureTip,
+  PredictionRow,
+  SettledMatch,
+} from "@/lib/types";
 import { isNationalTournamentLeague, leagueLogoUrl } from "@/lib/data/catalog";
 import { actualOutcome, argmaxOutcome, probOfSide } from "./trackRecord";
 
@@ -34,4 +39,32 @@ export function summarizeSettled(rows: PredictionRow[]): SettledMatch[] {
   }
   // Nejnovější první (řádky z DB jsou už kickoff desc, ale mock parita to nezaručí).
   return out.sort((a, b) => b.kickoff.localeCompare(a.kickoff));
+}
+
+/**
+ * Přiřadí odehraným zápasům náš tip (párování po `fixtureId`). Čistá funkce – mutuje
+ * jen kopie, vrací nové dny.
+ *
+ * **Tip je překryv, ne filtr.** Zápas bez predikce projde beze změny; smyslem záložky je
+ * ukázat, co se odehrálo, ne co jsme stihli tipnout. Vstupem jsou už zmapované
+ * `SettledMatch` (tedy jen řádky s `available` a známým skóre) – zápas s predikcí, která
+ * se nevyhodnotila, tak zůstane bez odznaku místo s prázdným.
+ */
+export function mergeTips(days: FixtureDay[], settled: SettledMatch[]): FixtureDay[] {
+  if (settled.length === 0) return days;
+  const tips = new Map<number, FixtureTip>();
+  for (const s of settled) {
+    tips.set(s.fixtureId, {
+      side: s.predictedSide,
+      prob: s.predictedProb,
+      hit: s.outcomeHit,
+    });
+  }
+  return days.map((day) => ({
+    ...day,
+    played: day.played.map((p) => {
+      const tip = tips.get(p.fixtureId);
+      return tip ? { ...p, tip } : p;
+    }),
+  }));
 }

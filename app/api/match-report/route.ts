@@ -4,16 +4,21 @@ import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { publicCache } from "@/lib/cacheHeaders";
 
 /**
- * Kategorický přehled **odehraného** zápasu pro záložku Výsledky (kdo dominoval, typ
- * zápasu, jak kdo zahrál).
+ * Přehled **odehraného** zápasu pro záložku Výsledky: obraz hry (kdo dominoval, typ
+ * zápasu, jak kdo zahrál) a k tomu **model a trh vs. skutečnost**, pokud k zápasu máme
+ * uloženou predikci.
  *
- * **FREE**: je to historie, ne budoucí tip – nic predikčního neprozrazuje, přesně jako
- * zbytek Výsledků. **Rate-limitované**, protože na studený zápas spouští upstream fetch
+ * **FREE**: je to historie, ne budoucí tip. Co model o TOMHLE zápase říkal, se ukazuje
+ * až po výkopu – přesně jako `Tip: … 71 %` v řádku výsledku; budoucí tipy zůstávají PRO.
+ *
+ * **Rate-limitované**, protože na studený zápas spouští upstream fetch
  * (`/fixtures/statistics`, 1 volání); pak už jede z trvalé `MatchStatCache` zdarma.
+ * Predikční řádek je dotaz do DB, ne do API.
  *
- * Chybějící statistiky → `{ report: null }` a 200, aby UI ukázalo prázdný stav místo
- * chyby. API je u části zápasů nemá (~třetina reprezentačních) a čerstvě dohraný zápas
- * je dostane s odstupem – to je normální stav, ne selhání.
+ * Chybějící data → `null` v příslušném poli a 200, aby UI sekci jen skrylo místo chyby.
+ * Statistiky API u části zápasů nemá (~třetina reprezentačních) a čerstvě dohraný zápas
+ * je dostane s odstupem; predikci nemusel cron k zápasu vůbec stihnout. Obojí je
+ * normální stav, ne selhání – a jedno nesmí schovat druhé.
  */
 export async function GET(req: Request) {
   if (!allowRequest(`report:${clientKey(req)}`, 30, 60_000)) return tooMany();
@@ -34,15 +39,15 @@ export async function GET(req: Request) {
       : null;
 
   try {
-    const report = await getMatchReport({
+    const { report, review } = await getMatchReport({
       fixtureId,
       home: { id: homeId, name: p.get("hn") ?? "Domácí" },
       away: { id: awayId, name: p.get("an") ?? "Hosté" },
       goals,
     });
     // Odehraný zápas se už nezmění → dlouhá CDN cache; šetří funkci i Neon.
-    return NextResponse.json({ report }, { headers: publicCache(3600, 86_400) });
+    return NextResponse.json({ report, review }, { headers: publicCache(3600, 86_400) });
   } catch {
-    return NextResponse.json({ report: null });
+    return NextResponse.json({ report: null, review: null });
   }
 }

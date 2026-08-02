@@ -6,7 +6,7 @@ import { signIn } from "next-auth/react";
 import type {
   FixtureDay,
   LiveScore,
-  SettledMatch,
+  PlayedFixture,
   UpcomingFixture,
 } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
@@ -14,6 +14,7 @@ import { AppHeader } from "./AppHeader";
 import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
 import { MatchReportPanel } from "./MatchReportPanel";
+import { ViewTabs } from "./ViewTabs";
 import { LiveReportPanel } from "./LiveReportPanel";
 import { buildTipHref } from "./tipHref";
 import { useCurrentUser } from "./useCurrentUser";
@@ -41,6 +42,13 @@ function pragueToday(): string {
 function nextDay(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Předchozí kalendářní den z YYYY-MM-DD. */
+function prevDay(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -195,22 +203,32 @@ function useFavorites(isPro: boolean): {
 
 /**
  * Záložka „Zápasy" = domovská obrazovka pro rychlý přístup k predikci. Dvě části
- * (přepínač): **Program** = nadcházející zápasy seskupené podle ligy (klik = Porovnání
- * s předvyplněnými týmy + predikcí, bez ručního zadávání) a **Výsledky** = jak dopadly
- * naše nedávné predikce (skóre + ✓/✗). Seznamy jsou jen navigace – nic se nepočítá živě.
+ * (přepínač) nad **jedním** polem dní `[dnes−RESULT_DAYS … dnes+6]`: **Program** =
+ * nadcházející zápasy seskupené podle ligy (klik = Porovnání s předvyplněnými týmy +
+ * predikcí) a **Výsledky** = odehrané zápasy týchž lig, den po dni dozadu.
+ * Seznamy jsou jen navigace – nic se nepočítá živě.
+ *
+ * **Ve Výsledcích je náš tip odznak, ne podmínka.** Zápas se ukáže, jakmile ho API hlásí
+ * dohraný; ✓/✗ dorazí, až predikci vypořádá `settle-results`. Dřív byly Výsledky čtené
+ * výhradně z uložených predikcí, takže večerní zápas v nich chyběl klidně 17 h a zápas
+ * bez predikce navždy.
  */
 export function ZapasyApp({
   days,
-  results,
+  resultDays,
 }: {
   days: FixtureDay[];
-  results: SettledMatch[];
+  /** Kolik prvních položek `days` je minulost (kontrakt s `RESULT_DAYS` v `app/page.tsx`). */
+  resultDays: number;
 }) {
   // Stránka je statická (ISR) → uživatele načteme klientsky (anon = null; PRO odemkne
   // oblíbené). Krátký flash „nepřihlášen" v hlavičce je cena za CDN-cacheovaný shell.
   const user = useCurrentUser();
   const [view, setView] = useState<View>("program");
+  // Vlastní kurzor pro každý pohled – pásky jedou opačným směrem, sdílený index by
+  // po přepnutí skočil na náhodný den.
   const [dayIdx, setDayIdx] = useState(0);
+  const [resultIdx, setResultIdx] = useState(0);
   const [onlyFav, setOnlyFav] = useState(false);
   const [proCta, setProCta] = useState(false);
 
@@ -233,13 +251,31 @@ export function ZapasyApp({
 
   // Odfiltruj minulé dny ze zastaralého snapshotu (yesterday-as-„Dnes" fix). Když by tím
   // nezbylo nic (extrémně starý snapshot), radši ukaž původní data než prázdno.
+  //
+  // **Do prvního renderu (SSR/hydratace) se řeže indexem, ne datem** – server a klient si
+  // musí padnout do noty. `days` chodí seřazené nejstarší první, takže Program začíná na
+  // `resultDays` (= dnešek dle serveru) a Výsledky berou zbytek. Po mountu rozhoduje
+  // skutečný pražský „dnes" na klientovi.
   const visibleDays = useMemo(() => {
-    if (!clientToday) return days;
+    if (!clientToday) return days.slice(resultDays);
     const future = days.filter((d) => d.date >= clientToday);
-    return future.length > 0 ? future : days;
-  }, [days, clientToday]);
+    return future.length > 0 ? future : days.slice(resultDays);
+  }, [days, clientToday, resultDays]);
+
+  // Výsledky jedou opačně: dnešek první, pak dozadu.
+  const pastDays = useMemo(() => {
+    const past = clientToday
+      ? days.filter((d) => d.date <= clientToday)
+      : days.slice(0, resultDays + 1);
+    return (past.length > 0 ? past : days.slice(0, resultDays + 1)).slice().reverse();
+  }, [days, clientToday, resultDays]);
 
   const active = visibleDays[dayIdx] ?? visibleDays[0];
+  const activePast = pastDays[resultIdx] ?? pastDays[0];
+  const playedCount = useMemo(
+    () => pastDays.reduce((n, d) => n + d.played.length, 0),
+    [pastDays]
+  );
   const isPro = user?.tier === "PRO";
 
   const { scores, loaded } = useLiveScores(
@@ -290,10 +326,20 @@ export function ZapasyApp({
       <p className="mt-1 text-sm text-muted">
         {view === "program"
           ? "Vyber zápas a rovnou se otevře porovnání týmů s predikcí."
-          : "Jak dopadly naše nedávné predikce – skóre a zda jsme trefili výsledek."}
+          : "Odehrané zápasy sledovaných lig – a u těch, které jsme tipovali, i jak nám to vyšlo."}
       </p>
 
-      <ViewTabs view={view} onSelect={setView} resultCount={results.length} />
+      <ViewTabs
+        tabs={[
+          { value: "program", label: "Program" },
+          {
+            value: "results",
+            label: playedCount > 0 ? `Výsledky (${playedCount})` : "Výsledky",
+          },
+        ]}
+        active={view}
+        onSelect={setView}
+      />
 
       {view === "program" ? (
         <>
@@ -301,6 +347,8 @@ export function ZapasyApp({
             days={visibleDays}
             active={dayIdx}
             today={clientToday}
+            direction="future"
+            count={(d) => d.fixtures.length}
             onSelect={setDayIdx}
           />
 
@@ -354,13 +402,25 @@ export function ZapasyApp({
             </Empty>
           )}
         </>
-      ) : results.length > 0 ? (
-        <ResultsList results={results} />
       ) : (
-        <Empty>
-          Zatím nemáme vyhodnocené predikce. Výsledky se naplní, jakmile se odehrají
-          zápasy z našich sledovaných lig.
-        </Empty>
+        <>
+          <DayTabs
+            days={pastDays}
+            active={resultIdx}
+            today={clientToday}
+            direction="past"
+            count={(d) => d.played.length}
+            onSelect={setResultIdx}
+          />
+          {activePast && activePast.played.length > 0 ? (
+            <ResultsList played={activePast.played} />
+          ) : (
+            <Empty>
+              Na tento den nemáme ve sledovaných ligách odehraný zápas. Zkus jiný den –
+              mimo sezónu (léto) top ligy nehrají.
+            </Empty>
+          )}
+        </>
       )}
     </main>
   );
@@ -456,55 +516,23 @@ function FavoritesSection({
   );
 }
 
-function ViewTabs({
-  view,
-  onSelect,
-  resultCount,
-}: {
-  view: View;
-  onSelect: (v: View) => void;
-  resultCount: number;
-}) {
-  const tabs: { value: View; label: string }[] = [
-    { value: "program", label: "Program" },
-    {
-      value: "results",
-      label: resultCount > 0 ? `Výsledky (${resultCount})` : "Výsledky",
-    },
-  ];
-  return (
-    <div className="mt-4 inline-flex w-full rounded-full border border-border bg-surface p-0.5">
-      {tabs.map((t) => {
-        const activeTab = t.value === view;
-        return (
-          <button
-            key={t.value}
-            type="button"
-            onClick={() => onSelect(t.value)}
-            className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-              activeTab
-                ? "bg-foreground text-background"
-                : "text-muted hover:text-foreground"
-            }`}
-          >
-            {t.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // Je-li znám skutečný „dnes" (klient), labeluj podle data (odolné vůči zastaralému snapshotu);
 // dokud není (SSR/hydratace), padni zpět na index, aby seděl server i klient. Dál krátký den
-// v týdnu + datum (So 28. 6.).
-function dayLabel(date: string, idx: number, today: string | null): string {
+// v týdnu + datum (So 28. 6.). `direction` řeší jen index fallback: Program jde dopředu
+// (0 = Dnes, 1 = Zítra), Výsledky dozadu (0 = Dnes, 1 = Včera).
+function dayLabel(
+  date: string,
+  idx: number,
+  today: string | null,
+  direction: DayDirection
+): string {
   if (today) {
     if (date === today) return "Dnes";
     if (date === nextDay(today)) return "Zítra";
+    if (date === prevDay(today)) return "Včera";
   } else {
     if (idx === 0) return "Dnes";
-    if (idx === 1) return "Zítra";
+    if (idx === 1) return direction === "future" ? "Zítra" : "Včera";
   }
   return new Date(`${date}T00:00:00`).toLocaleDateString("cs-CZ", {
     weekday: "short",
@@ -512,6 +540,8 @@ function dayLabel(date: string, idx: number, today: string | null): string {
     month: "numeric",
   });
 }
+
+type DayDirection = "future" | "past";
 
 function isWeekend(date: string): boolean {
   const day = new Date(`${date}T00:00:00`).getDay();
@@ -522,11 +552,16 @@ function DayTabs({
   days,
   active,
   today,
+  direction,
+  count,
   onSelect,
 }: {
   days: FixtureDay[];
   active: number;
   today: string | null;
+  direction: DayDirection;
+  /** Co se počítá do bubliny – Program bere `fixtures`, Výsledky `played`. */
+  count: (d: FixtureDay) => number;
   onSelect: (i: number) => void;
 }) {
   // Horizontálně scrollovatelný pásek (mobile-first) – týden dní se nevejde do řady.
@@ -545,19 +580,46 @@ function DayTabs({
                 }`
           }`}
         >
-          {dayLabel(d.date, i, today)}
-          <span className="ml-1.5 text-xs opacity-70">({d.fixtures.length})</span>
+          {dayLabel(d.date, i, today, direction)}
+          <span className="ml-1.5 text-xs opacity-70">({count(d)})</span>
         </button>
       ))}
     </div>
   );
 }
 
-interface LeagueGroup {
+interface LeagueGroupOf<T> {
   leagueId: number;
   name: string;
   logoUrl: string;
-  fixtures: UpcomingFixture[];
+  fixtures: T[];
+}
+
+type LeagueGroup = LeagueGroupOf<UpcomingFixture>;
+
+/**
+ * Seskupí zápasy podle ligy. **Pořadí lig i zápasů drží pořadí vstupu** – ten je už
+ * seřazený (Program dle nejbližšího výkopu, Výsledky od nejnovějšího), takže sem
+ * nepatří žádné vlastní řazení, které by se s ním rozešlo.
+ */
+function groupByLeague<
+  T extends { leagueId: number; leagueName: string; leagueLogoUrl: string },
+>(fixtures: T[]): LeagueGroupOf<T>[] {
+  const map = new Map<number, LeagueGroupOf<T>>();
+  for (const f of fixtures) {
+    let g = map.get(f.leagueId);
+    if (!g) {
+      g = {
+        leagueId: f.leagueId,
+        name: f.leagueName,
+        logoUrl: f.leagueLogoUrl,
+        fixtures: [],
+      };
+      map.set(f.leagueId, g);
+    }
+    g.fixtures.push(f);
+  }
+  return [...map.values()];
 }
 
 function LeagueGroups({
@@ -574,23 +636,7 @@ function LeagueGroups({
   onToggleLeague: (id: number, on: boolean) => void;
 }) {
   // Seskup dle ligy; pořadí lig dle nejbližšího výkopu (fixtures jsou už dle času).
-  const groups = useMemo<LeagueGroup[]>(() => {
-    const map = new Map<number, LeagueGroup>();
-    for (const f of fixtures) {
-      let g = map.get(f.leagueId);
-      if (!g) {
-        g = {
-          leagueId: f.leagueId,
-          name: f.leagueName,
-          logoUrl: f.leagueLogoUrl,
-          fixtures: [],
-        };
-        map.set(f.leagueId, g);
-      }
-      g.fixtures.push(f);
-    }
-    return [...map.values()];
-  }, [fixtures]);
+  const groups = useMemo<LeagueGroup[]>(() => groupByLeague(fixtures), [fixtures]);
 
   // Rozbalené ligy (výchozí: vše sbaleno, bez auto-rozbalení).
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -840,79 +886,167 @@ function LiveReportToggle({ fixture }: { fixture: UpcomingFixture }) {
   );
 }
 
-function ResultsList({ results }: { results: SettledMatch[] }) {
-  const hits = results.filter((r) => r.outcomeHit).length;
+function ResultsList({ played }: { played: PlayedFixture[] }) {
+  // Jmenovatel jsou **zápasy s predikcí**, ne všechny odehrané – jinak by číslo tiše
+  // tvrdilo, že jsme tipovali i to, co jsme netipovali.
+  const tipped = played.filter((p) => p.tip);
+  const hits = tipped.filter((p) => p.tip!.hit).length;
+  const groups = useMemo(() => groupByLeague(played), [played]);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
   return (
     <div className="mt-4">
-      <p className="px-1 text-xs text-muted">
-        Výsledek 1X2 trefen u{" "}
-        <span className="font-semibold text-foreground">
-          {hits} z {results.length}
-        </span>{" "}
-        nedávných zápasů.
-      </p>
-      <ul className="mt-2 space-y-2">
-        {results.map((r) => (
-          <ResultRow key={r.fixtureId} result={r} />
+      {tipped.length > 0 && (
+        <p className="px-1 text-xs text-muted">
+          Výsledek 1X2 trefen u{" "}
+          <span className="font-semibold text-foreground">
+            {hits} z {tipped.length}
+          </span>{" "}
+          {tipped.length === 1 ? "zápasu" : "zápasů"}, kde jsme měli predikci.
+        </p>
+      )}
+      <div className="mt-2 space-y-3">
+        {groups.map((g) => (
+          <PlayedLeagueContainer
+            key={g.leagueId}
+            group={g}
+            open={expanded.has(g.leagueId)}
+            onToggleOpen={() =>
+              setExpanded((prev) => {
+                const n = new Set(prev);
+                if (n.has(g.leagueId)) n.delete(g.leagueId);
+                else n.add(g.leagueId);
+                return n;
+              })
+            }
+          />
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
 
-const SIDE_LABELS: Record<SettledMatch["predictedSide"], string> = {
+/**
+ * Ligový kontejner ve Výsledcích – stejný vzhled i chování jako v Programu (klikací
+ * hlavička, výchozí sbaleno), jen bez hvězdy a živé tečky: oblíbené řeší Program
+ * a dohraný zápas živý není. Ve sbalené hlavičce je místo nejbližšího výkopu **bilance
+ * tipů** v té lize, pokud nějaké máme.
+ */
+function PlayedLeagueContainer({
+  group,
+  open,
+  onToggleOpen,
+}: {
+  group: LeagueGroupOf<PlayedFixture>;
+  open: boolean;
+  onToggleOpen: () => void;
+}) {
+  const tipped = group.fixtures.filter((f) => f.tip);
+  const hits = tipped.filter((f) => f.tip!.hit).length;
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <TeamLogo src={group.logoUrl} alt={group.name} size={18} />
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+            {group.name}
+          </span>
+          <span className="shrink-0 text-xs text-muted">({group.fixtures.length})</span>
+          {!open && tipped.length > 0 && (
+            <span className="shrink-0 text-xs text-muted">
+              · {hits}/{tipped.length} ✓
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          aria-label={open ? "Sbalit" : "Rozbalit"}
+          className="shrink-0 text-muted transition hover:text-foreground"
+        >
+          {open ? "▲" : "▼"}
+        </button>
+      </div>
+      {open && (
+        <ul className="space-y-2 px-3 pb-3">
+          {group.fixtures.map((f) => (
+            <PlayedRow key={f.fixtureId} fixture={f} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const SIDE_LABELS: Record<"home" | "draw" | "away", string> = {
   home: "Domácí",
   draw: "Remíza",
   away: "Hosté",
 };
 
-function ResultRow({ result }: { result: SettledMatch }) {
+function PlayedRow({ fixture }: { fixture: PlayedFixture }) {
   const [open, setOpen] = useState(false);
-  const date = new Date(result.kickoff).toLocaleDateString("cs-CZ", {
-    day: "numeric",
-    month: "numeric",
+  const time = new Date(fixture.kickoff).toLocaleTimeString("cs-CZ", {
+    hour: "2-digit",
+    minute: "2-digit",
   });
-  const href = buildCompareHref(result);
-  const tip = `Tip: ${SIDE_LABELS[result.predictedSide]} · ${Math.round(
-    result.predictedProb * 100
-  )} %`;
+  const href = buildCompareHref(fixture);
+  const tip = fixture.tip;
   const cardClass =
     "block rounded-xl border border-border bg-surface px-3 py-2.5 shadow-sm";
   const inner = (
     <>
       <div className="flex items-center gap-2">
-        <span className="w-9 shrink-0 text-[11px] leading-tight text-muted">{date}</span>
+        <span className="w-10 shrink-0 text-[11px] leading-tight text-muted tabular-nums">
+          {time}
+        </span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-          <TeamLogo src={result.home.logoUrl} alt={result.home.name} size={20} />
-          <span className="min-w-0 truncate font-medium text-home">{result.home.name}</span>
+          <TeamLogo src={fixture.home.logoUrl} alt={fixture.home.name} size={20} />
+          <span className="min-w-0 truncate font-medium text-home">
+            {fixture.home.name}
+          </span>
           <span
             className="shrink-0 font-bold tabular-nums text-foreground"
             title={
-              result.afterExtraTime
+              fixture.afterExtraTime
                 ? "Stav po 90 minutách (zápas se rozhodl až v prodloužení)"
                 : undefined
             }
           >
-            {result.homeGoals}:{result.awayGoals}
-            {result.afterExtraTime && (
+            {fixture.homeGoals}:{fixture.awayGoals}
+            {fixture.afterExtraTime && (
               <span className="ml-0.5 align-super text-[9px] font-normal text-muted">
                 90′
               </span>
             )}
           </span>
-          <span className="min-w-0 truncate font-medium text-away">{result.away.name}</span>
-          <TeamLogo src={result.away.logoUrl} alt={result.away.name} size={20} />
+          <span className="min-w-0 truncate font-medium text-away">
+            {fixture.away.name}
+          </span>
+          <TeamLogo src={fixture.away.logoUrl} alt={fixture.away.name} size={20} />
         </div>
-        <span
-          className={`shrink-0 text-sm font-bold ${
-            result.outcomeHit ? "text-positive" : "text-negative"
-          }`}
-          aria-label={result.outcomeHit ? "Predikce vyšla" : "Predikce nevyšla"}
-        >
-          {result.outcomeHit ? "✓" : "✗"}
-        </span>
+        {tip && (
+          <span
+            className={`shrink-0 text-sm font-bold ${
+              tip.hit ? "text-positive" : "text-negative"
+            }`}
+            aria-label={tip.hit ? "Predikce vyšla" : "Predikce nevyšla"}
+          >
+            {tip.hit ? "✓" : "✗"}
+          </span>
+        )}
       </div>
-      <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">{tip}</div>
+      {tip && (
+        <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">
+          Tip: {SIDE_LABELS[tip.side]} · {Math.round(tip.prob * 100)} %
+        </div>
+      )}
     </>
   );
   return (
@@ -934,7 +1068,7 @@ function ResultRow({ result }: { result: SettledMatch }) {
         {open ? "▾" : "▸"} Přehled zápasu
       </button>
       {/* Panel se montuje až po otevření → fetch se pustí jen na vyžádání. */}
-      {open && <MatchReportPanel match={result} />}
+      {open && <MatchReportPanel match={fixture} />}
     </li>
   );
 }

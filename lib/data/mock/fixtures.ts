@@ -1,5 +1,6 @@
-import type { FixtureDay, UpcomingFixture } from "@/lib/types";
+import type { FixtureDay, PlayedFixture, UpcomingFixture } from "@/lib/types";
 import { leagueLogoUrl } from "../catalog";
+import { pragueDay } from "../fixtures";
 import { buildTeams, LEAGUES } from "./seed";
 
 /**
@@ -24,10 +25,11 @@ function leagueMeta(leagueId: number): { name: string; logoUrl: string } {
  * prahem („na přehled je zatím brzy"), **38'** je běžný průběh a **72'** závěr, kde se
  * zapínají i pozorování vázaná na čas.
  *
- * `fixtureId` se čísluje od 9 000 000 vzestupně přes dny, takže při běžném sedmidenním
- * okně padne každý z těchhle tří na **první zápas jiného dne** (dnes / zítra / pozítří).
- * Pro vývoj to stačí – stavy se proklikají záložkami dnů; „živý" zápas na zítřejší kartě
- * je artefakt mocku, ne chování produkce.
+ * `fixtureId` se budoucím dnům čísluje od 9 000 000 vzestupně, takže každý z těchhle tří
+ * padne na **první zápas jiného dne** (dnes / zítra / pozítří). Pro vývoj to stačí –
+ * stavy se proklikají záložkami dnů; „živý" zápas na zítřejší kartě je artefakt mocku,
+ * ne chování produkce. **Minulé dny mají vlastní řadu id** (9 500 000+), aby rozšíření
+ * rozpisu o dny dozadu tenhle výběr neposunulo a živý režim v devu tiše nezhasl.
  */
 export const MOCK_LIVE = [
   { fixtureId: 9_000_000, elapsed: 12, homeGoals: 0, awayGoals: 0, status: "1H", halftimeHome: 0, halftimeAway: 0 },
@@ -60,14 +62,49 @@ export function mockFixturesByDates(dates: string[]): FixtureDay[] {
   }
 
   // Rozprostři páry rovnoměrně mezi dny; každý pár dostane výkop v podvečer.
-  let fixtureId = 9_000_000;
+  // Minulé dny plní `played`, dnešek a budoucnost `fixtures` – shodně s produkcí, kde
+  // o tom rozhoduje status z API. Bez odehraných zápasů by Výsledky v `npm run dev`
+  // zůstaly prázdné a regrese by byla neviditelná až do dalšího kola.
+  const today = pragueDay(new Date());
+  let upcomingId = 9_000_000;
+  let playedId = 9_500_000;
   return dates.map((date, dayIdx) => {
-    const fixtures: UpcomingFixture[] = pairs
-      .filter((_, i) => i % dates.length === dayIdx)
+    const past = date < today;
+    const dayPairs = pairs.filter((_, i) => i % dates.length === dayIdx);
+
+    if (past) {
+      const played: PlayedFixture[] = dayPairs
+        .map((p, i) => {
+          const meta = leagueMeta(p.leagueId);
+          const hour = String(16 + (i % 5)).padStart(2, "0");
+          const id = playedId++;
+          return {
+            fixtureId: id,
+            leagueId: p.leagueId,
+            leagueName: meta.name,
+            leagueLogoUrl: meta.logoUrl,
+            kickoff: `${date}T${hour}:00:00+00:00`,
+            home: { id: p.home.id, name: p.home.name, logoUrl: p.home.logoUrl },
+            away: { id: p.away.id, name: p.away.name, logoUrl: p.away.logoUrl },
+            // Deterministické skóre z id – ať se seznam mezi renderama nemění.
+            homeGoals: id % 4,
+            awayGoals: (id >> 1) % 3,
+            afterExtraTime: false,
+            national: false,
+            compareMode: "CLUB" as const,
+            homeCompareLeagueId: p.leagueId,
+            awayCompareLeagueId: p.leagueId,
+          };
+        })
+        .sort((a, b) => b.kickoff.localeCompare(a.kickoff));
+      return { date, fixtures: [], played };
+    }
+
+    const fixtures: UpcomingFixture[] = dayPairs
       .map((p, i) => {
         const meta = leagueMeta(p.leagueId);
         const hour = String(16 + (i % 5)).padStart(2, "0");
-        const id = fixtureId++;
+        const id = upcomingId++;
         // Živý stav nese už SSR snapshot – jinak by se klientský poll vůbec nespustil
         // (`plausiblyLive` chce buď běžící zápas, nebo výkop v posledních 2.5 h).
         const liveState = MOCK_LIVE_BY_ID.get(id);
@@ -94,6 +131,6 @@ export function mockFixturesByDates(dates: string[]): FixtureDay[] {
         };
       })
       .sort((a, b) => a.kickoff.localeCompare(b.kickoff));
-    return { date, fixtures };
+    return { date, fixtures, played: [] };
   });
 }

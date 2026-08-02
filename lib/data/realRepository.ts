@@ -1,4 +1,5 @@
 import type {
+  CountBaselines,
   FixtureDay,
   Injury,
   League,
@@ -34,7 +35,12 @@ import {
   type ApiFixtureStats,
   type ApiStandingRow,
 } from "./apiFootball";
-import { normalizeUpcomingFixtures, pickRound } from "./fixtures";
+import {
+  normalizeFinishedFixtures,
+  normalizeUpcomingFixtures,
+  pickRound,
+  pragueDay,
+} from "./fixtures";
 import {
   cachedJson,
   cachedJsonMemo,
@@ -60,6 +66,7 @@ import {
   pickTeamStanding,
 } from "./standings";
 import { DEFAULT_BASELINE, DEFAULT_TUNING, type LeagueBaseline } from "@/lib/stats/predict";
+import { cardCount } from "@/lib/picks/cards";
 import {
   computeRatings,
   NATIONAL_FRIENDLY_WEIGHT,
@@ -95,10 +102,14 @@ const INJ_TTL = 60 * 60 * 6; // 6 h pro zranění (soupiska se mění průběžn
 const STANDINGS_TTL = 60 * 60 * 6; // 6 h pro tabulku (mění se jen po odehraném kole)
 const SCORERS_TTL = 60 * 60 * 12; // 12 h pro střelce (žebříček se hýbe pomalu)
 const FIX_TTL = 60 * 60; // 1 h pro denní rozpis (časy/zápasy se mohou měnit)
+/** Minulý den se už nezmění → rozpis se drží dlouho (Výsledky pak nestojí nic). */
+const FIX_PAST_TTL = 60 * 60 * 24;
 const LIVE_TTL = 90; // 90 s pro živé skóre (sdílené mezi všemi klienty → strop nákladů)
 const FORM_FIXTURES = 12; // posl. zápasy pro LAST10/LAST5
 const BASELINE_SAMPLE = 10; // reprezentativní vzorek baseline sezóny (okno SEASON)
 const SEASON_COMPLETE_MIN = 25; // od kolika odehraných je sezóna „v podstatě dohraná"
+/** Kolik zápasů na stranu musí liga mít, než jí věříme vlastní měřítko rohů/karet. */
+const COUNT_BASELINE_MIN = 50;
 const NATIONAL_LAST = 25;
 /** Kolik posledních zápasů napříč soutěžemi vzít klubu bez historie v dané lize. */
 const CLUB_FALLBACK_LAST = 20;
@@ -334,6 +345,89 @@ export async function getLeagueBaseline(
     // `DEFAULT_BASELINE` (1.5/1.2), který nízkoskórovým ligám nadsazuje góly. V track-recordu
     // to vypadá jako „model má horší měsíc", ne jako výpadek → musí být v logu.
     logError("realRepository.getLeagueBaseline", e, { leagueId });
+    return null;
+  }
+}
+
+/**
+ * Ligové měřítko **rohů, karet a faulů** (⌀ na stranu doma/venku) z už cachovaných
+ * zápasů – protějšek `getLeagueBaseline` pro počtové trhy. **0 volání API**, jeden
+ * dotaz do `MatchStatCache` per liga, cachovaný jako ratingy (6 h; mezi koly se nemění).
+ *
+ * Proč vůbec: `predictCorners`/`predictCards` staví λ **multiplikativně vůči ligovému
+ * měřítku**. Backtest si ho počítá z historie (`cornerBaselineFor`), produkce ji nemá –
+ * a generický default (5.5/4.5 rohu, 1.9/2.2 karty) je průměr přes top ligy, takže by
+ * ligám s jiným rozhodcovským standardem systematicky posouval λ. To je přesně ta třída
+ * chyby, která se v CLV projeví jako „model nemá hranu", ačkoli má jen špatné měřítko.
+ *
+ * `null` = málo dat (studená cache, rozjezd sezóny) → volající vezme default. Neukládá
+ * se, ať se to samo spraví, jakmile cache naroste.
+ */
+export async function getLeagueCountBaseline(
+  leagueId: number
+): Promise<CountBaselines | null> {
+  if (isNationalLeague(leagueId)) return null;
+  try {
+    return await cachedJson<CountBaselines | null>(
+      `countbase:${leagueId}:${CURRENT_SEASON}`,
+      STANDINGS_TTL,
+      async () => {
+        const teams = await getTeamsByLeague(leagueId);
+        if (teams.length === 0) return null;
+        const since = new Date(Date.now() - RATING_WINDOW_DAYS * 24 * 3600 * 1000);
+        const rows = await prisma.matchStatCache.findMany({
+          where: {
+            teamId: { in: teams.map((t) => t.id) },
+            context: "league",
+            schemaVersion: { gte: MIN_READABLE_CACHE_VERSION },
+            date: { gte: since },
+          },
+          select: {
+            isHome: true,
+            corners: true,
+            yellowCards: true,
+            redCards: true,
+            fouls: true,
+          },
+        });
+
+        // Každá metrika má vlastní jmenovatel: liga může mít rohy a nemít fauly.
+        const acc = {
+          corners: { home: [0, 0], away: [0, 0] },
+          cards: { home: [0, 0], away: [0, 0] },
+          fouls: { home: [0, 0], away: [0, 0] },
+        };
+        for (const r of rows) {
+          const side = r.isHome ? "home" : "away";
+          if (r.corners != null) {
+            acc.corners[side][0] += r.corners;
+            acc.corners[side][1]++;
+          }
+          if (r.yellowCards != null) {
+            acc.cards[side][0] += cardCount(r.yellowCards, r.redCards ?? 0);
+            acc.cards[side][1]++;
+          }
+          if (r.fouls != null) {
+            acc.fouls[side][0] += r.fouls;
+            acc.fouls[side][1]++;
+          }
+        }
+        // Práh jako u `cornerBaselineFor` (50 zápasů) – jen per stranu, protože měřítko
+        // je venue-specifické. Pod ním je průměr šum a default je poctivější odhad.
+        const avg = (a: { home: number[]; away: number[] }) =>
+          a.home[1] >= COUNT_BASELINE_MIN && a.away[1] >= COUNT_BASELINE_MIN
+            ? { home: a.home[0] / a.home[1], away: a.away[0] / a.away[1] }
+            : null;
+        const corners = avg(acc.corners);
+        const cards = avg(acc.cards);
+        const fouls = avg(acc.fouls);
+        if (!corners && !cards) return null;
+        return { corners, cards, fouls };
+      }
+    );
+  } catch (e) {
+    // Tiché zhoršení modelu, ne prázdná sekce – λ počtů spadne na generický default.
+    logError("realRepository.getLeagueCountBaseline", e, { leagueId });
     return null;
   }
 }
@@ -782,31 +876,48 @@ async function buildNationalConfedMap(): Promise<Map<number, number>> {
 }
 
 /**
- * Nadcházející zápasy našich lig pro zadané dny (`YYYY-MM-DD`). 1 volání `/fixtures?date=`
- * na den (přes TTL cache) → levné. Výpadek jednoho dne nezhasne ostatní (vrátí prázdno).
+ * Zápasy našich lig pro zadané dny (`YYYY-MM-DD`). 1 volání `/fixtures?date=` na den
+ * (přes TTL cache) → levné. Výpadek jednoho dne nezhasne ostatní (vrátí prázdno).
  * Reprezentační zápasy obohatí o konfederaci každého týmu (deep-link do NATIONAL módu).
+ *
+ * **Jedna odpověď plní obě záložky**: `fixtures` (Program – nezačaté a živé) i `played`
+ * (Výsledky – dohrané). Kdyby si Výsledky tahaly vlastní seznam, platili bychom týž den
+ * dvakrát; takhle stojí minulé dny jen tolik, kolik je nových klíčů v cache.
+ *
+ * **Minulé dny mají delší TTL** (`FIX_PAST_TTL`): den, který skončil, se už nezmění,
+ * takže je nesmysl ho po hodině tahat znovu. Práh je „datum < dnešek v Praze" – dnešní
+ * den musí zůstat na krátkém TTL, jinak by dohraný zápas naskočil do Výsledků se
+ * zpožděním až 24 h, tedy přesně ta vada, kvůli které se tohle staví.
  */
 export async function getFixturesByDates(dates: string[]): Promise<FixtureDay[]> {
+  const today = pragueDay(new Date());
   const days = await Promise.all(
     dates.map(async (date) => {
       try {
-        const raw = await cachedJson(`fixdate:${date}`, FIX_TTL, () =>
+        const ttl = date < today ? FIX_PAST_TTL : FIX_TTL;
+        const raw = await cachedJson(`fixdate:${date}`, ttl, () =>
           fetchFixturesByDate(date)
         );
-        return { date, fixtures: normalizeUpcomingFixtures(raw) };
+        return {
+          date,
+          fixtures: normalizeUpcomingFixtures(raw),
+          played: normalizeFinishedFixtures(raw),
+        };
       } catch (e) {
         logError("realRepository.getFixturesByDates", e, { date });
-        return { date, fixtures: [] };
+        return { date, fixtures: [], played: [] };
       }
     })
   );
 
   // Konfederace dotahuj jen když jsou v rozpisu reprezentační zápasy (jinak 0 volání navíc).
-  const hasNational = days.some((d) => d.fixtures.some((f) => f.national));
+  const hasNational = days.some(
+    (d) => d.fixtures.some((f) => f.national) || d.played.some((f) => f.national)
+  );
   if (!hasNational) return days;
   const confed = await buildNationalConfedMap();
   for (const day of days) {
-    for (const f of day.fixtures) {
+    for (const f of [...day.fixtures, ...day.played]) {
       if (!f.national) continue;
       f.homeCompareLeagueId = confed.get(f.home.id) ?? null;
       f.awayCompareLeagueId = confed.get(f.away.id) ?? null;

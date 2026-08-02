@@ -1,4 +1,5 @@
 import type { Metric } from "@/lib/types";
+import { cardsWord, goalsWord } from "./czech";
 
 /**
  * **Kategorický přehled odehraného zápasu**: kdo dominoval, o jaký typ zápasu šlo a jak
@@ -403,8 +404,8 @@ function notesOf(
     out.push({
       text:
         edge > 0
-          ? `${name}: ${g} gólů z xG ${x.toFixed(2)} – proměňovali nadprůměrně.`
-          : `${name}: ${g} gólů z xG ${x.toFixed(2)} – šance zůstaly nevyužité.`,
+          ? `${name}: ${goalsWord(g)} z xG ${x.toFixed(2)} – proměňovali nadprůměrně.`
+          : `${name}: ${goalsWord(g)} z xG ${x.toFixed(2)} – šance zůstaly nevyužité.`,
       strength: Math.abs(edge),
     });
   }
@@ -438,7 +439,7 @@ function notesOf(
       strength: 2,
     });
   } else if (cards != null && cards >= T.intensityCardsHigh) {
-    out.push({ text: `Ostrý zápas – ${cards} karet dohromady.`, strength: 0.9 });
+    out.push({ text: `Ostrý zápas – ${cardsWord(cards)} dohromady.`, strength: 0.9 });
   }
 
   // Brankář jako důvod výsledku.

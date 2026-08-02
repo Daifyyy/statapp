@@ -208,6 +208,17 @@ export interface MatchStat {
   opponent?: { id: number; name: string; logoUrl: string | null } | null;
 }
 
+/**
+ * Ligové měřítko **počtových** metrik (⌀ na stranu doma/venku) – vstup pro λ rohů
+ * a karet, protějšek gólového `LeagueBaseline`. `null` u metriky = liga ji nemá dost
+ * (nedopočítává se odhadem; volající vezme publikovaný default).
+ */
+export interface CountBaselines {
+  corners: { home: number; away: number } | null;
+  cards: { home: number; away: number } | null;
+  fouls: { home: number; away: number } | null;
+}
+
 export interface League {
   id: number;
   name: string;
@@ -255,10 +266,56 @@ export interface UpcomingFixture {
   halftimeAway?: number | null;
 }
 
-/** Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". */
+/**
+ * Náš tip k odehranému zápasu – **překryv**, ne součást zápasu. Existuje jen u zápasů,
+ * ke kterým jsme stihli uložit dostupnou predikci; zbytek Výsledků žije i bez něj.
+ */
+export interface FixtureTip {
+  side: "home" | "draw" | "away";
+  prob: number;
+  hit: boolean;
+}
+
+/**
+ * Lehký záznam **odehraného** zápasu pro záložku „Výsledky". Protějšek
+ * `UpcomingFixture` ze stejného denního rozpisu – proto stejná deep-link pole.
+ *
+ * **Zdrojem je rozpis, ne naše predikce.** Zápas se do Výsledků dostane, jakmile ho API
+ * hlásí jako dohraný; náš tip a ✓/✗ je nepovinný `tip` navíc. Dřív se Výsledky četly
+ * výhradně z `FixturePrediction`, takže zápas bez uložené predikce (nebo settlnutý až
+ * ranním cronem) v nich prostě nebyl – u večerního zápasu klidně 17 h.
+ */
+export interface PlayedFixture {
+  fixtureId: number;
+  leagueId: number;
+  leagueName: string;
+  leagueLogoUrl: string;
+  kickoff: string;
+  home: { id: number; name: string; logoUrl: string };
+  away: { id: number; name: string; logoUrl: string };
+  /** Skóre po 90 minutách (co predikuje model) – u AET/PEN tedy NE koncové skóre. */
+  homeGoals: number;
+  awayGoals: number;
+  /** Zápas se rozhodl až v prodloužení/na penalty → skóre výše je stav po 90 min. */
+  afterExtraTime: boolean;
+  national: boolean;
+  compareMode: EntityType;
+  homeCompareLeagueId: number | null;
+  awayCompareLeagueId: number | null;
+  /** Náš tip, pokud k zápasu existuje dostupná predikce (doplňuje `mergeTips`). */
+  tip?: FixtureTip;
+}
+
+/**
+ * Zápasy jednoho dne (`date` = `YYYY-MM-DD`) pro záložku „Zápasy". Jeden den nese
+ * **oba** seznamy z téhož rozpisu: `fixtures` (Program – nezačaté a živé) a `played`
+ * (Výsledky – dohrané). Dělí se **jedním** voláním `/fixtures?date=`, takže druhá
+ * záložka nestojí ani jedno volání navíc.
+ */
 export interface FixtureDay {
   date: string;
   fixtures: UpcomingFixture[];
+  played: PlayedFixture[];
 }
 
 /**
@@ -668,6 +725,22 @@ export interface PredictionRow {
    */
   calibA: number | null;
   calibB: number | null;
+  /**
+   * λ rohů a karet pro tentýž zápas (`lib/picks/corners.ts`, `cards.ts`). Paralelní
+   * stopa vedle gólové λ, **ne jiný výpočet 1X2** – proto stojí mimo `modelVersion`.
+   * `null` = model neměl z čeho (nováček bez historie) nebo řádek vznikl dřív.
+   *
+   * **Volitelné schválně:** syntetické řádky (backtest, kalibrace, testy) je nestaví
+   * a nutit je do nich by znamenalo šest `null` navíc v každém takovém literálu bez
+   * jediného čtenáře. Kdo je čte, ošetřuje `null` stejně jako `undefined`.
+   */
+  lambdaCornersHome?: number | null;
+  lambdaCornersAway?: number | null;
+  lambdaCardsHome?: number | null;
+  lambdaCardsAway?: number | null;
+  /** Faktor rozhodčího u karet; `1`/`0` = neutrální (index se zatím nestaví). */
+  refereeFactor?: number | null;
+  refereeSample?: number | null;
   status: string; // "NS" | "FT" | "AET" | "PEN" | …
   homeGoals: number | null;
   awayGoals: number | null;

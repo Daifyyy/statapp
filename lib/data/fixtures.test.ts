@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fullTimeGoals, normalizeUpcomingFixtures, pickRound } from "./fixtures";
+import {
+  fullTimeGoals,
+  normalizeFinishedFixtures,
+  normalizeUpcomingFixtures,
+  pickRound,
+} from "./fixtures";
 import type { ApiFixture } from "./apiFootball";
 
 /** Odehraný zápas: `goals` = koncové skóre, `score.fulltime` = stav po 90 min. */
@@ -283,5 +288,82 @@ describe("fullTimeGoals", () => {
 
   it("neznámé skóre → null", () => {
     expect(fullTimeGoals(played({ home: null, away: null }))).toBeNull();
+  });
+});
+
+/** Dohraný zápas dané ligy se skóre (a volitelně jiným stavem po 90 min). */
+function done(
+  id: number,
+  leagueId: number,
+  status: string,
+  date: string,
+  goals: { home: number; away: number },
+  fulltime?: { home: number; away: number }
+): ApiFixture {
+  return {
+    fixture: { id, date, status: { short: status } },
+    league: { id: leagueId, season: 2026, name: "Liga" },
+    teams: {
+      home: { id: id * 10 + 1, name: `Home${id}`, logo: "h.png" },
+      away: { id: id * 10 + 2, name: `Away${id}`, logo: "a.png" },
+    },
+    goals,
+    ...(fulltime ? { score: { fulltime } } : {}),
+  } as ApiFixture;
+}
+
+describe("normalizeFinishedFixtures", () => {
+  it("vezme jen dohrané zápasy sledovaných lig", () => {
+    const raw = [
+      done(1, 345, "FT", "2026-08-01T15:00:00+00:00", { home: 0, away: 4 }),
+      done(2, 345, "NS", "2026-08-01T18:00:00+00:00", { home: 0, away: 0 }),
+      done(3, 999999, "FT", "2026-08-01T15:00:00+00:00", { home: 1, away: 1 }),
+    ];
+    expect(normalizeFinishedFixtures(raw).map((f) => f.fixtureId)).toEqual([1]);
+  });
+
+  it("odložený/zrušený zápas NENÍ odehraný (drží původní datum výkopu)", () => {
+    // `PST`/`CANC`/`ABD` si nesou původní výkop a `goals` u nich buď chybí, nebo lže.
+    const raw = ["PST", "CANC", "ABD", "AWD", "WO"].map((s, i) =>
+      done(i + 1, 345, s, "2026-08-01T15:00:00+00:00", { home: 0, away: 0 })
+    );
+    expect(normalizeFinishedFixtures(raw)).toEqual([]);
+  });
+
+  it("u zápasu rozhodnutého v prodloužení bere stav po 90 min a označí ho", () => {
+    const raw = [
+      done(1, 39, "AET", "2026-08-01T18:00:00+00:00", { home: 2, away: 1 }, { home: 1, away: 1 }),
+    ];
+    const [f] = normalizeFinishedFixtures(raw);
+    expect([f.homeGoals, f.awayGoals]).toEqual([1, 1]);
+    expect(f.afterExtraTime).toBe(true);
+  });
+
+  it("zápas bez použitelného skóre se vynechá, nedopočítává se", () => {
+    const raw = [
+      {
+        ...done(1, 39, "FT", "2026-08-01T18:00:00+00:00", { home: 0, away: 0 }),
+        goals: { home: null, away: null },
+      } as ApiFixture,
+    ];
+    expect(normalizeFinishedFixtures(raw)).toEqual([]);
+  });
+
+  it("řadí od nejnovějšího výkopu (ve Výsledcích se čte odshora)", () => {
+    const raw = [
+      done(1, 345, "FT", "2026-08-01T15:00:00+00:00", { home: 1, away: 0 }),
+      done(2, 345, "FT", "2026-08-01T18:00:00+00:00", { home: 2, away: 0 }),
+      done(3, 345, "FT", "2026-08-01T12:00:00+00:00", { home: 3, away: 0 }),
+    ];
+    expect(normalizeFinishedFixtures(raw).map((f) => f.fixtureId)).toEqual([2, 1, 3]);
+  });
+
+  it("klubový zápas je klikací do CLUB módu, deep-link nese ligu obou stran", () => {
+    const [f] = normalizeFinishedFixtures([
+      done(1, 345, "FT", "2026-08-01T15:00:00+00:00", { home: 1, away: 1 }),
+    ]);
+    expect(f.compareMode).toBe("CLUB");
+    expect([f.homeCompareLeagueId, f.awayCompareLeagueId]).toEqual([345, 345]);
+    expect(f.national).toBe(false);
   });
 });
