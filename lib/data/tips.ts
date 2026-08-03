@@ -13,7 +13,7 @@ import type { TipMarket, TipSelection } from "@/lib/tips/types";
  */
 export async function runSettleTips(
   graceMs = 3 * 60 * 60 * 1000
-): Promise<{ pending: number; settled: number }> {
+): Promise<{ pending: number; settled: number; errors: number }> {
   const pending = await prisma.userTip.findMany({
     where: { status: "NS", kickoff: { lt: new Date(Date.now() - graceMs) } },
     select: {
@@ -25,11 +25,14 @@ export async function runSettleTips(
     },
     orderBy: { kickoff: "asc" },
   });
-  if (pending.length === 0) return { pending: 0, settled: 0 };
+  if (pending.length === 0) return { pending: 0, settled: 0, errors: 0 };
 
   const fixtureIds = [...new Set(pending.map((t) => t.fixtureId))];
   // Skóre po 90 min per fixtureId (jen dohrané).
   const scores = new Map<number, { home: number; away: number; status: string }>();
+  // Počítadlo je součást kontraktu s `cronJson`: bez něj vracel tenhle běh vždycky 200,
+  // takže i běh, kterému spadly všechny dávky, svítil v Actions zeleně.
+  let errors = 0;
   for (let i = 0; i < fixtureIds.length; i += 20) {
     const chunk = fixtureIds.slice(i, i + 20);
     let fixtures;
@@ -38,6 +41,7 @@ export async function runSettleTips(
     } catch (e) {
       // Nevypořádaný tip zůstane ve frontě, ale při trvalém selhání zamrzne uživateli
       // ROI v Tipovačce a vypadá to jako „ještě se nehrálo".
+      errors++;
       logError("tips.settle", e, { batch: i / 20 });
       continue; // výpadek jedné dávky nezastaví ostatní
     }
@@ -76,5 +80,5 @@ export async function runSettleTips(
     });
     settled++;
   }
-  return { pending: pending.length, settled };
+  return { pending: pending.length, settled, errors };
 }

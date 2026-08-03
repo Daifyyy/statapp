@@ -170,6 +170,23 @@ export function buildPick(
     compareMode: national ? "NATIONAL" : "CLUB",
     homeCompareLeagueId: national ? null : row.leagueId,
     awayCompareLeagueId: national ? null : row.leagueId,
+    counts: countsOf(row),
+  };
+}
+
+/**
+ * Očekávané rohy a karty za celý zápas ze **součtu** obou stran uložené λ.
+ *
+ * Čistě čtení z řádku – 0 volání API. Chybí-li kterákoli strana (řádek z doby před
+ * ukládáním, nebo model neměl dost dat), vrací `null` a UI to pole vynechá; dosadit
+ * ligový průměr by vypadalo jako predikce, kterou nemáme.
+ */
+function countsOf(row: PredictionRow): MatchPick["counts"] {
+  const sum = (h?: number | null, a?: number | null) =>
+    h != null && a != null ? h + a : null;
+  return {
+    corners: sum(row.lambdaCornersHome, row.lambdaCornersAway),
+    cards: sum(row.lambdaCardsHome, row.lambdaCardsAway),
   };
 }
 

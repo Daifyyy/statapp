@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "./AppHeader";
+import { ConfirmDialog, type ConfirmDialogData } from "./ConfirmDialog";
 import { TeamLogo } from "./TeamLogo";
 import type { SessionUser } from "./sessionUser";
 import { HistoryView, ManagerHub, NationPicker, ProfilePanel } from "./hra/Profile";
@@ -129,14 +130,6 @@ import type {
 
 type GameView = "season" | "history" | "profile" | "cup";
 
-const NAV = [
-  { href: "/", label: "Zápasy", emoji: "📅" },
-  { href: "/predikce", label: "Predikce", emoji: "🎯" },
-  { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-  { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-  { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-];
-
 /** Data pro popup výsledku po odehraném kole. */
 interface ToastData {
   oppName: string;
@@ -154,13 +147,6 @@ interface ToastData {
    * s napínavým odhalením, ale souhrn kol a důvod, proč se to zastavilo.
    */
   batch?: { rounds: number; reason: StopReason; form: ("W" | "D" | "L")[] };
-}
-
-/** Data pro potvrzovací dialog destruktivní akce (náhrada za nativní `confirm()`). */
-interface ConfirmDialogData {
-  message: string;
-  confirmLabel: string;
-  onConfirm: () => void;
 }
 
 /**
@@ -923,7 +909,7 @@ export function HraApp({ user }: { user: SessionUser | null }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader user={user} nav={NAV} />
+      <AppHeader user={user} />
       <h1 className="mt-4 text-lg font-semibold text-foreground">🎮 Manažer</h1>
       <p className="mt-1 text-sm text-muted">
         Veď reálný klub sezónou i kariérou. Před každým zápasem uvidíš predikci a analýzu
@@ -1024,49 +1010,6 @@ export function HraApp({ user }: { user: SessionUser | null }) {
       <MatchResultToast key={toastSeq} toast={toast} onClose={() => setToast(null)} />
       <ConfirmDialog data={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </main>
-  );
-}
-
-/** Potvrzovací modal pro destruktivní akce – nahrazuje nativní `confirm()`. */
-function ConfirmDialog({
-  data,
-  onClose,
-}: {
-  data: ConfirmDialogData | null;
-  onClose: () => void;
-}) {
-  if (!data) return null;
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-sm rounded-2xl border border-border bg-surface p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <p className="text-sm text-foreground">{data.message}</p>
-        <div className="mt-4 flex gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 rounded-full border border-border px-4 py-2.5 text-sm font-semibold text-foreground transition hover:bg-border/40"
-          >
-            Zrušit
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              data.onConfirm();
-              onClose();
-            }}
-            className="flex-1 rounded-full bg-negative px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
-          >
-            {data.confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 

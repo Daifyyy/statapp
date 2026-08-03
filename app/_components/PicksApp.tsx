@@ -24,6 +24,7 @@ import {
 } from "@/lib/picks/gate";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { Empty } from "./Empty";
 import { ProLock } from "./ProLock";
 import { PickRow } from "./PickRow";
 import { ViewTabs } from "./ViewTabs";
@@ -84,11 +85,74 @@ async function loadPicks(
   }
 }
 
+/**
+ * Zpožděná hodnota. Posuvník minimální pravděpodobnosti má 9 kroků a **každý** z nich
+ * spouštěl dva necachované requesty, z toho jeden běží backtest – protažení přes celý
+ * rozsah tedy znamenalo ~18 dotazů, z nichž 17 nikoho nezajímá. Palec se hýbe okamžitě
+ * (drží se vlastní `*Input` stav), data se dotahují až když se posuvník zastaví.
+ */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return settled;
+}
+
+interface StatsSetters {
+  setTrack: (v: TrackRecord) => void;
+  setBenchmark: (v: BenchmarkTrackRecord | null) => void;
+  setMarketBench: (v: MarketBenchmark | null) => void;
+  setBacktest: (v: BacktestResult | null) => void;
+  setReliability: (v: ReliabilityReport | null) => void;
+  setClv: (v: ClvSummary | null) => void;
+  setStatsState: (v: "loading" | "ok" | "error") => void;
+}
+
+/**
+ * Diagnostika modelu (track-record, kalibrace, vs. trh, CLV) + backtest navoleného
+ * pravidla. Mimo komponentu jako `loadPicks` – žádné synchronní `setState` v těle efektu.
+ *
+ * **Stav načítání je tu povinný, ne kosmetika.** `evaluateEdgeGate` spočítá verdikt i ze
+ * samých `null`, takže se dřív po přepnutí na „Jak si model vede" ukázal hotový závěr
+ * postavený na ničem a panely pod ním pak doskákaly. A `catch(() => {})` dělal ze
+ * spadlého requestu „zatím nemáme data".
+ */
+async function loadStats(
+  market: PickMarket,
+  venue: Venue,
+  minProb: number,
+  minEdge: number | undefined,
+  isActive: () => boolean,
+  s: StatsSetters
+): Promise<void> {
+  s.setStatsState("loading");
+  try {
+    const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
+    if (minEdge != null) q.set("minEdge", String(minEdge));
+    const r = await fetch(`/api/picks/stats?${q.toString()}`);
+    if (!r.ok) throw new Error(String(r.status));
+    const d = await r.json();
+    if (!isActive()) return;
+    if (d.trackRecord) s.setTrack(d.trackRecord);
+    s.setBenchmark(d.benchmark ?? null);
+    s.setMarketBench(d.market ?? null);
+    s.setBacktest(d.backtest ?? null);
+    s.setReliability(d.reliability ?? null);
+    s.setClv(d.clv ?? null);
+    s.setStatsState("ok");
+  } catch {
+    if (isActive()) s.setStatsState("error");
+  }
+}
+
 export function PicksApp({ user }: { user: SessionUser | null }) {
   const [view, setView] = useState<View>("picks");
   const [market, setMarket] = useState<PickMarket>("win");
   const [venue, setVenue] = useState<Venue>("home");
-  const [minProb, setMinProb] = useState(0.65);
+  const [minProbInput, setMinProb] = useState(0.65);
+  const minProb = useDebouncedValue(minProbInput, 300);
   // Value režim: filtruje na tipy s kladnou hranou nad kurzem sázkovky (edge > 0).
   // Vypnutý → kurzy se ignorují (chování jako dnes, čistě pravděpodobnostní práh).
   const [valueOnly, setValueOnly] = useState(false);
@@ -109,6 +173,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [reliability, setReliability] = useState<ReliabilityReport | null>(null);
   const [clv, setClv] = useState<ClvSummary | null>(null);
+  const [statsState, setStatsState] = useState<"loading" | "ok" | "error">("loading");
 
   const retry = useCallback(() => {
     void loadPicks(market, venue, minProb, minEdge, minReadiness, () => true, {
@@ -133,22 +198,29 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
   }, [market, venue, minProb, minEdge, minReadiness]);
 
   // Track-record (globální) + backtest strategie dle navolených parametrů.
+  //
+  // **Stav načítání je tu povinný, ne kosmetika.** `evaluateEdgeGate` umí spočítat verdikt
+  // i ze samých `null` – takže se dřív při přepnutí na „Jak si model vede" ukázal plně
+  // vykreslený závěr postavený na ničem a panely pod ním pak doskákaly. A `catch(() => {})`
+  // dělal ze spadlého requestu „zatím nemáme data".
+  // Settery z `useState` jsou stabilní, takže objekt smí vzniknout na místě.
+  const statsSetters = (): StatsSetters => ({
+    setTrack,
+    setBenchmark,
+    setMarketBench,
+    setBacktest,
+    setReliability,
+    setClv,
+    setStatsState,
+  });
+
+  const retryStats = useCallback(() => {
+    void loadStats(market, venue, minProb, minEdge, () => true, statsSetters());
+  }, [market, venue, minProb, minEdge]);
+
   useEffect(() => {
     let active = true;
-    const q = new URLSearchParams({ market, venue, minProb: String(minProb) });
-    if (minEdge != null) q.set("minEdge", String(minEdge));
-    fetch(`/api/picks/stats?${q.toString()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (!active) return;
-        if (d.trackRecord) setTrack(d.trackRecord);
-        setBenchmark(d.benchmark ?? null);
-        setMarketBench(d.market ?? null);
-        setBacktest(d.backtest ?? null);
-        setReliability(d.reliability ?? null);
-        setClv(d.clv ?? null);
-      })
-      .catch(() => {});
+    void loadStats(market, venue, minProb, minEdge, () => active, statsSetters());
     return () => {
       active = false;
     };
@@ -162,18 +234,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/digest", label: "Vs. trh", emoji: "🔥" },
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/transfers", label: "Přestupy", emoji: "🔄" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Predikce</h1>
       {/* Rozpor „jmenuje se to tipy, ale nesázej podle toho" se řeší TADY, ne až ve
@@ -198,7 +259,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
           <RuleControls
             market={market}
             venue={venue}
-            minProb={minProb}
+            minProb={minProbInput}
             valueOnly={valueOnly}
             hideUnready={hideUnready}
             onMarket={setMarket}
@@ -224,7 +285,7 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
           {/* Sekce nadcházejících tipů = PRO. FREE/anonym → ProLock místo seznamu. */}
           {locked ? (
             <div className="mt-4">
-              <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+              <ProLock user={user} />
             </div>
           ) : loading && !picks ? (
             <PicksSkeleton />
@@ -259,6 +320,8 @@ export function PicksApp({ user }: { user: SessionUser | null }) {
           clv={clv}
           track={track}
           benchmark={benchmark}
+          state={statsState}
+          onRetry={retryStats}
         />
       )}
     </main>
@@ -277,13 +340,35 @@ function ModelView({
   clv,
   track,
   benchmark,
+  state,
+  onRetry,
 }: {
   reliability: ReliabilityReport | null;
   marketBench: MarketBenchmark | null;
   clv: ClvSummary | null;
   track: TrackRecord | null;
   benchmark: BenchmarkTrackRecord | null;
+  state: "loading" | "ok" | "error";
+  onRetry: () => void;
 }) {
+  // Verdikt se smí vykreslit až nad načtenými daty. Brána sama o sobě `null` vstupy snese
+  // (vrátí „ZATÍM NEVÍME"), jenže to je tvrzení o modelu – ne o tom, že se ještě načítá.
+  if (state === "loading") return <ModelSkeleton />;
+  if (state === "error") {
+    return (
+      <Empty>
+        <p>Diagnostiku modelu se nepodařilo načíst.</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-3 rounded-full border border-border bg-surface px-4 py-1.5 text-sm font-medium text-foreground transition hover:bg-background"
+        >
+          ↻ Zkusit znovu
+        </button>
+      </Empty>
+    );
+  }
+
   const gate = evaluateEdgeGate({ reliability, market: marketBench, clv });
   const evidence: Record<GateCriterion["key"], React.ReactNode> = {
     calibration: reliability ? <ReliabilityPanel reliability={reliability} /> : null,
@@ -1000,10 +1085,18 @@ function RuleControls({
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+/** Tvar odpovídá `ModelView`: jeden verdikt nahoře, pod ním tři karty kritérií. */
+function ModelSkeleton() {
   return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
+    <div className="mt-4 space-y-3">
+      <div className="h-20 animate-pulse rounded-2xl bg-border/60" />
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-24 animate-pulse rounded-2xl bg-border/60"
+          style={{ animationDelay: `${(i + 1) * 60}ms` }}
+        />
+      ))}
     </div>
   );
 }

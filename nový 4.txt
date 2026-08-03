@@ -1,0 +1,16 @@
+1) najdi platby JIDLO+Spoření nebo podobné a budemem muset vymyslet možnost rozdělení plateb protože třeba tato obsahuje spoření 10000 a jídlo na výdaje 9000
+2) celkové bilance furt netuším jak jsou ty investice a spoření započítávany do celkových bilancí proto vlastně nevím jak moc věřit tomu když vidím od začátku roku míru úspor 2,3% a 13 000kč
+3) přemýšlím ještě nad nějakou stránkou reprezentující bohatství  abych měl přehled zda tedy bohatnem nebo ne
+
+
+
+1) Přemýšlím když máme live přenos a signalizaci skóre tak jestli vyloženě i aktuální přehled zápasu například: Sparta dominuje a nepůjčuje míč soupeři má zápas pod kontrolou nebo něco takového že by to shrnulo dosavadní vývoj utkání. Je to proveditelné?
+
+
+/plan Mám aplikaci na sleodvání výkonnosti investic když už to řešíme i zde asi by bylo vhodné mít tento přehled o investicích rovnou zde v jedné aplikaci. Zde:C:\Projekt\Trading je kompletní aplikace pro sleodvání a anlýzu výkonnosti investic i se současnými exporty. Naplánuj začleněnní těchto modulů od naši aplikace cashflow tak abych nemusel otvírat vždy unikátní aplikaci ale vše bylo v jedné 
+
+1) k bohatství by se měl přidat můj spořící účet (-3000kč co dávám stranou na raiffaisen účtu) a také penzijsni
+
+1) Udělej kategorizaci zpětně pro platby které obsahují někde řetězce: BETANO, Chance, Tipsport a zařaď je do kategorie Sázky.
+2) Zkontroluj zda všechny kategorie a podkategorie jsou zahrnuty do našich hlavních pravidel 50/30/20 
+3) Zvaliduj že k pravidlu 50-30-20 přistupujeme správně a správně ho identifikujeme a počítáme

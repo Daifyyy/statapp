@@ -5,56 +5,44 @@ import Link from "next/link";
 import { useState } from "react";
 import { ThemeToggle } from "./ThemeToggle";
 import { AccountMenu } from "./AccountMenu";
+import { SectionNav } from "./nav";
 import type { SessionUser } from "./sessionUser";
 import { shareOrCopy } from "./share";
 
 /**
- * Sdílená hlavička obou stránek. Akční prvky jsou na mobilu jen ikony
- * (textový popisek `hidden sm:inline`), kontejner `flex-wrap` jako pojistka,
- * aby se nic nepřetékalo na úzkém displeji.
+ * Sdílená hlavička všech stránek: řádek s logem a účtem, pod ním pásek sekcí.
+ *
+ * **Seznam sekcí si hlídá `nav.tsx`, ne volající.** Dokud si ho každá stránka předávala
+ * propem, lišil se obsahem i pořadím a dvě sekce byly prakticky neobjevitelné. Hlavička
+ * proto žádný `nav` prop nemá – stačí ji vykreslit.
  */
-export interface NavItem {
-  href: string;
-  label: string;
-  emoji: string;
-}
-
 export function AppHeader({
   user,
-  nav,
   share = false,
 }: {
   user: SessionUser | null;
-  nav: NavItem | NavItem[];
   share?: boolean;
 }) {
-  const items = Array.isArray(nav) ? nav : [nav];
   return (
-    <header className="flex flex-wrap items-center justify-between gap-2">
-      <Image
-        src="/logoapp.png"
-        alt="Predictapp"
-        width={40}
-        height={40}
-        priority
-        className="rounded-xl"
-      />
-      <div className="flex items-center gap-1.5 sm:gap-2">
-        {items.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            aria-label={item.label}
-            className="rounded-full border border-border bg-surface px-3 py-1.5 text-sm font-medium text-muted transition hover:text-foreground"
-          >
-            <span aria-hidden>{item.emoji}</span>
-            <span className="hidden sm:inline"> {item.label}</span>
-          </Link>
-        ))}
-        {share && <ShareButton />}
-        <ThemeToggle />
-        <AccountMenu user={user} />
+    <header>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Link href="/" aria-label="Predictapp – domů">
+          <Image
+            src="/logoapp.png"
+            alt="Predictapp"
+            width={40}
+            height={40}
+            priority
+            className="rounded-xl"
+          />
+        </Link>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {share && <ShareButton />}
+          <ThemeToggle />
+          <AccountMenu user={user} />
+        </div>
       </div>
+      <SectionNav />
     </header>
   );
 }

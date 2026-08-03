@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { MetricValue } from "@/lib/types";
+import { Hint } from "./Hint";
 
 /**
  * Řádek jedné metriky: hodnota domácích vlevo, host vpravo, mezi nimi dvojitý
@@ -46,34 +47,35 @@ export function MetricRow({
 
   return (
     <div className="py-2.5">
+      {/* Nápověda je vlastní tlačítko, takže NESMÍ být uvnitř rozbalovacího tlačítka
+          (vnořený `<button>` je neplatné HTML a klik by rozbalil rozpad oken). */}
+      <div className="flex items-center justify-between text-sm tabular-nums">
+        <Value value={h} low={home?.lowConfidence} highlight={better === "home"} accent="home" />
+        <span className="flex min-w-0 flex-1 items-center justify-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted">
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="flex min-w-0 items-center gap-1"
+          >
+            <span className="truncate">{label}</span>
+            <span className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
+          </button>
+          {hint && (
+            <Hint label={label}>{hint}</Hint>
+          )}
+        </span>
+        <Value value={a} low={away?.lowConfidence} highlight={better === "away"} accent="away" alignRight />
+      </div>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full"
+        aria-label={`${label} – rozpad po oknech`}
         aria-expanded={open}
+        className="mt-1.5 flex h-2 w-full overflow-hidden rounded-full bg-border/60"
       >
-        <div className="flex items-center justify-between text-sm tabular-nums">
-          <Value value={h} low={home?.lowConfidence} highlight={better === "home"} accent="home" />
-          <span className="flex min-w-0 flex-1 items-center justify-center gap-1 px-2 text-[11px] font-medium uppercase tracking-wide text-muted">
-            <span className="truncate">{label}</span>
-            {hint && (
-              <span
-                role="img"
-                aria-label={hint}
-                title={hint}
-                className="shrink-0 cursor-help text-muted/70"
-              >
-                ⓘ
-              </span>
-            )}
-            <span className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
-          </span>
-          <Value value={a} low={away?.lowConfidence} highlight={better === "away"} accent="away" alignRight />
-        </div>
-        <div className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-border/60">
-          <div className="bar-fill bg-home/80" style={{ width: `${homeShare}%` }} />
-          <div className="bar-fill bg-away/80" style={{ width: `${awayShare}%` }} />
-        </div>
+        <span className="bar-fill bg-home/80" style={{ width: `${homeShare}%` }} />
+        <span className="bar-fill bg-away/80" style={{ width: `${awayShare}%` }} />
       </button>
 
       {open && breakdown.length > 0 && (

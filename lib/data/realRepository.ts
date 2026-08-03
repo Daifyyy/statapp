@@ -15,6 +15,7 @@ import type {
   Team,
 } from "@/lib/types";
 import {
+  fetchFixtureEvents,
   fetchFixtureStatistics,
   fetchFixturesByDate,
   fetchLastFixtures,
@@ -66,6 +67,7 @@ import {
   pickTeamStanding,
 } from "./standings";
 import { DEFAULT_BASELINE, DEFAULT_TUNING, type LeagueBaseline } from "@/lib/stats/predict";
+import { buildMatchEvents, type MatchEvent } from "@/lib/stats/matchEvents";
 import { cardCount } from "@/lib/picks/cards";
 import {
   computeRatings,
@@ -1410,6 +1412,56 @@ export function liveStatsTtl(status: string, elapsed: number | null): number {
   if (status === "HT" || status === "BT") return 600;
   if (status === "P" || (elapsed ?? 0) >= 88) return 180;
   return 120;
+}
+
+/**
+ * Průběh zápasu (góly, karty, střídání) – `/fixtures/events`.
+ *
+ * **Dvě cesty podle toho, jestli se ještě hraje**, protože mají opačný cenový profil:
+ *
+ *  - **Dohraný zápas se už nezmění**, takže se cachuje na rok (`fixevents:`). Jedno
+ *    volání na zápas za život – tím je pokrytá většina hodnoty (Výsledky) za zlomek ceny.
+ *  - **Běžící zápas** jede přes stejný denní rozpočet jako živé statistiky
+ *    (`tryConsumeLiveStats`) a stejný TTL žebřík (`liveStatsTtl`), aby poll otevřeného
+ *    panelu nemohl vyžrat kvótu.
+ *
+ * Klíč je **vlastní** (`fixevents:`), nikdy `MatchStatCache`: ta drží metriky, ze kterých
+ * se počítají okna pro λ. Události tam nepatří ani u dohraného zápasu – a hlavně se tím
+ * nemusí hýbat `MIN_READABLE_CACHE_VERSION` (posun prahu zahodí ~9 000 cachovaných zápasů).
+ */
+const EVENTS_FINISHED_TTL = 60 * 60 * 24 * 365;
+
+export async function getMatchEvents(
+  fixtureId: number,
+  live: boolean,
+  status = "FT",
+  elapsed: number | null = null
+): Promise<MatchEvent[] | null> {
+  try {
+    const raw = await cachedJsonMemo(
+      `fixevents:${fixtureId}`,
+      live ? 30 : 300,
+      live ? liveStatsTtl(status, elapsed) : EVENTS_FINISHED_TTL,
+      () => {
+        // Rozpočet se odečítá jen u živého zápasu a jen při skutečném missu cache.
+        if (live && !tryConsumeLiveStats()) throw new LiveBudgetError();
+        return fetchFixtureEvents(fixtureId);
+      }
+    );
+    return buildMatchEvents(raw);
+  } catch (e) {
+    // Best-effort cesta musí mít vlastní hlas – prázdná osa jinak vypadá jako
+    // „v zápase se nic nestalo", což je u 3:2 nesmysl.
+    if (e instanceof LiveBudgetError) {
+      logError("realRepository.getMatchEvents", e, {
+        fixtureId,
+        usage: liveStatsUsage(),
+      });
+      return null;
+    }
+    logError("realRepository.getMatchEvents", e, { fixtureId, live });
+    return null;
+  }
 }
 
 /**

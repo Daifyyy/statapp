@@ -53,6 +53,7 @@ export function PickRow({ pick }: { pick: MatchPick }) {
         </span>
         {pick.value && <ValueBadge value={pick.value} />}
       </div>
+      <CountsRow counts={pick.counts} />
     </>
   );
   return (
@@ -68,6 +69,36 @@ export function PickRow({ pick }: { pick: MatchPick }) {
         <div className={cardClass}>{inner}</div>
       )}
     </li>
+  );
+}
+
+/**
+ * Očekávané rohy a karty za zápas. Vlastní stopa modelu vedle gólové λ – počítá se a
+ * ukládá od 2. 8. 2026, ale předzápasově ji nebylo kde vidět (jen zpětně u dohraného
+ * zápasu). **0 volání API**, čte se z uloženého řádku.
+ *
+ * Není to tip: kolem těchto trhů zatím není rozhodnuto, jestli má model hranu (chybí
+ * CLV), takže se vědomě ukazuje jako *očekávaný počet*, ne jako doporučení Over/Under.
+ */
+function CountsRow({ counts }: { counts: MatchPick["counts"] }) {
+  if (counts.corners == null && counts.cards == null) return null;
+  return (
+    <p className="mt-1 flex gap-3 text-[11px] tabular-nums text-muted">
+      {counts.corners != null && (
+        <span title="Očekávaný počet rohů obou týmů dohromady za celý zápas">
+          ⛳ rohy <strong className="font-semibold text-foreground">
+            {counts.corners.toFixed(1)}
+          </strong>
+        </span>
+      )}
+      {counts.cards != null && (
+        <span title="Očekávaný počet karet obou týmů dohromady za celý zápas">
+          🟨 karty <strong className="font-semibold text-foreground">
+            {counts.cards.toFixed(1)}
+          </strong>
+        </span>
+      )}
+    </p>
   );
 }
 

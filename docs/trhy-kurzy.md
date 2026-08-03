@@ -5,7 +5,7 @@
   Over 2.5 + BTTS **od jedné** preferované sázkovky) a ukládá je na `FixturePrediction`
   (`odds*` sloupce, `saveOdds`/`saveClosingOdds`, guard `oddsSnapshotState`). Životní cyklus
   jako benchmark: **jen klubové ligy, dva snímky na zápas** (`ODDS_LOOKAHEAD_HOURS=72`
-  a zavírací `ODDS_CLOSING_HOURS=12` – viz CLV níže), rozpočet ~2 volání/zápas.
+  a zavírací `ODDS_CLOSING_HOURS=3` – viz CLV níže), rozpočet ~2 volání/zápas.
   **VŠECH ~13 SÁZKOVEK se ukládá** (`oddsBooks`/`oddsCloseBooks`, JSON, od 27. 7. 2026):
   odpověď `/odds` je nese všechny a dřív se 12 z nich zahazovalo ve prospěch jedné
   „preferované" – přitom **nejlepší cena napříč knihami byla jediná páka, která
@@ -118,7 +118,7 @@
   („Levadiakos" vs „Levadeiakos"), plus ruční alias tam, kde se klub jmenuje jinak (WSG Tirol).
 - **Snímky kurzů má VLASTNÍ cron `/api/cron/snapshot-odds` (HODINOVĚ), ne denní pipeline.**
   Není to ladění, ale oprava vychýlení: predikční cron jede 1×/den ve 04:30 UTC a zavírací
-  okno je 12 h, takže večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 ještě **15 h**
+  okno bylo tehdy 12 h (dnes 3 h), takže večerní zápas (21:45 SELČ = 19:45 UTC) je v 04:30 ještě **15 h**
   daleko → mimo okno, a další běh přijde až po výkopu. Zavírací snímek by tak dostávaly
   **jen zápasy s výkopem mezi 04:30 a 16:30 UTC** (víkendová odpoledne) a CLV by se
   počítalo z nereprezentativní menšiny. `runSnapshotOdds` + `fixturesNeedingOdds`
@@ -155,7 +155,7 @@
   náhoda); posun **zavírací linie** od našeho snímku je vidět po každém zápase. Kladné CLV
   je nutná podmínka dlouhodobě ziskového sázení – kdo vydělává bez něj, má zatím štěstí.
   Proto pipeline bere **DVA snímky kurzu** místo jednoho náhodného v okně 0–72 h:
-  „náš" (≤ `ODDS_LOOKAHEAD_HOURS` 72 h) a **zavírací** (≤ `ODDS_CLOSING_HOURS` 12 h),
+  „náš" (≤ `ODDS_LOOKAHEAD_HOURS` 72 h) a **zavírací** (≤ `ODDS_CLOSING_HOURS` 3 h),
   sloupce `oddsClose*` + `oddsCloseAt`, guard `oddsSnapshotState` (dřív `hasOdds`).
   Cena: +1 volání/zápas (~30–50/den, pod 1 % kvóty). CLV se počítá z **odmaržovaných**
   pravděpodobností obou snímků – jinak by do něj protekla změna marže místo změny názoru

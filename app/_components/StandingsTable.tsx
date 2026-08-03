@@ -1,4 +1,5 @@
 import { TeamLogo } from "./TeamLogo";
+import { Hint } from "./Hint";
 import type { LeagueTableRow, LeagueTableZone } from "@/lib/types";
 
 /**
@@ -19,16 +20,27 @@ export function StandingsTable({
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted">
+            {/* Zkratky sloupců nesly význam jen v `title=`, který na dotykovém displeji
+                nejde vyvolat – a na mobilu je navíc vidět jen `Z / Skóre / +/- / B`,
+                takže tabulka zůstala bez klíče právě tam, kde se nejvíc čte. */}
             <Th className="pl-3 text-left">#</Th>
             <Th className="text-left">Tým</Th>
-            <Th title="Odehráno">Z</Th>
-            <Th className="hidden sm:table-cell" title="Výhry">V</Th>
-            <Th className="hidden sm:table-cell" title="Remízy">R</Th>
-            <Th className="hidden sm:table-cell" title="Prohry">P</Th>
-            <Th title="Skóre">Skóre</Th>
-            <Th title="Rozdíl skóre">+/-</Th>
-            <Th className="pr-3" title="Body">B</Th>
-            <Th className="hidden md:table-cell pr-3" title="Forma (posl. 5)">Forma</Th>
+            <Th hint="Odehrané zápasy">Z</Th>
+            <Th className="hidden sm:table-cell" hint="Výhry">V</Th>
+            <Th className="hidden sm:table-cell" hint="Remízy">R</Th>
+            <Th className="hidden sm:table-cell" hint="Prohry">P</Th>
+            <Th hint="Vstřelené : obdržené góly">Skóre</Th>
+            <Th hint="Rozdíl skóre (vstřelené − obdržené)">+/-</Th>
+            <Th className="pr-3" hint="Body" align="end">
+              B
+            </Th>
+            <Th
+              className="hidden md:table-cell pr-3"
+              hint="Posledních 5 zápasů, nejnovější vpravo. V = výhra, R = remíza, P = prohra."
+              align="end"
+            >
+              Forma
+            </Th>
           </tr>
         </thead>
         <tbody>
@@ -97,18 +109,27 @@ export function StandingsTable({
 function Th({
   children,
   className = "",
-  title,
+  hint,
+  align = "center",
 }: {
   children: React.ReactNode;
   className?: string;
-  title?: string;
+  hint?: string;
+  /** Zarovnání bubliny – u krajních sloupců jinak přeteče mimo displej. */
+  align?: "start" | "center" | "end";
 }) {
   return (
-    <th
-      title={title}
-      className={`px-1.5 py-2 text-center font-medium ${className}`}
-    >
-      {children}
+    <th className={`px-1.5 py-2 text-center font-medium ${className}`}>
+      {hint ? (
+        <span className="inline-flex items-center gap-0.5">
+          {children}
+          <Hint label={String(children)} align={align}>
+            {hint}
+          </Hint>
+        </span>
+      ) : (
+        children
+      )}
     </th>
   );
 }
@@ -150,41 +171,60 @@ export function ZoneLegend({ rows }: { rows: LeagueTableRow[] }) {
   for (const r of rows) {
     if (r.zone) seen.set(ZONE_META[r.zone].label, ZONE_META[r.zone].bar);
   }
-  if (seen.size === 0) return null;
+  const hasForm = rows.some((r) => r.form);
+  if (seen.size === 0 && !hasForm) return null;
   return (
-    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
       {[...seen.entries()].map(([label, bar]) => (
         <span key={label} className="flex items-center gap-1.5 text-xs text-muted">
           <span className={`h-3 w-1 rounded-full ${bar}`} aria-hidden />
           {label}
         </span>
       ))}
+      {/* Sloupec Forma je jediné místo, kde se výsledky kódují písmenem i barvou – bez
+          klíče to na mobilu (kde je sloupec skrytý až od `md`) nikdo neodvodí. */}
+      {hasForm && (
+        <span className="hidden items-center gap-1.5 text-xs text-muted md:flex">
+          Forma:
+          <FormBadge letter="V" /> výhra
+          <FormBadge letter="R" /> remíza
+          <FormBadge letter="P" /> prohra
+        </span>
+      )}
     </div>
   );
 }
 
+/** Jedno písmeno formy v české notaci (V/R/P) – sdílí ho tabulka i legenda. */
+function FormBadge({ letter }: { letter: "V" | "R" | "P" }) {
+  const color =
+    letter === "V"
+      ? "bg-positive/15 text-positive"
+      : letter === "P"
+        ? "bg-negative/15 text-negative"
+        : "bg-border text-muted";
+  return (
+    <span
+      className={`inline-flex h-4 w-4 items-center justify-center rounded text-[10px] font-bold ${color}`}
+    >
+      {letter}
+    </span>
+  );
+}
+
+/** API vrací W/D/L, nejnovější vpravo. V UI se všude drží české V/R/P. */
+function czLetter(c: string): "V" | "R" | "P" {
+  return c === "W" ? "V" : c === "L" ? "P" : "R";
+}
+
 function FormBadges({ form }: { form: string | null }) {
   if (!form) return <span className="text-xs text-muted">—</span>;
-  // API vrací nejnovější vpravo; zobraz posledních 5.
   const letters = form.slice(-5).split("");
   return (
     <span className="flex items-center justify-end gap-0.5">
-      {letters.map((c, i) => {
-        const color =
-          c === "W"
-            ? "bg-positive/15 text-positive"
-            : c === "L"
-              ? "bg-negative/15 text-negative"
-              : "bg-border text-muted";
-        return (
-          <span
-            key={i}
-            className={`inline-flex h-4 w-4 items-center justify-center rounded text-[10px] font-bold ${color}`}
-          >
-            {c === "W" ? "V" : c === "L" ? "P" : "R"}
-          </span>
-        );
-      })}
+      {letters.map((c, i) => (
+        <FormBadge key={i} letter={czLetter(c)} />
+      ))}
     </span>
   );
 }

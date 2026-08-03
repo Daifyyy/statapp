@@ -10,10 +10,20 @@ export function AppSkeleton() {
         <div className="flex items-center justify-between gap-2">
           <div className="h-10 w-10 animate-pulse rounded-xl bg-border/60" />
           <div className="flex gap-2">
-            <div className="h-8 w-20 animate-pulse rounded-full bg-border/60" />
             <div className="h-8 w-9 animate-pulse rounded-full bg-border/60" />
             <div className="h-8 w-9 animate-pulse rounded-full bg-border/60" />
           </div>
+        </div>
+
+        {/* pásek sekcí – musí sedět s `SectionNav`, jinak obsah po načtení poskočí */}
+        <div className="mt-3 flex gap-1.5 overflow-hidden">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-[34px] shrink-0 animate-pulse rounded-full bg-border/60"
+              style={{ width: `${[92, 108, 96, 100, 84][i]}px` }}
+            />
+          ))}
         </div>
 
         {/* nadpis + řádky obsahu */}

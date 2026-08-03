@@ -87,16 +87,32 @@ export function buildClubTransferRows(
  */
 export async function runRefreshTransfers(
   leagueIds: number[] = TRANSFER_LEAGUES
-): Promise<{ leagues: number; clubs: number; transfers: number; pruned: number }> {
+): Promise<{
+  leagues: number;
+  clubs: number;
+  transfers: number;
+  pruned: number;
+  /** Kolik lig/klubů selhalo – bez toho hlásil cron zeleně i úplný výpadek. */
+  errors: number;
+  /**
+   * Kolik klubů se opravdu podařilo zpracovat (protějšek `errors` pro `cronJson`).
+   * **Ne `ok`** – `cronJson` vrací `{ ok: true, ...stats }`, takže by pole toho jména
+   * přebilo boolean příznak úspěchu číslem.
+   */
+  succeeded: number;
+}> {
   const season = CURRENT_SEASON;
   const windowStartMs = transferWindowStart().getTime();
   let clubs = 0;
   let transfers = 0;
+  let errors = 0;
+  let succeeded = 0;
   for (const leagueId of leagueIds) {
     let teams;
     try {
       teams = await getTeamsByLeague(leagueId);
     } catch (e) {
+      errors++;
       logError("transfers.runRefreshTransfers", e, { leagueId });
       continue;
     }
@@ -109,7 +125,9 @@ export async function runRefreshTransfers(
           await upsertTransfer(row);
           transfers++;
         }
+        succeeded++;
       } catch (e) {
+        errors++;
         logError("transfers/refresh", e, { team: team.id, leagueId });
         // přeskoč problémový klub, pokračuj dál
       }
@@ -117,5 +135,5 @@ export async function runRefreshTransfers(
   }
   // Smaž přestupy z předchozích oken → po startu nového okna se obsah „nahradí".
   const pruned = await pruneTransfersBefore(windowStartMs);
-  return { leagues: leagueIds.length, clubs, transfers, pruned };
+  return { leagues: leagueIds.length, clubs, transfers, pruned, errors, succeeded };
 }

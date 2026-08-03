@@ -32,6 +32,7 @@ import { computePlayStyle } from "@/lib/stats/playStyle";
 import { TeamHeading } from "./TeamHeading";
 import { TeamCombobox } from "./TeamCombobox";
 import { AppHeader } from "./AppHeader";
+import { Empty as SharedEmpty } from "./Empty";
 import { ProLock } from "./ProLock";
 import {
   FavoritesSection,
@@ -109,22 +110,30 @@ function useInjuries(
   teamId: number | null,
   leagueId: number | null,
   enabled: boolean
-): Injury[] {
-  const [injuries, setInjuries] = useState<Injury[]>([]);
+): { injuries: Injury[]; failed: boolean } {
+  const [state, setState] = useState<{ injuries: Injury[]; failed: boolean }>({
+    injuries: [],
+    failed: false,
+  });
   useEffect(() => {
     if (!enabled || teamId == null || leagueId == null) return;
     let active = true;
     fetch(`/api/injuries?team=${teamId}&league=${leagueId}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (active) setInjuries(d.injuries ?? []);
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
       })
-      .catch(() => active && setInjuries([]));
+      .then((d) => {
+        if (active) setState({ injuries: d.injuries ?? [], failed: false });
+      })
+      // **Prázdno tady není totéž co chyba.** Chybějící sekce zraněných se čte jako
+      // „kádr je kompletní" – což je tvrzení o zápase, ne o načítání. Proto se to rozliší.
+      .catch(() => active && setState({ injuries: [], failed: true }));
     return () => {
       active = false;
     };
   }, [teamId, leagueId, enabled]);
-  return injuries;
+  return state;
 }
 
 /** Líně dotáhne postavení týmu v ligové tabulce a ligový průměr gólů (FREE kontext). */
@@ -274,8 +283,16 @@ export function CompareApp({
   const { teams: awayTeams, error: awayTeamsError } = useTeams(awayLeagueId);
 
   // Zranění se tahají líně, až je výsledek na obrazovce (mimo kritickou cestu).
-  const homeInjuries = useInjuries(homeId, homeLeagueId, result != null);
-  const awayInjuries = useInjuries(awayId, awayLeagueId, result != null);
+  const { injuries: homeInjuries, failed: homeInjuriesFailed } = useInjuries(
+    homeId,
+    homeLeagueId,
+    result != null
+  );
+  const { injuries: awayInjuries, failed: awayInjuriesFailed } = useInjuries(
+    awayId,
+    awayLeagueId,
+    result != null
+  );
 
   // Ligová tabulka (FREE kontext) – líně, až je výsledek na obrazovce.
   const { standing: homeStanding, leagueAvg: homeLeagueAvg } = useStanding(homeId, homeLeagueId, result != null);
@@ -450,18 +467,7 @@ export function CompareApp({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/transfers", label: "Přestupy", emoji: "🔄" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-        share
-      />
+      <AppHeader user={user} share />
 
       <div className="mt-4">
         <Segmented
@@ -573,6 +579,7 @@ export function CompareApp({
         onRetry={refreshCurrent}
         homeInjuries={homeInjuries}
         awayInjuries={awayInjuries}
+        injuriesFailed={homeInjuriesFailed || awayInjuriesFailed}
         homeStanding={homeStanding}
         awayStanding={awayStanding}
         homeScorers={homeScorers}
@@ -601,6 +608,7 @@ function ResultPanel({
   onRetry,
   homeInjuries,
   awayInjuries,
+  injuriesFailed,
   homeStanding,
   awayStanding,
   homeScorers,
@@ -621,6 +629,7 @@ function ResultPanel({
   onRetry: () => void;
   homeInjuries: Injury[];
   awayInjuries: Injury[];
+  injuriesFailed: boolean;
   homeStanding: Standing | null;
   awayStanding: Standing | null;
   homeScorers: Scorer[];
@@ -694,8 +703,19 @@ function ResultPanel({
   return (
     <div
       key={`${result.home.team.id}-${result.away.team.id}`}
-      className="fade-in mt-3 space-y-4"
+      // Refetch nad už vykresleným výsledkem: čísla na obrazovce patří PŘEDCHOZÍMU
+      // porovnání, dokud nedorazí nové. Bez odlišení to vypadá, že vybraný tým má
+      // hodnoty toho původního – tichá, ale docela zásadní lež.
+      aria-busy={loading || undefined}
+      className={`fade-in mt-3 space-y-4 transition-opacity ${
+        loading ? "pointer-events-none opacity-40" : ""
+      }`}
     >
+      {loading && (
+        <p className="text-center text-xs text-muted" role="status">
+          Načítám nové porovnání…
+        </p>
+      )}
       {result.sourceNote && (
         <div className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1 text-xs font-medium text-warning">
           ⚠ {result.sourceNote}
@@ -857,6 +877,12 @@ function ResultPanel({
             insights={result.insightReport.away}
           />
         </div>
+      )}
+
+      {injuriesFailed && (
+        <p className="rounded-xl border border-border bg-surface px-3 py-2 text-xs text-warning">
+          ⚠ Přehled zranění se nepodařilo načíst – neznamená to, že jsou oba kádry kompletní.
+        </p>
       )}
 
       {(homeInjuries.length > 0 || awayInjuries.length > 0) && (
@@ -1068,12 +1094,9 @@ function LeagueTableSection({
   );
 }
 
+/** Porovnání má vlastní vertikální rytmus (`mt-3`), jinak sdílí vzhled s ostatními. */
 function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-3 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
-    </div>
-  );
+  return <SharedEmpty className="mt-3">{children}</SharedEmpty>;
 }
 
 function Skeleton() {

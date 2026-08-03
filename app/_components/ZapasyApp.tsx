@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { signIn } from "next-auth/react";
 import type {
   FixtureDay,
@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { Empty } from "./Empty";
 import { RankBadge } from "./RankBadge";
 import { buildCompareHref } from "./compareHref";
 import { MatchReportPanel } from "./MatchReportPanel";
@@ -71,9 +72,23 @@ function plausiblyLive(fixtures: UpcomingFixture[], now: number): boolean {
 function useLiveScores(
   enabled: boolean,
   fixtures: UpcomingFixture[]
-): { scores: Map<number, LiveScore>; loaded: boolean } {
+): {
+  scores: Map<number, LiveScore>;
+  loaded: boolean;
+  /** Poslední poll selhal → minuty a skóre na obrazovce **stojí**. */
+  failing: boolean;
+  /** Čas posledního úspěšného pollu (ms), `null` dokud žádný neproběhl. */
+  updatedAt: number | null;
+  /** Zápasy, které dohrály za běhu stránky (viz `detectFinished`). */
+  finished: PlayedFixture[];
+} {
   const [scores, setScores] = useState<Map<number, LiveScore>>(new Map());
   const [loaded, setLoaded] = useState(false);
+  const [failing, setFailing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [finished, setFinished] = useState<PlayedFixture[]>([]);
+  // Předchozí snímek. Zapisuje se **jen v callbacku pollu**, nikdy při renderu.
+  const prevScores = useRef<Map<number, LiveScore>>(new Map());
 
   useEffect(() => {
     if (!enabled) return;
@@ -82,14 +97,31 @@ function useLiveScores(
       if (document.hidden || !plausiblyLive(fixtures, Date.now())) return;
       try {
         const r = await fetch("/api/fixtures/live");
+        if (!r.ok) throw new Error(String(r.status));
         const d: { live?: LiveScore[] } = await r.json();
         if (!active) return;
         const map = new Map<number, LiveScore>();
         for (const l of d.live ?? []) map.set(l.fixtureId, l);
+
+        // Co ze živé sady vypadlo, dohrálo → poskládat pro Výsledky, než dorazí rozpis.
+        const done = detectFinished(prevScores.current, map, fixtures);
+        prevScores.current = map;
+        if (done.length > 0) {
+          setFinished((cur) => {
+            const known = new Set(cur.map((p) => p.fixtureId));
+            const add = done.filter((p) => !known.has(p.fixtureId));
+            return add.length > 0 ? [...cur, ...add] : cur;
+          });
+        }
+
         setScores(map);
         setLoaded(true);
+        setFailing(false);
+        setUpdatedAt(Date.now());
       } catch {
-        // živý stav je best-effort – necháme běžet SSR snapshot
+        // Živý stav je best-effort a SSR snímek zůstane – ale mlčet se nesmí:
+        // zamrzlá minuta vypadá k nerozeznání od „nic se zrovna nehraje".
+        if (active) setFailing(true);
       }
     }
     void tick();
@@ -105,7 +137,40 @@ function useLiveScores(
     };
   }, [enabled, fixtures]);
 
-  return { scores, loaded };
+  return { scores, loaded, failing, updatedAt, finished };
+}
+
+/**
+ * Razítko čerstvosti živého skóre. Bez něj vypadá zamrzlý poll (nebo snímek z CDN)
+ * jako aktuální stav – minuta je součást tvrzení, ne dekorace. Ukazuje se jen když
+ * se opravdu něco hraje, aby mimo sezónu nedělalo hluk.
+ */
+function LiveFreshness({
+  failing,
+  updatedAt,
+}: {
+  failing: boolean;
+  updatedAt: number | null;
+}) {
+  if (updatedAt == null && !failing) return null;
+  const time =
+    updatedAt == null
+      ? null
+      : new Date(updatedAt).toLocaleTimeString("cs-CZ", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+  return (
+    <p
+      // Odečítač se o výpadku dozví; průběžné aktualizace času by ale hlásit neměl.
+      role={failing ? "status" : undefined}
+      className={`mt-2 text-right text-[10px] ${failing ? "text-warning" : "text-muted"}`}
+    >
+      {failing
+        ? `⚠ Živé skóre se nedaří obnovit${time ? ` – naposledy v ${time}` : ""}.`
+        : `Živé skóre aktualizováno v ${time}`}
+    </p>
+  );
 }
 
 /**
@@ -139,12 +204,98 @@ function mergeLive(
     });
 }
 
+/**
+ * Stavy, ze kterých se dá dohraný zápas dopočítat na klientovi. `ET`/`BT`/`P` schválně
+ * chybí: `PlayedFixture.homeGoals` je **skóre po 90 minutách** (to model predikuje), ale
+ * živý feed nese průběžné skóre včetně prodloužení – po rozstřelu bychom dosadili špatné
+ * číslo. Takový zápas počká na rozpis; radši o pár minut později než špatně.
+ */
+const REGULAR_TIME_STATUSES = new Set(["1H", "HT", "2H"]);
+
+/**
+ * Zápas, který **právě zmizel ze živé sady**, je dohraný. `mergeLive` ho z Programu
+ * vyhodí, ale Výsledky se počítají ze statické `days` prop, takže tam do další ISR
+ * regenerace (až 10 min) nedorazil – zápas, který jsi sledoval, spadl do díry.
+ * Tohle ho z posledního živého snímku poskládá a doplní do Výsledků rovnou.
+ *
+ * Je to **optimistický překryv**, ne zdroj pravdy: jakmile dorazí čerstvý rozpis se
+ * stejným `fixtureId`, `mergePlayed` dá přednost jemu (nese i `tip` a `afterExtraTime`).
+ */
+function toPlayedFixture(
+  f: UpcomingFixture,
+  last: LiveScore
+): PlayedFixture | null {
+  if (!REGULAR_TIME_STATUSES.has(last.status)) return null;
+  if (last.homeGoals == null || last.awayGoals == null) return null;
+  return {
+    fixtureId: f.fixtureId,
+    leagueId: f.leagueId,
+    leagueName: f.leagueName,
+    leagueLogoUrl: f.leagueLogoUrl,
+    kickoff: f.kickoff,
+    home: f.home,
+    away: f.away,
+    homeGoals: last.homeGoals,
+    awayGoals: last.awayGoals,
+    afterExtraTime: false,
+    national: f.national,
+    compareMode: f.compareMode,
+    homeCompareLeagueId: f.homeCompareLeagueId,
+    awayCompareLeagueId: f.awayCompareLeagueId,
+    // `tip` vědomě chybí – ✓/✗ dorazí až se settlem, dřív ho poctivě nevíme.
+  };
+}
+
+/** Zápasy ze serveru mají přednost; dopočítané se přidají jen když v rozpisu ještě nejsou. */
+function mergePlayed(
+  served: PlayedFixture[],
+  extra: PlayedFixture[]
+): PlayedFixture[] {
+  if (extra.length === 0) return served;
+  const known = new Set(served.map((p) => p.fixtureId));
+  const add = extra.filter((p) => !known.has(p.fixtureId));
+  if (add.length === 0) return served;
+  return [...served, ...add].sort((a, b) => b.kickoff.localeCompare(a.kickoff));
+}
+
 /** Oblíbené: live první, pak dle výkopu (primární sekce nahoře). */
 function sortFavorites(a: UpcomingFixture, b: UpcomingFixture): number {
   const al = a.live ? 0 : 1;
   const bl = b.live ? 0 : 1;
   if (al !== bl) return al - bl;
   return a.kickoff.localeCompare(b.kickoff);
+}
+
+/** Pražský kalendářní den výkopu – aby dopočítaný zápas spadl do správného dne Výsledků. */
+function pragueDayOf(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Prague",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
+}
+
+/**
+ * Které zápasy z předchozího snímku v novém chybí → právě dohrály. Čistá funkce, aby
+ * se dala volat z callbacku pollu (a ne z dalšího efektu – synchronní `setState` v těle
+ * efektu tenhle repo zakazuje kvůli kaskádovým renderům).
+ */
+function detectFinished(
+  prev: Map<number, LiveScore>,
+  next: Map<number, LiveScore>,
+  fixtures: UpcomingFixture[]
+): PlayedFixture[] {
+  if (prev.size === 0) return []; // první snímek nemá s čím porovnávat
+  const done: PlayedFixture[] = [];
+  for (const [id, last] of prev) {
+    if (next.has(id)) continue; // pořád běží
+    const f = fixtures.find((x) => x.fixtureId === id);
+    if (!f) continue;
+    const played = toPlayedFixture(f, last);
+    if (played) done.push(played);
+  }
+  return done;
 }
 
 /** Oblíbené IDs uživatele (PRO) + optimistický toggle s revertem při chybě. */
@@ -262,27 +413,40 @@ export function ZapasyApp({
     return future.length > 0 ? future : days.slice(resultDays);
   }, [days, clientToday, resultDays]);
 
-  // Výsledky jedou opačně: dnešek první, pak dozadu.
+  const active = visibleDays[dayIdx] ?? visibleDays[0];
+  const isPro = user?.tier === "PRO";
+
+  const {
+    scores,
+    loaded,
+    failing,
+    updatedAt,
+    finished: justFinished,
+  } = useLiveScores(view === "program", active?.fixtures ?? NO_FIXTURES);
+  const { favFixtures, favLeagues, toggle } = useFavorites(!!isPro);
+
+  // Výsledky jedou opačně: dnešek první, pak dozadu. Do dne se přimíchají zápasy,
+  // které dohrály za běhu stránky (jinak by čekaly na ISR regeneraci, až 10 min).
   const pastDays = useMemo(() => {
     const past = clientToday
       ? days.filter((d) => d.date <= clientToday)
       : days.slice(0, resultDays + 1);
-    return (past.length > 0 ? past : days.slice(0, resultDays + 1)).slice().reverse();
-  }, [days, clientToday, resultDays]);
+    const base = (past.length > 0 ? past : days.slice(0, resultDays + 1))
+      .slice()
+      .reverse();
+    if (justFinished.length === 0) return base;
+    return base.map((d) => {
+      const extra = justFinished.filter((p) => pragueDayOf(p.kickoff) === d.date);
+      const played = mergePlayed(d.played, extra);
+      return played === d.played ? d : { ...d, played };
+    });
+  }, [days, clientToday, resultDays, justFinished]);
 
-  const active = visibleDays[dayIdx] ?? visibleDays[0];
   const activePast = pastDays[resultIdx] ?? pastDays[0];
   const playedCount = useMemo(
     () => pastDays.reduce((n, d) => n + d.played.length, 0),
     [pastDays]
   );
-  const isPro = user?.tier === "PRO";
-
-  const { scores, loaded } = useLiveScores(
-    view === "program",
-    active?.fixtures ?? NO_FIXTURES
-  );
-  const { favFixtures, favLeagues, toggle } = useFavorites(!!isPro);
 
   // SSR snapshot překrytý živým skóre (dohrané zmizí, běžící přepíšou minutu/skóre).
   const dayFixtures = useMemo(
@@ -310,17 +474,7 @@ export function ZapasyApp({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/transfers", label: "Přestupy", emoji: "🔄" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Zápasy</h1>
       <p className="mt-1 text-sm text-muted">
@@ -362,6 +516,8 @@ export function ZapasyApp({
           {(favFixtures.size > 0 || favLeagues.size > 0) && (
             <FavoriteToggle onlyFav={onlyFav} onChange={setOnlyFav} />
           )}
+
+          <LiveFreshness failing={failing} updatedAt={updatedAt} />
 
           {active && dayFixtures.length > 0 ? (
             <>
@@ -1073,10 +1229,3 @@ function PlayedRow({ fixture }: { fixture: PlayedFixture }) {
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
-    </div>
-  );
-}

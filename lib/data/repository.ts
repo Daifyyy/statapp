@@ -19,6 +19,7 @@ import type {
 } from "@/lib/types";
 import type { Metric } from "@/lib/types";
 import { buildMatchReport, type MatchReport } from "@/lib/stats/matchReport";
+import type { MatchEvent } from "@/lib/stats/matchEvents";
 import { buildLiveReport, type LiveReport } from "@/lib/stats/liveReport";
 import type { LeagueBaseline } from "@/lib/stats/predict";
 import type { TeamStrength } from "@/lib/stats/ratings";
@@ -140,18 +141,35 @@ export async function getLiveMatchReport(input: {
   elapsed: number | null;
   status: string;
   halftime?: { home: number; away: number } | null;
-}): Promise<{ report: LiveReport | null; reason: string | null }> {
-  const stats = useReal
-    ? await real.getLiveMatchStatsPair(
-        input.fixtureId,
-        input.home.id,
-        input.away.id,
-        input.status,
-        input.elapsed
-      )
-    : ({ ok: true, ...mockLiveMatchStats(input.fixtureId, input.elapsed) } as const);
+}): Promise<{
+  report: LiveReport | null;
+  reason: string | null;
+  events: MatchEvent[];
+}> {
+  // Statistiky a průběh jedou paralelně a **oba pod týmž denním rozpočtem**
+  // (`tryConsumeLiveStats`), takže poll otevřeného panelu nemůže vyžrat kvótu.
+  const [stats, events] = await Promise.all([
+    useReal
+      ? real.getLiveMatchStatsPair(
+          input.fixtureId,
+          input.home.id,
+          input.away.id,
+          input.status,
+          input.elapsed
+        )
+      : Promise.resolve({
+          ok: true,
+          ...mockLiveMatchStats(input.fixtureId, input.elapsed),
+        } as const),
+    useReal
+      ? real.getMatchEvents(input.fixtureId, true, input.status, input.elapsed)
+      : Promise.resolve(mockLiveMatchEvents(input.fixtureId, input.elapsed)),
+  ]);
 
-  if (!stats.ok) return { report: null, reason: stats.reason };
+  // Průběh přežije i výpadek statistik: „padl gól v 12. minutě" je použitelná informace
+  // sama o sobě a nemá důvod mizet jen proto, že nedorazily střely a držení.
+  const timeline = events ?? [];
+  if (!stats.ok) return { report: null, reason: stats.reason, events: timeline };
 
   const report = buildLiveReport({
     home: stats.home,
@@ -162,7 +180,17 @@ export async function getLiveMatchReport(input: {
     status: input.status,
     halftime: input.halftime ?? null,
   });
-  return { report, reason: report.reason };
+  return { report, reason: report.reason, events: timeline };
+}
+
+/**
+ * Mock průběhu běžícího zápasu: události dohraného zápasu **oříznuté uplynulou minutou**
+ * (stejný princip jako `mockLiveMatchStats`). Bez toho by v mock režimu časová osa buď
+ * chyběla, nebo by ve 12. minutě ukazovala gól z 80. – a to by se odladit nedalo.
+ */
+function mockLiveMatchEvents(fixtureId: number, elapsed: number | null): MatchEvent[] {
+  const minute = elapsed ?? 0;
+  return mockMatchEvents(fixtureId).filter((e) => e.minute <= minute);
 }
 
 /**
@@ -426,10 +454,21 @@ export async function getMatchReport(input: {
   home: { id: number; name: string };
   away: { id: number; name: string };
   goals: { home: number; away: number } | null;
-}): Promise<{ report: MatchReport | null; review: MatchReview | null }> {
-  const stats = useReal
-    ? await real.getMatchStatsPair(input.fixtureId, input.home.id, input.away.id)
-    : mockMatchStats(input.fixtureId);
+}): Promise<{
+  report: MatchReport | null;
+  review: MatchReview | null;
+  events: MatchEvent[];
+}> {
+  // Statistiky a průběh jsou dvě nezávislá volání – paralelně, ať se doba načtení
+  // panelu nesečte. Dohraný zápas se navíc nemění, takže obojí jde z dlouhé cache.
+  const [stats, events] = await Promise.all([
+    useReal
+      ? real.getMatchStatsPair(input.fixtureId, input.home.id, input.away.id)
+      : Promise.resolve(mockMatchStats(input.fixtureId)),
+    useReal
+      ? real.getMatchEvents(input.fixtureId, false)
+      : Promise.resolve(mockMatchEvents(input.fixtureId)),
+  ]);
 
   let report: MatchReport | null = null;
   if (stats) {
@@ -442,7 +481,11 @@ export async function getMatchReport(input: {
     report = built.available ? built : null;
   }
 
-  return { report, review: await matchReviewOf(input.fixtureId, input.goals, stats) };
+  return {
+    report,
+    review: await matchReviewOf(input.fixtureId, input.goals, stats),
+    events: events ?? [],
+  };
 }
 
 /**
@@ -490,6 +533,54 @@ function actualCountsOf(
         }
       : null;
   return { corners, cards };
+}
+
+/**
+ * Deterministický mock průběhu zápasu. Bez něj by v `npm run dev` (mock režim) byla
+ * časová osa vždycky prázdná a nedalo by se na ní nic odladit – přesně jako u
+ * `mockLiveMatchStats`, které existuje ze stejného důvodu.
+ *
+ * Týmy jsou označené `0`/`1`; volající je páruje podle pořadí, ne podle skutečných id
+ * (mock je nezná).
+ */
+function mockMatchEvents(fixtureId: number): MatchEvent[] {
+  const r = (n: number, lo: number, hi: number) =>
+    lo + (((fixtureId * 7919 + n * 104729) % 233280) / 233280) * (hi - lo);
+  const events: MatchEvent[] = [
+    {
+      minute: Math.round(r(1, 5, 40)),
+      extra: null,
+      kind: "goal",
+      teamId: 0,
+      player: "M. Novák",
+      assist: "P. Dvořák",
+    },
+    {
+      minute: Math.round(r(2, 35, 60)),
+      extra: null,
+      kind: "yellow",
+      teamId: 1,
+      player: "J. Svoboda",
+      assist: null,
+    },
+    {
+      minute: Math.round(r(3, 55, 75)),
+      extra: null,
+      kind: "sub",
+      teamId: 0,
+      player: "T. Černý",
+      assist: "L. Procházka",
+    },
+    {
+      minute: Math.round(r(4, 70, 90)),
+      extra: null,
+      kind: "goal",
+      teamId: 1,
+      player: "R. Veselý",
+      assist: null,
+    },
+  ];
+  return events.sort((a, b) => a.minute - b.minute);
 }
 
 /**

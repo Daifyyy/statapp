@@ -63,6 +63,23 @@
   Detail a zdůvodnění prahů viz docstring `liveReport.ts`; kvóta a TTL viz `docs/provoz.md`.
   Ověřeno proti živému API 31. 7. 2026 (`npm run probe-live`): statistiky rozehraného zápasu
   chodí včetně **xG**, hodnoty jsou kumulativní k aktuální minutě.
+- **Průběh zápasu — góly, karty, střídání** (`lib/stats/matchEvents.ts` – čisté + 13 testů,
+  UI `EventTimeline.tsx`, sdílené živým i dohraným panelem). Do 3. 8. 2026 se
+  `/fixtures/events` **nevolal vůbec**: appka uměla ukázat výsledek i statistiky, ale ne
+  *kdo dal góly*. Sonda: `npm run probe-events`.
+  - **Cena je asymetrická, proto dvě cesty.** Dohraný zápas se už nezmění → cache `fixevents:`
+    **na rok**, tedy 1 volání za život zápasu; to pokrývá většinu hodnoty (Výsledky).
+    Běžící zápas jde pod **týž** denní rozpočet jako živé statistiky (`tryConsumeLiveStats`)
+    a týž TTL žebřík (`liveStatsTtl`).
+  - **Nikdy do `MatchStatCache`** – vlastní klíč v `ApiCache`, přesně jako `fixstatlive:`.
+    Jinak by se musel posunout `MIN_READABLE_CACHE_VERSION` (= zahodit ~9 000 zápasů).
+  - **`type` má nekonzistentní velikost písmen**: `"Goal"`, `"Card"`, ale `"subst"`.
+    Porovnává se výhradně malými písmeny, jinak střídání tiše vypadnou (kryto testem).
+    U střídání je `player` **odcházející** a `assist` **přicházející** hráč.
+  - **VAR a „Missed Penalty" se zahazují**: „Goal / Missed Penalty" je typ `Goal`, ale gól
+    to není, a VAR událost bez kontextu („Goal cancelled") čte laik jako gól.
+  - Ověřeno proti živému API 3. 8. 2026 (Fortuna liga, 13 událostí): `MatchStatCache`
+    nedotčená, TTL 365 dní, druhé volání z cache.
 - **Data (Výsledky): zdrojem je ROZPIS, ne naše predikce.** `getFixturesByDates` staví z týchž
   syrových dat **oba** seznamy dne: `fixtures` (Program) a `played` (Výsledky) přes čistou
   **`normalizeFinishedFixtures`** (`lib/data/fixtures.ts`, zrcadlo `normalizeUpcomingFixtures`,

@@ -117,6 +117,13 @@ const BADGE: Record<MatchResult, string> = {
   L: "bg-red-500 text-white",
 };
 
+/**
+ * API i typ `MatchResult` jedou v angličtině (W/D/L), UI je celé česky. Ligová tabulka
+ * (`StandingsTable`) tiskla V/R/P, tenhle proužek W/D/L – stejný pojem dvěma abecedami
+ * na dvou obrazovkách. Překlad je proto tady, u vykreslení.
+ */
+const CZ_RESULT: Record<MatchResult, string> = { W: "V", D: "R", L: "P" };
+
 type FormOpponent = { id: number; name: string; logoUrl: string | null } | null;
 
 /**
@@ -188,7 +195,7 @@ function FormBadges({
           <span
             className={`flex h-6 w-6 items-center justify-center rounded text-xs font-bold ${BADGE[r]}`}
           >
-            {r}
+            {CZ_RESULT[r]}
           </span>
           {anyMark && (
             <span

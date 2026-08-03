@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getMatchReport } from "@/lib/data/repository";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { publicCache } from "@/lib/cacheHeaders";
+import { logError } from "@/lib/logError";
 
 /**
  * Přehled **odehraného** zápasu pro záložku Výsledky: obraz hry (kdo dominoval, typ
@@ -39,15 +40,20 @@ export async function GET(req: Request) {
       : null;
 
   try {
-    const { report, review } = await getMatchReport({
+    const { report, review, events } = await getMatchReport({
       fixtureId,
       home: { id: homeId, name: p.get("hn") ?? "Domácí" },
       away: { id: awayId, name: p.get("an") ?? "Hosté" },
       goals,
     });
     // Odehraný zápas se už nezmění → dlouhá CDN cache; šetří funkci i Neon.
-    return NextResponse.json({ report, review }, { headers: publicCache(3600, 86_400) });
-  } catch {
-    return NextResponse.json({ report: null, review: null });
+    return NextResponse.json(
+      { report, review, events },
+      { headers: publicCache(3600, 86_400) }
+    );
+  } catch (e) {
+    // Graceful degradace ano, neviditelná ne (CLAUDE.md: `catch` nikdy nesmí mlčet).
+    logError("api/match-report", e, { fixtureId, homeId, awayId });
+    return NextResponse.json({ report: null, review: null, events: [] });
   }
 }

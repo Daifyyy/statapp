@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { CompareResult, EntityType } from "@/lib/types";
+import { ConfirmDialog, useConfirm } from "./ConfirmDialog";
 
 /** Oblíbené porovnání tak, jak ho vrací API (řádek SavedComparison). */
 export interface SavedFavorite {
@@ -39,6 +40,8 @@ export function FavoritesSection({
   const [items, setItems] = useState<SavedFavorite[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Smazání je nevratné – snímek dat z data uložení už nejde znovu vyrobit.
+  const confirm = useConfirm();
 
   const load = useCallback(async () => {
     try {
@@ -153,7 +156,16 @@ export function FavoritesSection({
               </button>
               <button
                 type="button"
-                onClick={() => remove(fav.id)}
+                onClick={() =>
+                  confirm.ask({
+                    message: `Smazat uložené porovnání „${
+                      fav.label ??
+                      `${fav.snapshot.home.team.name} – ${fav.snapshot.away.team.name}`
+                    }"? Uložený snímek dat se tím ztratí.`,
+                    confirmLabel: "Smazat",
+                    onConfirm: () => remove(fav.id),
+                  })
+                }
                 aria-label="Smazat"
                 className="shrink-0 rounded-full px-2 py-1 text-muted transition hover:text-foreground"
               >
@@ -163,6 +175,7 @@ export function FavoritesSection({
           ))}
         </ul>
       )}
+      <ConfirmDialog data={confirm.data} onClose={confirm.close} />
     </section>
   );
 }

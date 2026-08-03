@@ -63,6 +63,7 @@ npm run backfill-stats      # xG/střely k historii
 npm run probe        # živá sonda API; probe-odds -- <fixtureId> --markets
 npm run probe-live   # živé statistiky + přehled průběhu tak, jak ho uvidí uživatel
                      # -- <fixtureId> | --watch <s> (diff dvou snímků = důkaz kumulativnosti)
+npm run probe-events # /fixtures/events (góly/karty/střídání) — spustit PŘED psaním schématu
 npm run sim-game     # balanc Manažera (bez API/DB)
 npm run audit-leagues       # herní ligy: odvozené vs. kurátorované příčky
 npm run refresh-transfers   # přestupy z API-Football
@@ -95,6 +96,13 @@ binárku přes TLS proxy.
   vlastní klíč `fixstatlive:` v `ApiCache` s TTL v řádu minut). Poloviční čísla zapsaná jako
   hotový zápas by tiše otrávila okna, na kterých stojí λ — a v track-recordu by to vypadalo
   jako „model má horší měsíc".
+- **Události zápasu (`/fixtures/events`) mají vlastní klíč `fixevents:`**, nikdy
+  `MatchStatCache` — ta drží metriky pro λ a přidání by si vynutilo posun
+  `MIN_READABLE_CACHE_VERSION` (= zahodit ~9 000 cachovaných zápasů). Dohraný zápas se
+  cachuje **na rok** (1 volání za život), běžící jede pod **týmž** rozpočtem jako živé
+  statistiky (`tryConsumeLiveStats` + `liveStatsTtl`). `type` z API má nekonzistentní
+  velikost písmen (`"Goal"`, `"Card"`, ale `"subst"`) → porovnávat **case-insensitive**,
+  jinak střídání tiše zmizí; kryto testy v `lib/stats/matchEvents.test.ts`.
 
 **Verzování modelu**
 - `MODEL_VERSION` verzuje **jen to, co generuje λ**. Bump **vynuluje dataset**.

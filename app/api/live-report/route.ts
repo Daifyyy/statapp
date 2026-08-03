@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getLiveMatchReport } from "@/lib/data/repository";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
 import { publicCache } from "@/lib/cacheHeaders";
+import { logError } from "@/lib/logError";
 
 /**
  * Přehled **probíhajícího** zápasu (kdo zatím určuje hru) pro rozbalený řádek v Programu.
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
       : null;
 
   try {
-    const { report, reason } = await getLiveMatchReport({
+    const { report, reason, events } = await getLiveMatchReport({
       fixtureId,
       home: { id: homeId, name: p.get("hn") ?? "Domácí" },
       away: { id: awayId, name: p.get("an") ?? "Hosté" },
@@ -57,8 +58,12 @@ export async function GET(req: Request) {
     // `reason` cestuje na klienta schválně: „ještě je brzy" a „statistiky nedorazily"
     // vypadají v UI stejně (prázdno), ale znamenají něco jiného – a rozbité parsování
     // se pozná právě tím, že celý zápasový den hlásí `nostats`.
-    return NextResponse.json({ report, reason }, { headers: publicCache(30, 60) });
-  } catch {
-    return NextResponse.json({ report: null, reason: "error" });
+    return NextResponse.json(
+      { report, reason, events },
+      { headers: publicCache(30, 60) }
+    );
+  } catch (e) {
+    logError("api/live-report", e, { fixtureId });
+    return NextResponse.json({ report: null, reason: "error", events: [] });
   }
 }

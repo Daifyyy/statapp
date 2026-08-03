@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { track } from "@vercel/analytics";
@@ -16,19 +17,29 @@ const PRO_FEATURES = [
  * Zámek PRO obsahu (zobrazí se místo predikce/insights, když je výsledek `locked`).
  * CTA podle stavu: anonym → přihlásit; FREE s dostupným trialem → vyzkoušet 1×;
  * FREE po trialu → upgrade.
+ *
+ * **Dostupnost trialu si komponenta zjistí sama z `user`.** Dokud se předávala propem,
+ * tři ze čtyř stránek posílaly natvrdo `false` a uživateli s NEVYUŽITÝM trialem tvrdily
+ * „Trial jsi využil" – tedy lež přímo na konverzní cestě. `trialAvailable` proto zůstává
+ * jen jako **override** pro Porovnání, které si po spotřebování trialu drží vlastní stav.
+ *
+ * `onUnlockTrial` chybí na stránkách, které trial neumí spotřebovat (trial odemyká jedno
+ * *porovnání*). Tam se místo tlačítka ukáže odkaz tam, kde se dá uplatnit.
  */
 export function ProLock({
   user,
   trialAvailable,
   onUnlockTrial,
-  unlocking,
+  unlocking = false,
 }: {
   user: SessionUser | null;
-  trialAvailable: boolean;
-  onUnlockTrial: () => void;
-  unlocking: boolean;
+  trialAvailable?: boolean;
+  onUnlockTrial?: () => void;
+  unlocking?: boolean;
 }) {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const hasTrial =
+    trialAvailable ?? (user?.tier === "FREE" && !user.proTrialUsed);
 
   async function startCheckout() {
     track("upgrade_click");
@@ -82,7 +93,7 @@ export function ProLock({
               Po přihlášení odemkneš jedno porovnání s plnou analýzou.
             </p>
           </>
-        ) : trialAvailable ? (
+        ) : hasTrial && onUnlockTrial ? (
           <>
             <button
               type="button"
@@ -97,6 +108,28 @@ export function ProLock({
             </button>
             <p className="mt-2 text-xs text-muted">
               Máš jedno PRO porovnání zdarma. Vyzkoušej ho na tomto zápase.
+            </p>
+          </>
+        ) : hasTrial ? (
+          // Trial odemyká jedno *porovnání*, takže se tady spotřebovat nedá – ale mlčet
+          // o něm (nebo tvrdit, že je pryč) je horší než poslat člověka tam, kde platí.
+          <>
+            <Link
+              href="/porovnani"
+              className="inline-block rounded-full bg-positive px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            >
+              Vyzkoušet PRO zdarma (1×)
+            </Link>
+            <p className="mt-2 text-xs text-muted">
+              Máš ještě jedno PRO porovnání zdarma – uplatníš ho v Porovnání.{" "}
+              <button
+                type="button"
+                onClick={startCheckout}
+                disabled={checkoutLoading}
+                className="underline decoration-dotted underline-offset-2 transition hover:text-foreground disabled:opacity-60"
+              >
+                {checkoutLoading ? "Přesměrovávám…" : "Nebo rovnou předplatné"}
+              </button>
             </p>
           </>
         ) : (

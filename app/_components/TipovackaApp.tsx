@@ -7,17 +7,48 @@ import type { TipMarket, TipRow, TipSelection } from "@/lib/tips/types";
 import type { TipStats } from "@/lib/tips/stats";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { Empty } from "./Empty";
+import { ConfirmDialog, useConfirm } from "./ConfirmDialog";
+import { ViewTabs } from "./ViewTabs";
 import type { SessionUser } from "./sessionUser";
 
 type View = "tipovat" | "tipy" | "bilance";
 
-const NAV = [
-  { href: "/", label: "Zápasy", emoji: "📅" },
-  { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-  { href: "/predikce", label: "Predikce", emoji: "🎯" },
-  { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-  { href: "/hra", label: "Hra", emoji: "🎮" },
-];
+/**
+ * Od kolika vyhodnocených tipů má smysl číst úspěšnost a ROI jako výkon, ne jako šum.
+ * Protějšek `STRATEGY_MIN_SAMPLE` v Predikci – bez něj jeden trefený tip ukázal „+100 %".
+ */
+const TIP_STATS_MIN_SAMPLE = 30;
+
+interface TipsSetters {
+  setTips: (v: TipRow[]) => void;
+  setStats: (v: TipStats | null) => void;
+  setLoading: (v: boolean) => void;
+  setLoadError: (v: boolean) => void;
+}
+
+/**
+ * Načte tipy + bilanci. Mimo komponentu (vzor `loadPicks`) – žádné synchronní `setState`
+ * v těle efektu. Chyba se **musí** odlišit: spadlý request vypadal jako „zatím nemáš
+ * žádný tip", tedy jako by se uložené tipy ztratily.
+ */
+async function loadTips(signedIn: boolean, s: TipsSetters): Promise<void> {
+  if (!signedIn) return;
+  try {
+    const res = await fetch("/api/tips", { cache: "no-store" });
+    const data = (await res.json().catch(() => null)) as
+      | { tips: TipRow[]; stats: TipStats }
+      | null;
+    if (!res.ok || !data?.tips) throw new Error("load");
+    s.setTips(data.tips);
+    s.setStats(data.stats);
+    s.setLoadError(false);
+  } catch {
+    s.setLoadError(true);
+  } finally {
+    s.setLoading(false);
+  }
+}
 
 /** Trhy a jejich strany pro tipovací formulář (kurzy se ZÁMĚRNĚ nezobrazují). */
 const MARKETS: {
@@ -71,22 +102,12 @@ export function TipovackaApp({
   const [tips, setTips] = useState<TipRow[]>([]);
   const [stats, setStats] = useState<TipStats | null>(null);
   const [loading, setLoading] = useState(Boolean(user));
+  const [loadError, setLoadError] = useState(false);
 
-  const refresh = useCallback(async () => {
-    if (!user) return;
-    try {
-      const res = await fetch("/api/tips", { cache: "no-store" });
-      const data = (await res.json().catch(() => null)) as
-        | { tips: TipRow[]; stats: TipStats }
-        | null;
-      if (data?.tips) {
-        setTips(data.tips);
-        setStats(data.stats);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [user]);
+  const refresh = useCallback(
+    () => loadTips(Boolean(user), { setTips, setStats, setLoading, setLoadError }),
+    [user]
+  );
 
   useEffect(() => {
     void refresh();
@@ -105,10 +126,12 @@ export function TipovackaApp({
     return map;
   }, [tips]);
 
+  const pending = stats?.pending ?? 0;
+
   if (!user) {
     return (
       <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-        <AppHeader user={user} nav={NAV} />
+        <AppHeader user={user} />
         <h1 className="mt-4 text-lg font-semibold text-foreground">Tipovačka</h1>
         <SignInPrompt />
       </main>
@@ -117,17 +140,37 @@ export function TipovackaApp({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader user={user} nav={NAV} />
+      <AppHeader user={user} />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Tipovačka</h1>
       <p className="mt-1 text-sm text-muted">
         Tipuj na intuici bez kurzů. Po odehrání uvidíš úspěšnost, odhalený kurz a ROI.
       </p>
 
       <ViewTabs
-        view={view}
+        tabs={[
+          { value: "tipovat" as View, label: "Tipovat" },
+          {
+            value: "tipy" as View,
+            label: pending > 0 ? `Moje tipy (${pending})` : "Moje tipy",
+          },
+          { value: "bilance" as View, label: "Bilance" },
+        ]}
+        active={view}
         onSelect={setView}
-        openCount={stats?.pending ?? 0}
       />
+
+      {loadError && (
+        <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-warning">
+          <span>⚠ Tvoje tipy se nepodařilo načíst – tenhle seznam nemusí být úplný.</span>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="shrink-0 rounded-full border border-border px-2.5 py-1 font-medium text-foreground transition hover:bg-background"
+          >
+            ↻ Znovu
+          </button>
+        </div>
+      )}
 
       {view === "tipovat" && (
         <TipovatView
@@ -166,40 +209,6 @@ function SignInPrompt() {
         Přihlásit se a tipovat
       </button>
     </section>
-  );
-}
-
-function ViewTabs({
-  view,
-  onSelect,
-  openCount,
-}: {
-  view: View;
-  onSelect: (v: View) => void;
-  openCount: number;
-}) {
-  const tabs: { value: View; label: string }[] = [
-    { value: "tipovat", label: "Tipovat" },
-    { value: "tipy", label: openCount > 0 ? `Moje tipy (${openCount})` : "Moje tipy" },
-    { value: "bilance", label: "Bilance" },
-  ];
-  return (
-    <div className="mt-4 inline-flex w-full rounded-full border border-border bg-surface p-0.5">
-      {tabs.map((t) => (
-        <button
-          key={t.value}
-          type="button"
-          onClick={() => onSelect(t.value)}
-          className={`flex-1 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-            t.value === view
-              ? "bg-foreground text-background"
-              : "text-muted hover:text-foreground"
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -535,7 +544,8 @@ function TipyView({
   loading: boolean;
   onDeleted: () => Promise<void>;
 }) {
-  if (loading) return <Empty>Načítám tvoje tipy…</Empty>;
+  // Čárkovaný rámeček = „nic tu není". Načítání do něj nepatří, je to opačné sdělení.
+  if (loading) return <RowsSkeleton />;
   if (tips.length === 0)
     return <Empty>Zatím nemáš žádný tip. Přepni na „Tipovat“ a vyber zápas.</Empty>;
 
@@ -595,6 +605,10 @@ function OpenTipRow({
   onDeleted: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  // Smazání tipu je nevratné (a je to záznam o tom, co sis myslel PŘED zápasem – po
+  // výkopu ho už nejde poctivě zadat znovu), takže se ptáme. Vzor: Manažer.
+  const confirm = useConfirm();
+
   async function remove() {
     setBusy(true);
     try {
@@ -611,7 +625,13 @@ function OpenTipRow({
         <span className="text-[13px] font-medium text-foreground">{selectionText(tip)}</span>
         <button
           type="button"
-          onClick={remove}
+          onClick={() =>
+            confirm.ask({
+              message: `Smazat tip ${tip.homeName} – ${tip.awayName} (${selectionText(tip)})? Zpátky ho po výkopu už nezadáš.`,
+              confirmLabel: "Smazat tip",
+              onConfirm: () => void remove(),
+            })
+          }
           disabled={busy}
           className="shrink-0 text-xs text-muted transition hover:text-negative disabled:opacity-50"
         >
@@ -619,6 +639,7 @@ function OpenTipRow({
         </button>
       </div>
       {tip.note && <p className="mt-1 text-[11px] italic text-muted">„{tip.note}“</p>}
+      <ConfirmDialog data={confirm.data} onClose={confirm.close} />
     </li>
   );
 }
@@ -682,7 +703,7 @@ const MARKET_LABEL: Record<TipMarket, string> = {
 };
 
 function BilanceView({ stats, loading }: { stats: TipStats | null; loading: boolean }) {
-  if (loading) return <Empty>Načítám bilanci…</Empty>;
+  if (loading) return <RowsSkeleton />;
   if (!stats || stats.settled === 0)
     return (
       <Empty>
@@ -693,20 +714,30 @@ function BilanceView({ stats, loading }: { stats: TipStats | null; loading: bool
 
   const roi = stats.roi;
   const profit = stats.profit;
+  const thin = stats.settled < TIP_STATS_MIN_SAMPLE;
 
   return (
     <div className="mt-4 space-y-5">
+      {/* Stejný důvod jako `STRATEGY_MIN_SAMPLE` v Predikci: z pěti tipů vyjde „ROI +100 %"
+          a čte se to jako výkon, ne jako šum. Čísla zůstanou, jen se k nim řekne pravda. */}
+      {thin && (
+        <p className="rounded-xl border border-border bg-surface px-3 py-2 text-[11px] text-muted">
+          ⚠ Zatím jen {stats.settled}{" "}
+          {stats.settled === 1 ? "vyhodnocený tip" : "vyhodnocené tipy"} – úspěšnost a ROI
+          jsou hlavně náhoda. Rozumně se to dá číst zhruba od {TIP_STATS_MIN_SAMPLE} tipů.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Úspěšnost" value={pct(stats.accuracy)} sub={`${stats.hits}/${stats.settled}`} />
         <StatCard
           label="ROI"
           value={roi == null ? "—" : `${roi >= 0 ? "+" : ""}${Math.round(roi * 100)} %`}
-          tone={roi == null ? "neutral" : roi >= 0 ? "positive" : "negative"}
+          tone={roi == null || thin ? "neutral" : roi >= 0 ? "positive" : "negative"}
         />
         <StatCard
           label="Zisk"
           value={`${profit >= 0 ? "+" : ""}${profit.toFixed(2)} j`}
-          tone={profit >= 0 ? "positive" : "negative"}
+          tone={thin ? "neutral" : profit >= 0 ? "positive" : "negative"}
           sub={`vsazeno ${stats.staked.toFixed(0)} j`}
         />
         <StatCard label="Čeká" value={String(stats.pending)} sub="na výsledek" />
@@ -776,9 +807,25 @@ function BilanceView({ stats, loading }: { stats: TipStats | null; loading: bool
       )}
 
       <p className="px-1 text-[11px] text-muted">
-        ROI je vůči kurzu snapshotnutému při vložení tipu (Pinnacle, jinak fallback
-        sázkovka). Tipy bez dostupného kurzu se počítají do úspěšnosti, ne do ROI.
+        „j“ = jednotka sázky: každý tip se počítá jako 1 j, takže zisk je násobek toho, co
+        bys vsadil na jeden tip. ROI je vůči kurzu snapshotnutému při vložení tipu
+        (Pinnacle, jinak fallback sázkovka). Tipy bez dostupného kurzu se počítají do
+        úspěšnosti, ne do ROI.
       </p>
+    </div>
+  );
+}
+
+function RowsSkeleton() {
+  return (
+    <div className="mt-4 space-y-2">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-16 animate-pulse rounded-xl bg-border/60"
+          style={{ animationDelay: `${i * 60}ms` }}
+        />
+      ))}
     </div>
   );
 }
@@ -805,10 +852,3 @@ function StatCard({
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
-    </div>
-  );
-}

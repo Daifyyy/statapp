@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import type { UpcomingFixture } from "@/lib/types";
 import type { LiveReport } from "@/lib/stats/liveReport";
+import type { MatchEvent } from "@/lib/stats/matchEvents";
 import { Chip, DimensionBar } from "./MatchDimensionBar";
+import { EventTimeline } from "./EventTimeline";
 
 /**
  * Přehled **probíhajícího** zápasu v rozbaleném řádku Programu – kdo zatím určuje hru.
@@ -22,7 +24,12 @@ const REFRESH_MS = 60_000;
 
 type PanelState =
   | { state: "loading" }
-  | { state: "done"; report: LiveReport | null; reason: string | null }
+  | {
+      state: "done";
+      report: LiveReport | null;
+      reason: string | null;
+      events: MatchEvent[];
+    }
   | { state: "error" };
 
 /** Dotaz na routu poskládaný z toho, co o zápase víme z živého feedu. */
@@ -61,11 +68,22 @@ function useLiveReport(fixture: UpcomingFixture): PanelState {
     const run = () => {
       fetch(`/api/live-report?${queryFor(fixture)}`)
         .then((r) => r.json())
-        .then((d: { report: LiveReport | null; reason: string | null }) => {
-          if (!signal.cancelled) {
-            setData({ state: "done", report: d.report ?? null, reason: d.reason ?? null });
+        .then(
+          (d: {
+            report: LiveReport | null;
+            reason: string | null;
+            events?: MatchEvent[];
+          }) => {
+            if (!signal.cancelled) {
+              setData({
+                state: "done",
+                report: d.report ?? null,
+                reason: d.reason ?? null,
+                events: d.events ?? [],
+              });
+            }
           }
-        })
+        )
         .catch(() => {
           if (!signal.cancelled) setData({ state: "error" });
         });
@@ -119,12 +137,19 @@ export function LiveReportPanel({ fixture }: { fixture: UpcomingFixture }) {
       </Frame>
     );
   }
+  // Průběh je nezávislý na statistikách: „padl gól v 12. minutě" dává smysl i tehdy,
+  // když nedorazily střely a držení. Proto se osa ukáže i v jinak prázdném stavu.
+  const events = data.state === "done" ? data.events : [];
+
   if (data.state === "error" || !data.report) {
     return (
       <Frame dashed>
         <p className="text-center text-xs text-muted">
           {emptyText(data.state === "done" ? data.reason : null)}
         </p>
+        {events.length > 0 && (
+          <EventTimeline events={events} homeTeamId={fixture.home.id} newestFirst />
+        )}
       </Frame>
     );
   }
@@ -159,6 +184,10 @@ export function LiveReportPanel({ fixture }: { fixture: UpcomingFixture }) {
               <DimensionBar key={d.key} dim={d} />
             ))}
           </div>
+        )}
+
+        {events.length > 0 && (
+          <EventTimeline events={events} homeTeamId={fixture.home.id} newestFirst />
         )}
 
         {report.notes.length > 0 && (

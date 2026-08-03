@@ -33,6 +33,15 @@ export function CategoryScores({
         <TeamHeading name={awayName} logo={awayLogo} accent="away" alignRight />
       </div>
 
+      {/* Bez tohohle se „6.2" čte jako absolutní rating týmu. Není: je to PODÍL vůči
+          tomuhle konkrétnímu soupeři, takže obě čísla vždycky dají 10 a proti jinému
+          soupeři vyjde jinak. `PlayStyleChart` má svoje osy vysvětlené, tohle ne. */}
+      <p className="mb-3 text-[11px] leading-snug text-muted">
+        Rozdělení 10 bodů mezi oba týmy — <strong className="text-foreground">5 : 5</strong>{" "}
+        je vyrovnáno. Je to poměr <em>vůči tomuto soupeři</em>, ne známka týmu: proti jinému
+        soupeři vyjde jiné číslo.
+      </p>
+
       <div className="divide-y divide-border">
         {scores.map((cat) => (
           <CategoryRow
@@ -99,8 +108,10 @@ function CategoryRow({
       </div>
 
       {leagueAvg !== null && available && (
+        // Jmenovatel je počet TÝMOZÁPASŮ (`computeLeagueGoalsAvg`), takže je to průměr
+        // na jeden tým a zápas – ne celkový počet gólů v utkání (ten je zhruba dvojnásobný).
         <p className="mt-1 text-right text-[10px] text-muted">
-          ⌀ liga {leagueAvg.toFixed(2)} gólů/zápas
+          ⌀ tým v lize {leagueAvg.toFixed(2)} gólu na zápas
         </p>
       )}
     </div>

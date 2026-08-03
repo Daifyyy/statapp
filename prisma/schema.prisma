@@ -65,6 +65,11 @@ model MatchStatCache {
 
   @@id([teamId, fixtureId, context])
   @@index([teamId, context, schemaVersion])
+  /// `getCachedFixtureStats` (přehled JEDNOHO zápasu, hot path `/api/match-report`)
+  /// filtruje na samotné `fixtureId`. PK i index výše začínají `teamId`, takže se ani
+  /// jeden nedal použít a dotaz skenoval celou tabulku – dnes ~9 000 zápasů × 2 řádky
+  /// a poroste dál.
+  @@index([fixtureId])
 }
 
 // ───────────────────────── Účty / auth / tiering ─────────────────────────
@@ -265,6 +270,10 @@ model FixturePrediction {
 
   @@index([leagueId, kickoff])
   @@index([status, kickoff])
+  /// Track-record, kalibrace i benchmark čtou **jen aktuální `MODEL_VERSION`**
+  /// (`getSettledPredictionRows` filtruje defaultně), takže je to nejčastější predikát
+  /// nad touhle tabulkou – a bez indexu se skenovala celá.
+  @@index([modelVersion])
 }
 
 /// Přestup hráče (záložka Přestupy, top-5 lig). Plní cron na pozadí (refresh-transfers);

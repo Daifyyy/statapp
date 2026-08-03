@@ -12,6 +12,10 @@ npm run typecheck    # tsc --noEmit
 npm run lint         # eslint
 npx prisma db push   # promítnout změnu schématu do Neonu (+ regeneruje klienta)
 npm run probe        # živá sonda API (status, kvóta, tvary odpovědí); též: discover, limits
+npm run probe-events # sonda na /fixtures/events (průběh zápasu) – SPUSTIT DŘÍV, NEŽ SE
+                     # sáhne na zod schéma: vypíše type/detail a syrové události.
+                     # -- <fixtureId> | bez argumentu vezme první živý zápas našich lig.
+                     # Past, kterou odhalila: `type` chodí „Goal"/„Card", ale „subst".
 npm run calibrate    # MLE DC_RHO + Brier/log-loss z odehraných predikcí (jen MODEL_VERSION)
 npm run backtest     # offline backtest na historii klubových lig (point-in-time, stejné jádro);
                      # 1 volání/liga+sezóna, pak .cache/backtest → další běhy offline

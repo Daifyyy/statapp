@@ -10,6 +10,7 @@ import { computeReliability } from "@/lib/picks/reliability";
 import { clvSideOf, summarizeClv } from "@/lib/picks/clv";
 import { evaluateRule, ruleSchema } from "@/lib/picks/rules";
 import { allowRequest, clientKey, tooMany } from "@/lib/rateLimit";
+import { publicCache } from "@/lib/cacheHeaders";
 import { logError } from "@/lib/logError";
 
 // Track-record modelu + benchmark + backtest strategie z odehraných predikcí.
@@ -41,14 +42,21 @@ export async function GET(req: Request) {
       const side = clvSideOf(parsed.data.market, m.side);
       return side ? [{ row, side }] : [];
     });
-    return NextResponse.json({
-      trackRecord: computeTrackRecord(rows),
-      benchmark: computeBenchmarkTrackRecord(rows),
-      market: computeMarketBenchmark(rows),
-      backtest: backtestRule(rows, parsed.data),
-      reliability: computeReliability(rows),
-      clv: summarizeClv(clvPicks),
-    });
+    return NextResponse.json(
+      {
+        trackRecord: computeTrackRecord(rows),
+        benchmark: computeBenchmarkTrackRecord(rows),
+        market: computeMarketBenchmark(rows),
+        backtest: backtestRule(rows, parsed.data),
+        reliability: computeReliability(rows),
+        clv: summarizeClv(clvPicks),
+      },
+      // Odpověď **nezávisí na uživateli** (jen na pravidle v query) a vstupní data se
+      // mění dvakrát denně se `settle-results`. Přitom to byl nejtěžší opakovaný dotaz
+      // do Neonu v celé appce a jel bez jediné cache hlavičky – každé hnutí posuvníkem
+      // znamenalo nové čtení všech vypořádaných řádků.
+      { headers: publicCache(300, 900) }
+    );
   } catch (e) {
     logError("api/picks/stats", e);
     return NextResponse.json({ error: "Chyba statistik" }, { status: 502 });

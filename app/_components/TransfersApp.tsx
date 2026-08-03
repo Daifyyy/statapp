@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ClubTransferBalance, Transfer, TransferCategory } from "@/lib/types";
 import { TeamLogo } from "./TeamLogo";
 import { AppHeader } from "./AppHeader";
+import { Empty } from "./Empty";
 import { ProLock } from "./ProLock";
 import type { SessionUser } from "./sessionUser";
 
@@ -130,7 +131,7 @@ export function TransfersApp(props: { user: SessionUser | null; leagues: LeagueL
   return MODE === "money" ? <MoneyView {...props} /> : <CategoryView {...props} />;
 }
 
-// ───────────────────────── Money view (aktivní) ─────────────────────────
+// ─────── Money view (MRTVÝ KÓD – předchozí řešení, viz `MODE` výše) ───────
 
 function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: LeagueLite[] }) {
   const { selected, toggleLeague, balances, transfers, locked, loading, error } =
@@ -146,17 +147,7 @@ function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: Leagu
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>
       <p className="mt-1 text-sm text-muted">
         Bilance nákupů a prodejů klubů top-5 lig za aktuální přestupové období (ceny z Transfermarktu).
@@ -175,7 +166,7 @@ function MoneyView({ user, leagues }: { user: SessionUser | null; leagues: Leagu
 
       {locked && (
         <div className="mt-4">
-          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+          <ProLock user={user} />
           <p className="mt-2 text-center text-[11px] text-muted">
             Přehled a bilance jsou zdarma; detail (kteří hráči a za kolik) je součástí PRO.
           </p>
@@ -318,7 +309,7 @@ function MoneyClubRow({
   );
 }
 
-// ───────────────── Category view (mrtvý kód – předchozí řešení) ─────────────────
+// ──────────────────── Category view (AKTIVNÍ, `MODE = "category"`) ────────────────────
 
 function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: LeagueLite[] }) {
   const { selected, toggleLeague, balances, transfers, locked, loading, error } =
@@ -334,17 +325,7 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
       <h1 className="mt-4 text-lg font-semibold text-foreground">Přestupy</h1>
       <p className="mt-1 text-sm text-muted">
         Příchody a odchody klubů top-5 lig za aktuální přestupové období podle typu přestupu
@@ -361,7 +342,7 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
       </div>
       {locked && (
         <div className="mt-4">
-          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+          <ProLock user={user} />
           <p className="mt-2 text-center text-[11px] text-muted">
             Přehled počtů je zdarma; detail (kteří hráči) je součástí PRO.
           </p>
@@ -372,7 +353,11 @@ function CategoryView({ user, leagues }: { user: SessionUser | null; leagues: Le
       ) : error ? (
         <Empty>{error}</Empty>
       ) : clubs.length === 0 ? (
-        <Empty>Za aktuální období nemáme pro vybrané ligy přestupy.</Empty>
+        <Empty>
+          {!showAll
+            ? "Za aktuální období nemáme pro vybrané ligy trvalé přestupy. Zkus „Vše“ (hostování a návraty) nebo jinou ligu – zimní okno bývá chudé, hlavní dění je v létě."
+            : "Za aktuální přestupové období nemáme pro vybrané ligy přestupy. Zkus jinou ligu – zimní okno bývá chudé, hlavní dění je v létě."}
+        </Empty>
       ) : (
         <ul className="mt-4 space-y-2">
           {clubs.map(({ b, inN, outN }) => (
@@ -417,25 +402,49 @@ function CategoryClubRow({
     );
   }, [transfers, b.teamId, showAll]);
 
+  // Bez PRO se řádek nerozbaluje → nesmí to být `<button aria-expanded>`. Takový řádek
+  // se odečítači i myši hlásí jako interaktivní a přitom neudělá nic. (Vzor: `MoneyClubRow`.)
+  const inner = (
+    <>
+      <TeamLogo src={b.teamLogo ?? undefined} alt={b.teamName} size={22} />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+        {b.teamName}
+      </span>
+      <span className="shrink-0 text-sm tabular-nums">
+        <span className="font-bold text-positive" title="Příchody">
+          ↓{inN}
+        </span>{" "}
+        /{" "}
+        <span className="font-bold text-negative" title="Odchody">
+          ↑{outN}
+        </span>
+      </span>
+    </>
+  );
+
   return (
     <li className="rounded-xl border border-border bg-surface shadow-sm">
-      <button
-        type="button"
-        onClick={() => expandable && setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
-      >
-        <TeamLogo src={b.teamLogo ?? undefined} alt={b.teamName} size={22} />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-          {b.teamName}
-        </span>
-        <span className="shrink-0 text-sm tabular-nums">
-          <span className="font-bold text-positive">↓{inN}</span> /{" "}
-          <span className="font-bold text-negative">↑{outN}</span>
-        </span>
-      </button>
+      {expandable ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+        >
+          {inner}
+        </button>
+      ) : (
+        <div className="flex w-full items-center gap-2 px-3 py-2.5 text-left">{inner}</div>
+      )}
       {expandable && open && (
         <div className="border-t border-border px-3 py-2">
+          {clubTransfers.length === 0 && (
+            <p className="text-xs text-muted">
+              {showAll
+                ? "Za aktuální období tu nemáme žádný přestup."
+                : "Žádný trvalý přestup – zkus přepnout na „Vše“ (hostování a návraty)."}
+            </p>
+          )}
           <ul className="space-y-1 text-xs">
             {clubTransfers.map((t) => {
               const incoming = t.inTeamId === b.teamId;
@@ -518,13 +527,6 @@ function Pill({
   );
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
-    </div>
-  );
-}
 
 function Skeleton() {
   return (

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { MatchPick } from "@/lib/types";
 import { AppHeader } from "./AppHeader";
+import { Empty } from "./Empty";
 import { ProLock } from "./ProLock";
 import { PickRow } from "./PickRow";
 import type { SessionUser } from "./sessionUser";
@@ -66,19 +67,9 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/tabulky", label: "Tabulky", emoji: "📊" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
 
-      <h1 className="mt-4 text-lg font-semibold text-foreground">Kde se lišíme od trhu</h1>
+      <h1 className="mt-4 text-lg font-semibold text-foreground">Vs. trh</h1>
       <p className="mt-1 text-sm text-muted">
         Zápasy nejbližších 7 dní, kde se náš odhad nejvíc rozchází s kurzy očištěnými
         o marži sázkovky. Je to pozvánka podívat se, <em>proč</em> – ne tip: na historii
@@ -87,7 +78,7 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
 
       {locked ? (
         <div className="mt-4">
-          <ProLock user={user} trialAvailable={false} onUnlockTrial={() => {}} unlocking={false} />
+          <ProLock user={user} />
         </div>
       ) : loading && !picks ? (
         <DigestSkeleton />
@@ -115,14 +106,6 @@ export function DigestApp({ user }: { user: SessionUser | null }) {
         </Empty>
       )}
     </main>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/50 p-8 text-center text-sm text-muted">
-      {children}
-    </div>
   );
 }
 

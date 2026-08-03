@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import type { EntityType, Standing } from "@/lib/types";
 import type { MatchReport } from "@/lib/stats/matchReport";
 import type { MatchReview } from "@/lib/picks/matchReview";
+import type { MatchEvent } from "@/lib/stats/matchEvents";
 import { Chip, DimensionBar } from "./MatchDimensionBar";
+import { EventTimeline } from "./EventTimeline";
 
 /**
  * Minimum, které panel potřebuje – **strukturální tvar, ne konkrétní typ**. Splní ho
@@ -39,7 +41,12 @@ export interface ReportedMatch {
  */
 type ReportState =
   | { state: "loading" }
-  | { state: "done"; report: MatchReport | null; review: MatchReview | null }
+  | {
+      state: "done";
+      report: MatchReport | null;
+      review: MatchReview | null;
+      events: MatchEvent[];
+    }
   | { state: "error" };
 
 function useMatchReport(match: ReportedMatch): ReportState {
@@ -59,14 +66,21 @@ function useMatchReport(match: ReportedMatch): ReportState {
     });
     fetch(`/api/match-report?${p}`)
       .then((r) => r.json())
-      .then((d: { report: MatchReport | null; review: MatchReview | null }) => {
-        if (!cancelled)
-          setData({
-            state: "done",
-            report: d.report ?? null,
-            review: d.review ?? null,
-          });
-      })
+      .then(
+        (d: {
+          report: MatchReport | null;
+          review: MatchReview | null;
+          events?: MatchEvent[];
+        }) => {
+          if (!cancelled)
+            setData({
+              state: "done",
+              report: d.report ?? null,
+              review: d.review ?? null,
+              events: d.events ?? [],
+            });
+        }
+      )
       .catch(() => {
         if (!cancelled) setData({ state: "error" });
       });
@@ -133,9 +147,13 @@ export function MatchReportPanel({ match }: { match: ReportedMatch }) {
       </div>
     );
   }
-  // Obraz hry a „model vs. skutečnost" jsou nezávislé: statistiky chybí u části zápasů,
-  // predikce zase nemusela vzniknout. Prázdný stav patří jen tam, kde není ANI JEDNO.
-  if (data.state === "error" || (!data.report && !data.review)) {
+  // Obraz hry, „model vs. skutečnost" a průběh jsou tři nezávislé zdroje: statistiky
+  // chybí u části zápasů, predikce nemusela vzniknout, události nemusí liga dodávat.
+  // Prázdný stav patří jen tam, kde není ANI JEDNO.
+  if (
+    data.state === "error" ||
+    (!data.report && !data.review && data.events.length === 0)
+  ) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-surface/50 px-3 py-4 text-center text-xs text-muted">
         Pro tenhle zápas nemáme statistiky.
@@ -143,7 +161,7 @@ export function MatchReportPanel({ match }: { match: ReportedMatch }) {
     );
   }
 
-  const { report, review } = data;
+  const { report, review, events } = data;
   const chips = report
     ? [
         report.character.openness,
@@ -165,6 +183,10 @@ export function MatchReportPanel({ match }: { match: ReportedMatch }) {
           ))}
         </div>
       )}
+
+      {/* Průběh nahoru, hned pod verdikt: „kdo dal góly" je první, co člověk u dohraného
+          zápasu hledá – dřív se to v appce nedalo zjistit vůbec. */}
+      {events.length > 0 && <EventTimeline events={events} homeTeamId={match.home.id} />}
 
       {report && report.dimensions.length > 0 && (
         <div className="space-y-2.5">

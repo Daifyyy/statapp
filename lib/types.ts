@@ -169,19 +169,35 @@ export const METRIC_LABELS: Record<Metric, string> = {
 };
 
 /**
- * Krátká vysvětlení méně samozřejmých metrik (tooltip „ⓘ" u řádku v UI).
- * Jen tam, kde laik nemusí výraz znát; samozřejmé metriky (góly, rohy…) vynechány.
+ * Krátká vysvětlení metrik (nápověda „ⓘ" u řádku v UI).
+ *
+ * **Pokrývá všech 19 metrik z `ALL_METRICS`** – dřív jich mělo nápovědu 9 a u zbylých
+ * deseti nebylo poznat ani to, že jde o *průměr na zápas* (ne součet za sezónu). Kryto
+ * testem, aby nová metrika nemohla přibýt bez vysvětlivky.
+ *
+ * Všechny hodnoty v UI jsou **vážený průměr na zápas** ze tří oken – proto to formulace
+ * říkají tam, kde by šlo číslo splést se součtem.
  */
 export const METRIC_HINTS: Partial<Record<Metric, string>> = {
-  XG: "Očekávané góly (expected goals): kolik gólů by tým měl vstřelit podle kvality svých šancí.",
+  GOALS_FOR: "Vstřelené góly – průměr na zápas.",
+  GOALS_AGAINST: "Obdržené góly – průměr na zápas. Nižší je lepší.",
+  XG: "Očekávané góly (expected goals): kolik gólů by tým měl vstřelit podle kvality svých šancí. Výrazně víc gólů než xG = buď skvělá koncovka, nebo štěstí.",
+  SHOTS: "Všechny střelecké pokusy za zápas – včetně zablokovaných a mimo branku.",
   SHOTS_ON_TARGET: "Střely směřující do branky (gólman musel zasáhnout nebo skončily gólem).",
+  SHOTS_OFF_TARGET: "Střely, které minuly branku a nikdo je nezblokoval.",
   BLOCKED_SHOTS: "Střely zablokované bránícím hráčem ještě před brankářem.",
-  SHOTS_INSIDE_BOX: "Střely z pokutového území (z vápna).",
+  SHOTS_INSIDE_BOX: "Střely z pokutového území (z vápna) – zpravidla mnohem gólovější než zdálky.",
   SHOTS_OUTSIDE_BOX: "Střely mimo pokutové území.",
-  POSSESSION: "Průměrný podíl času s míčem na noze (% z hrací doby).",
-  PASS_ACCURACY: "Podíl úspěšných (přesných) přihrávek ze všech.",
+  POSSESSION: "Průměrný podíl času s míčem na noze (% z hrací doby). Vysoké držení samo o sobě neznamená víc gólů.",
+  PASSES_TOTAL: "Počet přihrávek za zápas – ukazatel toho, jak moc tým kombinuje.",
+  PASSES_ACCURATE: "Počet přihrávek, které našly spoluhráče.",
+  PASS_ACCURACY: "Podíl úspěšných (přesných) přihrávek ze všech. Krátká kombinace nahoru, dlouhé nákopy dolů.",
+  CORNERS: "Rohové kopy zahrané týmem – průměr na zápas.",
   OFFSIDES: "Počet odpískaných ofsajdů týmu.",
-  SAVES: "Počet zákroků (chytů) brankáře za zápas.",
+  FOULS: "Fauly, které tým sám udělal – průměr na zápas. Souvisí s kartami.",
+  YELLOW_CARDS: "Žluté karty – průměr na zápas.",
+  RED_CARDS: "Červené karty – průměr na zápas. Bývá to malé číslo (vyloučení je vzácné).",
+  SAVES: "Počet zákroků (chytů) brankáře za zápas. Vysoké číslo znamená hodně práce, tedy spíš tlak soupeře.",
 };
 
 export const WINDOW_LABELS: Record<WindowKey, string> = {
@@ -856,6 +872,15 @@ export interface MatchPick {
   /** Pozice v ligové tabulce (FREE kontext; jen klubové tipy, doplněno server-side). */
   homeRank?: number | null;
   awayRank?: number | null;
+  /**
+   * Očekávané počty rohů a karet za celý zápas (součet obou stran) z **uložené** λ.
+   *
+   * Vlastní stopa vedle gólové λ – ne jiný výpočet 1X2 (viz `MODEL_VERSION` v CLAUDE.md).
+   * Od 2. 8. 2026 se v produkci ukládá (`lambdaCorners*`/`lambdaCards*`), ale předzápasově
+   * se nikde nezobrazovala; člověk ji viděl až zpětně v přehledu dohraného zápasu.
+   * `null` = řádek je starší než ukládání, nebo model neměl dost dat. **0 volání API.**
+   */
+  counts: { corners: number | null; cards: number | null };
 }
 
 /**

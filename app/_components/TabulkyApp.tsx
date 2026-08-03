@@ -47,16 +47,21 @@ async function loadTable(
 async function loadRound(
   leagueId: number,
   isActive: () => boolean,
-  setRound: (r: LeagueRound | null) => void
+  setRound: (r: LeagueRound | null) => void,
+  setStatus: (s: Status) => void
 ): Promise<void> {
   setRound(null);
+  setStatus("loading");
   try {
     const r = await fetch(`/api/standings/round?league=${leagueId}`);
-    if (!r.ok) return;
+    if (!r.ok) throw new Error("http");
     const d: { round: LeagueRound | null } = await r.json();
-    if (isActive()) setRound(d.round);
+    if (!isActive()) return;
+    setRound(d.round);
+    setStatus("ok");
   } catch {
-    // tichý fail – sekce se prostě nevykreslí
+    // Sekce se nevykreslí, ale layout se pod tím nesmí propadnout bez vysvětlení.
+    if (isActive()) setStatus("error");
   }
 }
 
@@ -64,16 +69,20 @@ async function loadRound(
 async function loadScorers(
   leagueId: number,
   isActive: () => boolean,
-  setScorers: (s: { scorers: LeagueScorer[]; assists: LeagueScorer[] }) => void
+  setScorers: (s: { scorers: LeagueScorer[]; assists: LeagueScorer[] }) => void,
+  setStatus: (s: Status) => void
 ): Promise<void> {
   setScorers({ scorers: [], assists: [] });
+  setStatus("loading");
   try {
     const r = await fetch(`/api/standings/scorers?league=${leagueId}`);
-    if (!r.ok) return;
+    if (!r.ok) throw new Error("http");
     const d: { scorers: LeagueScorer[]; assists: LeagueScorer[] } = await r.json();
-    if (isActive()) setScorers(d);
+    if (!isActive()) return;
+    setScorers(d);
+    setStatus("ok");
   } catch {
-    // tichý fail – sekce se prostě nevykreslí
+    if (isActive()) setStatus("error");
   }
 }
 
@@ -99,10 +108,12 @@ export function TabulkyApp() {
   const [table, setTable] = useState<LeagueTable | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [round, setRound] = useState<LeagueRound | null>(null);
+  const [roundStatus, setRoundStatus] = useState<Status>("loading");
   const [scorers, setScorers] = useState<{ scorers: LeagueScorer[]; assists: LeagueScorer[] }>({
     scorers: [],
     assists: [],
   });
+  const [scorersStatus, setScorersStatus] = useState<Status>("loading");
 
   // Po mountu obnov poslední zvolenou ligu (bez SSR hydration mismatchu).
   useEffect(() => {
@@ -112,8 +123,8 @@ export function TabulkyApp() {
   useEffect(() => {
     let active = true;
     void loadTable(leagueId, () => active, setTable, setStatus);
-    void loadRound(leagueId, () => active, setRound);
-    void loadScorers(leagueId, () => active, setScorers);
+    void loadRound(leagueId, () => active, setRound, setRoundStatus);
+    void loadScorers(leagueId, () => active, setScorers, setScorersStatus);
     return () => {
       active = false;
     };
@@ -136,16 +147,7 @@ export function TabulkyApp() {
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-5 sm:py-8">
-      <AppHeader
-        user={user}
-        nav={[
-          { href: "/", label: "Zápasy", emoji: "📅" },
-          { href: "/porovnani", label: "Porovnání", emoji: "⇄" },
-          { href: "/predikce", label: "Predikce", emoji: "🎯" },
-          { href: "/hra", label: "Hra", emoji: "🎮" },
-          { href: "/tipovacka", label: "Tipovačka", emoji: "🎲" },
-        ]}
-      />
+      <AppHeader user={user} />
 
       <h1 className="mt-4 text-lg font-semibold text-foreground">Ligové tabulky</h1>
       <p className="mt-1 text-sm text-muted">
@@ -169,7 +171,9 @@ export function TabulkyApp() {
             <StandingsTable rows={rows} />
             {table?.leagueAvg && (
               <p className="mt-2 text-xs text-muted">
-                ⌀ liga {table.leagueAvg.goalsFor.toFixed(2)} gólů vstřelených / zápas
+                ⌀ tým v lize vstřelí {table.leagueAvg.goalsFor.toFixed(2)} gólu na zápas
+                (v celém utkání tedy zhruba{" "}
+                {(table.leagueAvg.goalsFor * 2).toFixed(2)} gólu)
               </p>
             )}
             <ZoneLegend rows={rows} />
@@ -177,35 +181,55 @@ export function TabulkyApp() {
         )}
       </section>
 
-      {hasPlayed && (round || scorers.scorers.length > 0 || scorers.assists.length > 0) && (
+      {/* Obě podsekce se dotahují samostatně, proto mají vlastní stav. Dřív se jen tiše
+          objevily o pár vteřin později a posunuly obsah pod sebou. */}
+      {hasPlayed && (
         <section className="mt-6 space-y-4">
-          {round && (round.last.length > 0 || round.next.length > 0) && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              {round.last.length > 0 && (
-                <RoundList
-                  title="Poslední odehrané zápasy"
-                  leagueId={leagueId}
-                  fixtures={round.last}
-                />
-              )}
-              {round.next.length > 0 && (
-                <RoundList
-                  title="Nejbližší zápasy"
-                  leagueId={leagueId}
-                  fixtures={round.next}
-                />
-              )}
-            </div>
+          {roundStatus === "loading" ? (
+            <CardsSkeleton />
+          ) : roundStatus === "error" ? (
+            <Note>Zápasy kola se nepodařilo načíst.</Note>
+          ) : (
+            round &&
+            (round.last.length > 0 || round.next.length > 0) && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {round.last.length > 0 && (
+                  <RoundList
+                    title="Poslední odehrané zápasy"
+                    leagueId={leagueId}
+                    fixtures={round.last}
+                  />
+                )}
+                {round.next.length > 0 && (
+                  <RoundList
+                    title="Nejbližší zápasy"
+                    leagueId={leagueId}
+                    fixtures={round.next}
+                  />
+                )}
+              </div>
+            )
           )}
-          {(scorers.scorers.length > 0 || scorers.assists.length > 0) && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <LeagueScorerList title="Nejlepší střelci" unit="gólů" players={scorers.scorers} />
-              <LeagueScorerList
-                title="Nejlepší nahrávky"
-                unit="asistencí"
-                players={scorers.assists}
-              />
-            </div>
+
+          {scorersStatus === "loading" ? (
+            <CardsSkeleton />
+          ) : scorersStatus === "error" ? (
+            <Note>Střelce se nepodařilo načíst.</Note>
+          ) : (
+            (scorers.scorers.length > 0 || scorers.assists.length > 0) && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <LeagueScorerList
+                  title="Nejlepší střelci"
+                  unit="gólů"
+                  players={scorers.scorers}
+                />
+                <LeagueScorerList
+                  title="Nejlepší nahrávky"
+                  unit="asistencí"
+                  players={scorers.assists}
+                />
+              </div>
+            )
           )}
         </section>
       )}
@@ -327,6 +351,21 @@ function TableSkeleton() {
           <div className="h-4 flex-1 animate-pulse rounded bg-border" />
           <div className="h-4 w-8 animate-pulse rounded bg-border" />
         </div>
+      ))}
+    </div>
+  );
+}
+
+/** Dvojice karet vedle sebe (kolo / střelci) – drží výšku, než data dorazí. */
+function CardsSkeleton() {
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-40 animate-pulse rounded-2xl bg-border/60"
+          style={{ animationDelay: `${i * 60}ms` }}
+        />
       ))}
     </div>
   );

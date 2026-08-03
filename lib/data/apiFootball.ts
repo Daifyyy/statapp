@@ -432,6 +432,48 @@ export function fetchFixtureStatistics(fixture: number) {
   return apiGet("/fixtures/statistics", { fixture }, fixtureStatsSchema);
 }
 
+/**
+ * Události zápasu (góly, karty, střídání, VAR) – `/fixtures/events`.
+ *
+ * Schéma je psané **proti vypsané odpovědi** (`npm run probe-events`), ne proti
+ * dokumentaci. Ověřeno na Fortuna lize 2. 8. 2026 (13 událostí):
+ *  - `time.extra` je `null` v základní hrací době a číslo v nastavení,
+ *  - `player`/`assist` jsou objekty s `id`/`name`, obojí může chybět (VAR, neznámý hráč),
+ *  - u střídání je `player` odcházející a `assist` **přicházející** hráč,
+ *  - **`type` má nekonzistentní velikost písmen**: `"Goal"`, `"Card"`, ale `"subst"`.
+ *    Konzumenti proto musí porovnávat case-insensitive.
+ */
+const eventPersonSchema = z
+  .object({
+    id: z.number().nullable().optional(),
+    name: z.string().nullable().optional(),
+  })
+  .nullable()
+  .optional();
+
+const fixtureEventSchema = z.object({
+  time: z.object({
+    elapsed: z.number().nullable(),
+    extra: z.number().nullable().optional(),
+  }),
+  team: z.object({
+    id: z.number(),
+    name: z.string(),
+    logo: z.string().nullable().optional(),
+  }),
+  player: eventPersonSchema,
+  assist: eventPersonSchema,
+  type: z.string(),
+  detail: z.string(),
+  comments: z.string().nullable().optional(),
+});
+
+export type ApiFixtureEvent = z.infer<typeof fixtureEventSchema>;
+
+export function fetchFixtureEvents(fixture: number) {
+  return apiGet("/fixtures/events", { fixture }, z.array(fixtureEventSchema));
+}
+
 /** „45%" → 0.45; null/„N/A"/prázdno → null. */
 function parsePercent(s: string | null | undefined): number | null {
   if (!s) return null;

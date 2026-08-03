@@ -190,3 +190,37 @@ describe("explain – popisek říká PROČ, ne to samé číslo podruhé", () =
     expect(picks[0].explanation).not.toContain("%");
   });
 });
+
+describe("counts (očekávané rohy a karty)", () => {
+  const RULE = { market: "win" as const, venue: "home" as const, minProb: 0.65 };
+
+  it("sečte obě strany uložené λ", () => {
+    const picks = filterPicks(
+      [
+        row({
+          homeWin: 0.7,
+          lambdaCornersHome: 5.4,
+          lambdaCornersAway: 4.2,
+          lambdaCardsHome: 2.1,
+          lambdaCardsAway: 2.4,
+        }),
+      ],
+      RULE
+    );
+    expect(picks[0].counts.corners).toBeCloseTo(9.6, 5);
+    expect(picks[0].counts.cards).toBeCloseTo(4.5, 5);
+  });
+
+  it("chybí-li jedna strana, vrací null (nedosazuje ligový průměr)", () => {
+    const picks = filterPicks(
+      [row({ homeWin: 0.7, lambdaCornersHome: 5.4, lambdaCornersAway: null })],
+      RULE
+    );
+    expect(picks[0].counts.corners).toBeNull();
+  });
+
+  it("starší řádek bez λ počtů nemá ani rohy, ani karty", () => {
+    const picks = filterPicks([row({ homeWin: 0.7 })], RULE);
+    expect(picks[0].counts).toEqual({ corners: null, cards: null });
+  });
+});

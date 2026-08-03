@@ -40,7 +40,14 @@ export type PredictionUpsert = Omit<
   | "oddsCloseUnder25"
 > & { kickoff: string };
 
-function toRow(p: FixturePrediction): PredictionRow {
+/**
+ * Co `toRow` doopravdy čte. `oddsSeries` je největší JSON na řádku (až 40 bodů) a
+ * **nikdo ho nečte** – je to zápisová stopa pohybu linie pro cron, `matchReview` ji
+ * schválně nepoužívá. Díky užšímu typu ho čtecí dotazy můžou `omit`nout.
+ */
+type PredictionRowSource = Omit<FixturePrediction, "oddsSeries" | "oddsSeriesAt">;
+
+function toRow(p: PredictionRowSource): PredictionRow {
   return {
     fixtureId: p.fixtureId,
     leagueId: p.leagueId,
@@ -294,6 +301,13 @@ export async function saveClosingOdds(
   });
 }
 
+/**
+ * `oddsSeries`/`oddsSeriesAt` nikdo při čtení nepotřebuje (viz `PredictionRowSource`),
+ * ale je to zdaleka největší sloupec na řádku. Vynechat ho z hromadných čtení je
+ * nejlevnější způsob, jak zmenšit payload z Neonu.
+ */
+const OMIT_SERIES = { oddsSeries: true, oddsSeriesAt: true } as const;
+
 /** Nadcházející predikce (status NS, výkop v budoucnu) – pro záložku. */
 export async function getUpcomingPredictionRows(
   modelVersion?: number
@@ -305,19 +319,25 @@ export async function getUpcomingPredictionRows(
       ...(modelVersion != null ? { modelVersion } : {}),
     },
     orderBy: { kickoff: "asc" },
+    omit: OMIT_SERIES,
   });
   return rows.map(toRow);
 }
 
-/** Predikce čekající na výsledek (status NS, výkop už proběhl) – pro settle. */
+/**
+ * Predikce čekající na výsledek (status NS, výkop už proběhl) – pro settle.
+ *
+ * Vrací **jen `fixtureId`**: `runSettleResults` z řádku nic jiného nečte (dotáhne si
+ * zápasy z API a zapíše skóre). Dřív se sem tahaly plné řádky včetně tří JSON sloupců.
+ */
 export async function getUnsettledPredictions(
   graceMs = 3 * 60 * 60 * 1000
-): Promise<PredictionRow[]> {
-  const rows = await prisma.fixturePrediction.findMany({
+): Promise<{ fixtureId: number }[]> {
+  return prisma.fixturePrediction.findMany({
     where: { status: "NS", kickoff: { lt: new Date(Date.now() - graceMs) } },
     orderBy: { kickoff: "asc" },
+    select: { fixtureId: true },
   });
-  return rows.map(toRow);
 }
 
 /** Doplní skutečný výsledek odehraného zápasu. */
@@ -344,6 +364,7 @@ export async function getSettledPredictions(
       ...(modelVersion != null ? { modelVersion } : {}),
     },
     orderBy: { kickoff: "desc" },
+    omit: OMIT_SERIES,
   });
   return rows.map(toRow);
 }
